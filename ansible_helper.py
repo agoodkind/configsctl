@@ -193,6 +193,13 @@ def resolve_playbook(playbook: str) -> Path:
     return Path("playbooks") / f"{playbook}.yml"
 
 
+def run_lint() -> int:
+    """Run the input-default linter. Returns its exit code; nonzero means a
+    banned `| default(...)` or `is defined` on an input variable is present."""
+    linter = Path(__file__).resolve().parent / "lint_ansible_defaults.py"
+    return subprocess.run([sys.executable, str(linter)], check=False).returncode
+
+
 def run_deploy(
     playbook: str,
     limit: str | None,
@@ -200,6 +207,14 @@ def run_deploy(
     diff: bool,
     extra_vars: Sequence[str],
 ) -> int:
+    lint_rc = run_lint()
+    if lint_rc != 0:
+        print(
+            "deploy blocked: input-side default()/is defined found above; "
+            "declare the value in group_vars and read it bare",
+            file=sys.stderr,
+        )
+        return lint_rc
     command: list[str] = [
         "ansible-playbook",
         "--vault-password-file",
@@ -244,6 +259,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Pass one ansible extra var; repeatable. Example: --extra-var tack_image_tag=abc123",
     )
 
+    subparsers.add_parser(
+        "lint", help="Run the input-default linter over the Ansible tree."
+    )
+
     secret_parser = subparsers.add_parser(
         "secret", help="Print one vault secret value to stdout."
     )
@@ -282,6 +301,8 @@ def main(argv: Sequence[str]) -> int:
         )
     if args.subcommand == "deploy":
         return run_deploy(args.playbook, args.limit, args.check, args.diff, args.extra_var)
+    if args.subcommand == "lint":
+        return run_lint()
     if args.subcommand == "secret":
         return run_secret(
             args.key,
