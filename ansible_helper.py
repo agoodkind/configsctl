@@ -198,6 +198,7 @@ def run_deploy(
     limit: str | None,
     check: bool,
     diff: bool,
+    extra_vars: Sequence[str],
 ) -> int:
     command: list[str] = [
         "ansible-playbook",
@@ -211,6 +212,8 @@ def run_deploy(
         command.append("--check")
     if diff:
         command.append("--diff")
+    for extra_var in extra_vars:
+        command.extend(["--extra-vars", extra_var])
     result = subprocess.run(command, cwd=ANSIBLE_DIR, check=False)
     return result.returncode
 
@@ -232,6 +235,14 @@ def build_parser() -> argparse.ArgumentParser:
     deploy_parser.add_argument("--limit", default=None)
     deploy_parser.add_argument("--check", action="store_true")
     deploy_parser.add_argument("--diff", action="store_true")
+    deploy_parser.add_argument(
+        "--extra-var",
+        dest="extra_var",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Pass one ansible extra var; repeatable. Example: --extra-var tack_image_tag=abc123",
+    )
 
     secret_parser = subparsers.add_parser(
         "secret", help="Print one vault secret value to stdout."
@@ -270,7 +281,7 @@ def main(argv: Sequence[str]) -> int:
             Path(args.vault_password_file).expanduser(),
         )
     if args.subcommand == "deploy":
-        return run_deploy(args.playbook, args.limit, args.check, args.diff)
+        return run_deploy(args.playbook, args.limit, args.check, args.diff, args.extra_var)
     if args.subcommand == "secret":
         return run_secret(
             args.key,
