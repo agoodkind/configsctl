@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -193,11 +194,55 @@ def resolve_playbook(playbook: str) -> Path:
     return Path("playbooks") / f"{playbook}.yml"
 
 
-def run_lint() -> int:
-    """Run the input-default linter. Returns its exit code; nonzero means a
-    banned `| default(...)` or `is defined` on an input variable is present."""
+# One Ansible file pulls another in with these directives, with or without the
+# ansible.builtin prefix. The deploy gate follows them to find the transitive set
+# a deploy actually reads.
+IMPORT_RE = re.compile(
+    r"(?:ansible\.builtin\.)?"
+    r"(?:import_playbook|include_playbook|import_tasks|include_tasks)\s*:\s*"
+    r"([^\s{}'\"]+)"
+)
+# A template a playbook renders, referenced as `{{ repo_root }}/<service>/<file>.j2`.
+# The token after the last Jinja brace is a path under the repo root.
+J2_RE = re.compile(r"([^\s\"'{}]*\.j2)")
+
+
+def deploy_scope_files(playbook: Path) -> list[str]:
+    """Return the files a deploy reads: the playbook, every file it imports or
+    includes (followed transitively, resolved next to the file that names it),
+    and every `.j2` template those files render (resolved under the repo root).
+    References that do not resolve to an existing scannable file are dropped."""
+    worklist: list[Path] = [(ANSIBLE_DIR / playbook).resolve()]
+    seen: set[Path] = set()
+    found: set[Path] = set()
+    while worklist:
+        current = worklist.pop()
+        if current in seen or not current.is_file():
+            continue
+        seen.add(current)
+        if current.suffix in (".yml", ".yaml"):
+            found.add(current)
+        text = current.read_text(encoding="utf-8", errors="replace")
+        for import_match in IMPORT_RE.finditer(text):
+            target = (current.parent / import_match.group(1)).resolve()
+            worklist.append(target)
+        for template_match in J2_RE.finditer(text):
+            token = template_match.group(1).lstrip("/")
+            if not token:
+                continue
+            template = (CONFIGS_ROOT / token).resolve()
+            if template.is_file() and template.suffix == ".j2":
+                found.add(template)
+    return sorted(str(path) for path in found)
+
+
+def run_lint(paths: Sequence[str] | None = None) -> int:
+    """Run the input-default linter. With paths, scan only those files (the files
+    one deploy reaches); without, scan the whole tree. Nonzero means a banned
+    `| default(...)` or `is defined` on an input variable is present."""
     linter = Path(__file__).resolve().parent / "lint_ansible_defaults.py"
-    return subprocess.run([sys.executable, str(linter)], check=False).returncode
+    argv = [sys.executable, str(linter), *(paths or [])]
+    return subprocess.run(argv, check=False).returncode
 
 
 def run_deploy(
@@ -206,8 +251,12 @@ def run_deploy(
     check: bool,
     diff: bool,
     extra_vars: Sequence[str],
+    full_lint: bool,
 ) -> int:
-    lint_rc = run_lint()
+    if full_lint:
+        lint_rc = run_lint()
+    else:
+        lint_rc = run_lint(deploy_scope_files(resolve_playbook(playbook)))
     if lint_rc != 0:
         print(
             "deploy blocked: input-side default()/is defined found above; "
@@ -258,6 +307,12 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="KEY=VALUE",
         help="Pass one ansible extra var; repeatable. Example: --extra-var tack_image_tag=abc123",
     )
+    deploy_parser.add_argument(
+        "--full-lint",
+        dest="full_lint",
+        action="store_true",
+        help="Scan the whole repo before deploying, instead of only the files this playbook reaches.",
+    )
 
     subparsers.add_parser(
         "lint", help="Run the input-default linter over the Ansible tree."
@@ -300,7 +355,9 @@ def main(argv: Sequence[str]) -> int:
             Path(args.vault_password_file).expanduser(),
         )
     if args.subcommand == "deploy":
-        return run_deploy(args.playbook, args.limit, args.check, args.diff, args.extra_var)
+        return run_deploy(
+            args.playbook, args.limit, args.check, args.diff, args.extra_var, args.full_lint
+        )
     if args.subcommand == "lint":
         return run_lint()
     if args.subcommand == "secret":
