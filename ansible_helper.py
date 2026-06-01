@@ -282,6 +282,22 @@ def run_deploy(
     return result.returncode
 
 
+def run_syntax_check(playbook: str) -> int:
+    """Validate a playbook's structure with ansible-playbook --syntax-check.
+    It parses the play and every file it imports or includes without connecting
+    to any host, so it catches a broken include, a malformed task, or a bad
+    template reference. Returns ansible's exit code."""
+    command = [
+        "ansible-playbook",
+        "--syntax-check",
+        "--vault-password-file",
+        str(VAULT_PASS),
+        str(resolve_playbook(playbook)),
+    ]
+    result = subprocess.run(command, cwd=ANSIBLE_DIR, check=False)
+    return result.returncode
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Ansible helper for agent shells.")
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
@@ -313,6 +329,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Scan the whole repo before deploying, instead of only the files this playbook reaches.",
     )
+
+    syntax_parser = subparsers.add_parser(
+        "syntax-check",
+        help="Validate a playbook's structure (parse-only, no host connection).",
+    )
+    syntax_parser.add_argument("playbook")
 
     subparsers.add_parser(
         "lint", help="Run the input-default linter over the Ansible tree."
@@ -358,6 +380,8 @@ def main(argv: Sequence[str]) -> int:
         return run_deploy(
             args.playbook, args.limit, args.check, args.diff, args.extra_var, args.full_lint
         )
+    if args.subcommand == "syntax-check":
+        return run_syntax_check(args.playbook)
     if args.subcommand == "lint":
         return run_lint()
     if args.subcommand == "secret":
