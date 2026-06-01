@@ -9,8 +9,8 @@ missing. Inferring a value from whether it was set, with `| default(...)` or
 Defaults and `is defined` are allowed on module or register OUTPUT (the shape of
 a command result), because that guards a result, not a config input. The
 allowlist covers the output-shape attributes and the registered variable names
-collected per file. A `# noqa: input-default` comment on the line covers the
-rare remaining exception.
+collected per file. There is no per-line escape hatch; a genuine output-shape
+read must take a form the allowlist recognizes.
 
 Usage:
   lint_ansible_defaults.py            scan the configs Ansible tree and the
@@ -34,8 +34,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 ANSIBLE_TREE = "ansible"
 SCAN_SUFFIXES = (".yml", ".yaml", ".j2")
 EXCLUDE_DIR_PARTS = {".git", "node_modules", "go"}
-
-NOQA = "noqa: input-default"
 
 # Attributes that mark a value as a command or register result, not a config
 # input. Kept deliberately narrow so the check errs toward flagging.
@@ -89,8 +87,6 @@ def scan_file(path: Path) -> list[tuple[int, str]]:
     registers = collect_registers(lines)
     violations: list[tuple[int, str]] = []
     for number, line in enumerate(lines, start=1):
-        if NOQA in line:
-            continue
         for filter_match in DEFAULT_RE.finditer(line):
             before = line[: filter_match.start()]
             chain_match = BEFORE_DEFAULT_RE.search(before + line[filter_match.start():])
@@ -140,8 +136,7 @@ def main(argv: list[str]) -> int:
             total += 1
     if total:
         print(f"\n{total} input-side default()/is defined violation(s).")
-        print("Declare the value in the service group_vars and read it bare, or")
-        print("mark a genuine command-result exception with `# noqa: input-default`.")
+        print("Declare the value in the service group_vars and read it bare.")
         return 1
     return 0
 
