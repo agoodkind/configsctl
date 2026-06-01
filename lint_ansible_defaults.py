@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""Ban input-side `| default(...)` and `is defined` in Ansible.
+"""Ban input-side defaults and presence checks in Ansible.
 
 Every input value must be declared explicitly in group_vars, inventory, or
 OpenTofu. A playbook or template reads it directly and fails loudly when it is
-missing. Inferring a value from whether it was set, with `| default(...)` or
-`when: x is defined`, is banned.
+missing. Inferring a value from whether it was set is banned in every form:
+`| default(...)`, `is defined`, `.get(key, default)` (a default in disguise),
+and `(value | trim) | length` (an "is this set" presence check in disguise).
 
-Defaults and `is defined` are allowed on module or register OUTPUT (the shape of
-a command result), because that guards a result, not a config input. The
-allowlist covers the output-shape attributes and the registered variable names
-collected per file. There is no per-line escape hatch; a genuine output-shape
-read must take a form the allowlist recognizes.
+These are spared only on a module or register OUTPUT (the shape of a command
+result), because that guards a result, not a config input. The allowlist covers
+the output-shape attributes and the registered variable names collected per
+file. There is no per-line escape hatch; a genuine output-shape read must take a
+form the allowlist recognizes.
 
 Usage:
   lint_ansible_defaults.py            scan the configs Ansible tree and the
@@ -61,6 +62,17 @@ BEFORE_DEFAULT_RE = re.compile(r"([A-Za-z_][\w.\[\]'\" )(]*?)\s*\|\s*default\s*\
 BEFORE_ISDEF_RE = re.compile(r"([A-Za-z_][\w.\[\]'\" )(]*?)\s+is\s+(?:not\s+)?defined\b")
 RESULT_ATTR_RE = re.compile(r"\.(?:%s)\b" % "|".join(RESULT_ATTRS))
 
+# Dict get with a default argument is `| default(...)` in disguise. A trimmed
+# value piped into a length comparison is an "is this set" presence check, the
+# same anti-pattern as `is defined`. Both are spared only on a command or
+# register result, exactly like default() and is defined.
+GET_DEFAULT_RE = re.compile(r"\.get\s*\(\s*[^,()]+,")
+BEFORE_GET_RE = re.compile(r"([A-Za-z_][\w.\[\]'\" )(]*?)\.get\s*\(\s*[^,()]+,")
+TRIM_LENGTH_RE = re.compile(r"\|\s*trim\s*\)?\s*\|\s*length")
+BEFORE_TRIM_LENGTH_RE = re.compile(
+    r"([A-Za-z_][\w.\[\]'\" )(]*?)\s*\|\s*trim\s*\)?\s*\|\s*length"
+)
+
 
 def chain_is_output(chain: str, registers: set[str]) -> bool:
     """True when the expression piped into default()/is defined is a command or
@@ -87,20 +99,37 @@ def scan_file(path: Path) -> list[tuple[int, str]]:
     registers = collect_registers(lines)
     violations: list[tuple[int, str]] = []
     for number, line in enumerate(lines, start=1):
+        flagged = False
         for filter_match in DEFAULT_RE.finditer(line):
             before = line[: filter_match.start()]
             chain_match = BEFORE_DEFAULT_RE.search(before + line[filter_match.start():])
             chain = chain_match.group(1) if chain_match else ""
             if not chain_is_output(chain, registers):
-                violations.append((number, line.strip()))
+                flagged = True
                 break
-        else:
+        if not flagged:
             for isdef_match in ISDEF_RE.finditer(line):
                 chain_match = BEFORE_ISDEF_RE.search(line[: isdef_match.end()])
                 chain = chain_match.group(1) if chain_match else ""
                 if not chain_is_output(chain, registers):
-                    violations.append((number, line.strip()))
+                    flagged = True
                     break
+        if not flagged:
+            for get_match in GET_DEFAULT_RE.finditer(line):
+                chain_match = BEFORE_GET_RE.search(line[: get_match.end()])
+                chain = chain_match.group(1) if chain_match else ""
+                if not chain_is_output(chain, registers):
+                    flagged = True
+                    break
+        if not flagged:
+            for length_match in TRIM_LENGTH_RE.finditer(line):
+                chain_match = BEFORE_TRIM_LENGTH_RE.search(line[: length_match.end()])
+                chain = chain_match.group(1) if chain_match else ""
+                if not chain_is_output(chain, registers):
+                    flagged = True
+                    break
+        if flagged:
+            violations.append((number, line.strip()))
     return violations
 
 
@@ -132,11 +161,15 @@ def main(argv: list[str]) -> int:
             continue
         rel = path.relative_to(REPO_ROOT) if path.is_absolute() else path
         for number, snippet in violations:
-            print(f"{rel}:{number}: input-side default()/is defined: {snippet}")
+            print(f"{rel}:{number}: banned default or presence check: {snippet}")
             total += 1
     if total:
-        print(f"\n{total} input-side default()/is defined violation(s).")
-        print("Declare the value in the service group_vars and read it bare.")
+        print(f"\n{total} banned default / presence-check violation(s).")
+        print("Declare every value in the service group_vars and read it bare.")
+        print("Banned: | default(...), is defined, .get(key, default), and a")
+        print("(value | trim) | length presence check. No exceptions for the")
+        print("get and trim-length forms; default and is defined are spared only")
+        print("on a command or register result.")
         return 1
     return 0
 
