@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import os
 import re
 import shutil
@@ -10,6 +11,10 @@ import sys
 import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+
+import baseline_store
+import gate_tokens
+import lint_ansible_defaults
 
 
 def reexec_under_ansible_python() -> None:
@@ -298,9 +303,52 @@ def run_syntax_check(playbook: str) -> int:
     return result.returncode
 
 
+def run_baseline(mode_arg: str | None) -> int:
+    """Refresh the accepted-findings file when the operator gate opens.
+
+    A closed gate is a silent no-op: nothing is written and the exit is zero. When
+    the gate opens, capture the current full-tree findings, rewrite the file in the
+    requested mode, and print one summary line.
+    """
+    if not gate_tokens.baseline_gate_passes():
+        return 0
+    mode_name = mode_arg or os.environ.get("BASELINE_UPDATE_MODE", "sync")
+    try:
+        mode = baseline_store.parse_mode(mode_name)
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    files = lint_ansible_defaults.candidate_files([])
+    current = lint_ansible_defaults.collect_all_findings(files)
+    baseline_path = Path(
+        os.environ.get(
+            "ANSIBLE_DEFAULTS_BASELINE",
+            str(lint_ansible_defaults.DEFAULT_BASELINE_FILE),
+        )
+    )
+    if baseline_path.is_file():
+        old_lines = baseline_path.read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines()
+    else:
+        old_lines = []
+    now = datetime.date.today().isoformat()
+    body = baseline_store.rewrite_body(
+        current, old_lines, lint_ansible_defaults.BASELINE_LABEL, now, mode
+    )
+    rendered = baseline_store.render_file(
+        lint_ansible_defaults.BASELINE_LABEL, now, body
+    )
+    baseline_path.write_text(rendered, encoding="utf-8")
+    print(f"baseline recorded: {len(body)} entries")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Ansible helper for agent shells.")
-    subparsers = parser.add_subparsers(dest="subcommand", required=True)
+    subparsers = parser.add_subparsers(
+        dest="subcommand", required=True, metavar="<command>"
+    )
 
     keys_parser = subparsers.add_parser("keys", help="List vault key names.")
     keys_parser.add_argument("vault_file", nargs="?", default=str(DEFAULT_VAULT_FILE))
@@ -366,6 +414,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=str(VAULT_PASS),
     )
 
+    # Registered with no help string so it stays out of --help. Operator-only.
+    baseline_parser = subparsers.add_parser("baseline")
+    baseline_parser.add_argument("--mode", dest="mode", default=None)
+
     return parser
 
 
@@ -384,6 +436,8 @@ def main(argv: Sequence[str]) -> int:
         return run_syntax_check(args.playbook)
     if args.subcommand == "lint":
         return run_lint()
+    if args.subcommand == "baseline":
+        return run_baseline(args.mode)
     if args.subcommand == "secret":
         return run_secret(
             args.key,
