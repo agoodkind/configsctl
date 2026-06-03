@@ -1,0 +1,56 @@
+version: 2
+
+project_name: configs
+
+builds:
+  - id: configs
+    main: ./cmd/configs
+    binary: configs
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
+archives:
+  - id: configs
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+notarize:
+  macos:
+    - enabled: '{{ isEnvSet "APPLE_DEVELOPER_ID_CERT" }}'
+      ids:
+        - configs
+      sign:
+        certificate: "{{ .Env.APPLE_DEVELOPER_ID_CERT }}"
+        password: "{{ .Env.APPLE_DEVELOPER_ID_CERT_PASSWORD }}"
+      notarize:
+        issuer_id: "{{ .Env.APPLE_NOTARYTOOL_ISSUER_ID }}"
+        key_id: "{{ .Env.APPLE_NOTARYTOOL_KEY_ID }}"
+        key: "{{ .Env.APPLE_NOTARYTOOL_KEY }}"
+        wait: true
+        timeout: 20m
+
+release:
+  name_template: "{{ .Date }} · build {{ .Env.HEX_RUN }} · {{ .ShortCommit }}"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
