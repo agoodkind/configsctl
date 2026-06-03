@@ -5,13 +5,20 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"goodkind.io/configs/internal/baseline"
 	"goodkind.io/configs/internal/lint"
+	"goodkind.io/configs/internal/vault"
 )
+
+// defaultVaultFile is the vault path relative to the repository root, which is
+// the working directory the binary runs from.
+const defaultVaultFile = "ansible/inventory/group_vars/all/vault.yml"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -22,8 +29,11 @@ func main() {
 
 // handlers dispatches a subcommand name to its implementation.
 var handlers = map[string]func([]string) error{
-	"lint":     runLint,
-	"baseline": runBaseline,
+	"lint":        runLint,
+	"baseline":    runBaseline,
+	"keys":        runKeys,
+	"secret":      runSecret,
+	"set-secrets": runSetSecrets,
 }
 
 func run(args []string) error {
@@ -64,6 +74,67 @@ func runBaseline(args []string) error {
 		fmt.Println("baseline updated")
 	}
 	return nil
+}
+
+func runKeys(_ []string) error {
+	passwordFile, err := vaultPassPath()
+	if err != nil {
+		return err
+	}
+	keys, err := vault.Keys(defaultVaultFile, passwordFile)
+	if err != nil {
+		return errors.New("list vault keys failed")
+	}
+	for _, key := range keys {
+		fmt.Println(key)
+	}
+	return nil
+}
+
+func runSecret(args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: configs secret <key>")
+	}
+	passwordFile, err := vaultPassPath()
+	if err != nil {
+		return err
+	}
+	value, err := vault.Secret(args[0], defaultVaultFile, passwordFile)
+	if err != nil {
+		return fmt.Errorf("read vault secret %q", args[0])
+	}
+	fmt.Print(value)
+	return nil
+}
+
+func runSetSecrets(_ []string) error {
+	passwordFile, err := vaultPassPath()
+	if err != nil {
+		return err
+	}
+	stdin, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return errors.New("read stdin failed")
+	}
+	added, updated, err := vault.SetSecrets(string(stdin), defaultVaultFile, passwordFile)
+	if err != nil {
+		return errors.New("merge vault secrets failed")
+	}
+	if len(added) > 0 {
+		fmt.Printf("added: %s\n", strings.Join(added, ", "))
+	}
+	if len(updated) > 0 {
+		fmt.Printf("updated: %s\n", strings.Join(updated, ", "))
+	}
+	return nil
+}
+
+func vaultPassPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", errors.New("resolve home directory failed")
+	}
+	return filepath.Join(home, ".config", "ansible", "vault.pass"), nil
 }
 
 // modeFlag reads the value of a --mode flag, accepting --mode=value and
