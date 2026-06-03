@@ -129,9 +129,25 @@ func bareExprs(node *yaml.Node) []templateExpr {
 	return nil
 }
 
+// rawBlockRE matches a Jinja `{% raw %}...{% endraw %}` region, whose body is
+// literal text and must not be read as Jinja. It accepts whitespace-control
+// markers and spans newlines.
+var rawBlockRE = regexp.MustCompile(`(?s)\{%-?\s*raw\s*-?%\}.*?\{%-?\s*endraw\s*-?%\}`)
+
+// stripRawBlocks blanks every `{% raw %}` region so its literal braces are not
+// extracted as expressions, keeping the newline count so later line numbers
+// stay correct.
+func stripRawBlocks(text string) string {
+	return rawBlockRE.ReplaceAllStringFunc(text, func(match string) string {
+		return strings.Repeat("\n", strings.Count(match, "\n"))
+	})
+}
+
 // spanExprs extracts the `{{ }}` output expressions and the `{% if/elif/set %}`
 // control expressions from a string, with each line resolved from baseLine.
+// Content inside a `{% raw %}` block is literal and is dropped first.
 func spanExprs(text string, baseLine int) []templateExpr {
+	text = stripRawBlocks(text)
 	out := delimited(text, baseLine, "{{", "}}", nil)
 	return append(out, delimited(text, baseLine, "{%", "%}", controlExpr)...)
 }
