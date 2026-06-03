@@ -48,7 +48,11 @@ func Deploy(opts DeployOptions) error {
 	if opts.FullLint {
 		gatePaths = lint.Discover(".")
 	}
-	result := lint.Gate(gatePaths)
+	result, err := lint.Gate(gatePaths)
+	if err != nil {
+		slog.Error("lint gate failed", "playbook", opts.Playbook, "err", err)
+		return fmt.Errorf("lint gate failed: %w", err)
+	}
 	for _, divergence := range result.Divergences {
 		fmt.Fprintln(os.Stderr, divergence)
 	}

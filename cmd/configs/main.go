@@ -55,7 +55,11 @@ func runLint(paths []string) error {
 	if len(paths) == 0 {
 		paths = lint.Discover(".")
 	}
-	result := lint.Gate(paths)
+	result, err := lint.Gate(paths)
+	if err != nil {
+		slog.Error("lint gate failed", "err", err)
+		return fmt.Errorf("lint gate failed: %w", err)
+	}
 	for _, line := range result.NewFindings {
 		fmt.Println(line)
 	}

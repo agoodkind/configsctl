@@ -24,20 +24,24 @@ type Result struct {
 
 // Gate lints the paths, drops findings already in the baseline, and returns the
 // new findings, the divergent forms to review, whether the run should block, and
-// a bypass token when a matching operator token made the run non-blocking.
-func Gate(paths []string) Result {
-	findings, divergences := Run(paths)
+// a bypass token when a matching operator token made the run non-blocking. An
+// oracle routing failure is returned, since a routed form cannot be passed.
+func Gate(paths []string) (Result, error) {
+	findings, divergences, err := Run(paths)
+	if err != nil {
+		return Result{}, err
+	}
 	current := findingStrings(findings)
 	divergenceLines := divergenceStrings(divergences)
 	keys := baseline.Load(readBaselineLines(), baseline.Label).Keys()
 	newFindings, _ := baseline.Evaluate(current, keys)
 	if len(newFindings) == 0 {
-		return Result{NewFindings: nil, Divergences: divergenceLines, Blocked: false, BypassToken: ""}
+		return Result{NewFindings: nil, Divergences: divergenceLines, Blocked: false, BypassToken: ""}, nil
 	}
 	if passed, token := tokens.BypassPasses(); passed {
-		return Result{NewFindings: newFindings, Divergences: divergenceLines, Blocked: false, BypassToken: token}
+		return Result{NewFindings: newFindings, Divergences: divergenceLines, Blocked: false, BypassToken: token}, nil
 	}
-	return Result{NewFindings: newFindings, Divergences: divergenceLines, Blocked: true, BypassToken: ""}
+	return Result{NewFindings: newFindings, Divergences: divergenceLines, Blocked: true, BypassToken: ""}, nil
 }
 
 // WriteBaseline records the current findings as accepted when the operator token
@@ -46,7 +50,11 @@ func WriteBaseline(paths []string, mode baseline.Mode) bool {
 	if !tokens.BaselineGatePasses() {
 		return false
 	}
-	findings, _ := Run(paths)
+	findings, _, err := Run(paths)
+	if err != nil {
+		slog.Error("baseline run failed", "err", err)
+		return false
+	}
 	current := findingStrings(findings)
 	now := clock.Stamp()
 	body := baseline.RewriteBody(current, readBaselineLines(), baseline.Label, now, mode)
