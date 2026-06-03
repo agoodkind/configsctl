@@ -48,12 +48,15 @@ func Deploy(opts DeployOptions) error {
 	if opts.FullLint {
 		gatePaths = lint.Discover(".")
 	}
-	newFindings, blocked, _ := lint.Gate(gatePaths)
-	if blocked {
-		for _, finding := range newFindings {
+	result := lint.Gate(gatePaths)
+	for _, divergence := range result.Divergences {
+		fmt.Fprintln(os.Stderr, divergence)
+	}
+	if result.Blocked {
+		for _, finding := range result.NewFindings {
 			fmt.Fprintln(os.Stdout, finding)
 		}
-		return fmt.Errorf("deploy blocked: %d input-default violation(s)", len(newFindings))
+		return fmt.Errorf("deploy blocked: %d input-default violation(s)", len(result.NewFindings))
 	}
 	return runPlaybook(opts)
 }

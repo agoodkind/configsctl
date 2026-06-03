@@ -55,15 +55,18 @@ func runLint(paths []string) error {
 	if len(paths) == 0 {
 		paths = lint.Discover(".")
 	}
-	newFindings, blocked, bypassToken := lint.Gate(paths)
-	for _, line := range newFindings {
+	result := lint.Gate(paths)
+	for _, line := range result.NewFindings {
 		fmt.Println(line)
 	}
-	if bypassToken != "" {
-		fmt.Printf("*** lint non-blocking via BYPASS_LINT=%s\n", bypassToken)
+	for _, line := range result.Divergences {
+		fmt.Fprintln(os.Stderr, line)
 	}
-	if blocked {
-		return fmt.Errorf("%d input-default violation(s)", len(newFindings))
+	if result.BypassToken != "" {
+		fmt.Printf("*** lint non-blocking via BYPASS_LINT=%s\n", result.BypassToken)
+	}
+	if result.Blocked {
+		return fmt.Errorf("%d input-default violation(s)", len(result.NewFindings))
 	}
 	return nil
 }

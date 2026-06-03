@@ -18,7 +18,7 @@ func runtimeSet(names ...string) map[string]struct{} {
 // bare expression, classified against the given runtime names.
 func violatingKinds(t *testing.T, expr string, runtime map[string]struct{}) []string {
 	t.Helper()
-	constructs := FindConstructs("{{ " + expr + " }}")
+	constructs, _ := Analyze("{{ " + expr + " }}")
 	var kinds []string
 	for _, construct := range constructs {
 		if IsViolation(construct, runtime) {

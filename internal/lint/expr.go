@@ -190,18 +190,20 @@ func rootName(node nodes.Node) string {
 	}
 }
 
-// FindConstructs parses a Jinja source string and returns every default or
-// presence construct it contains. An unparsable source yields no constructs.
-func FindConstructs(source string) []Construct {
+// Analyze parses a Jinja source string, returns every default or presence
+// construct it contains, and reports whether the source parsed. A false parse
+// flag marks a form gonja could not read, which the caller lists for review
+// rather than silently dropping.
+func Analyze(source string) ([]Construct, bool) {
 	tmpl, ok := parseTemplate(source)
 	if !ok {
-		return nil
+		return nil, false
 	}
 	var found []Construct
 	walk(tmpl, func(node nodes.Node) {
 		found = append(found, detect(node)...)
 	})
-	return found
+	return found, true
 }
 
 // detect returns the constructs carried by a single node.
