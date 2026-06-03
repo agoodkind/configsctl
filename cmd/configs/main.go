@@ -31,6 +31,9 @@ func run(args []string) error {
 }
 
 func runLint(paths []string) error {
+	if len(paths) == 0 {
+		paths = lint.Discover(".")
+	}
 	findings := lint.Run(paths)
 	for _, finding := range findings {
 		fmt.Printf("%s:%d: banned default or presence check: %s on %s\n",
