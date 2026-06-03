@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"goodkind.io/configs/internal/ansible"
 	"goodkind.io/configs/internal/baseline"
 	"goodkind.io/configs/internal/lint"
 	"goodkind.io/configs/internal/vault"
@@ -29,11 +30,14 @@ func main() {
 
 // handlers dispatches a subcommand name to its implementation.
 var handlers = map[string]func([]string) error{
-	"lint":        runLint,
-	"baseline":    runBaseline,
-	"keys":        runKeys,
-	"secret":      runSecret,
-	"set-secrets": runSetSecrets,
+	"lint":           runLint,
+	"baseline":       runBaseline,
+	"keys":           runKeys,
+	"secret":         runSecret,
+	"set-secrets":    runSetSecrets,
+	"deploy":         runDeploy,
+	"syntax-check":   runSyntaxCheck,
+	"inventory-dump": runInventoryDump,
 }
 
 func run(args []string) error {
@@ -127,6 +131,79 @@ func runSetSecrets(_ []string) error {
 		fmt.Printf("updated: %s\n", strings.Join(updated, ", "))
 	}
 	return nil
+}
+
+func runDeploy(args []string) error {
+	opts, err := parseDeploy(args)
+	if err != nil {
+		return err
+	}
+	if err := ansible.Deploy(opts); err != nil {
+		return errors.New("deploy failed")
+	}
+	return nil
+}
+
+func runSyntaxCheck(args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: configs syntax-check <playbook>")
+	}
+	if err := ansible.SyntaxCheck(args[0]); err != nil {
+		return errors.New("syntax-check failed")
+	}
+	return nil
+}
+
+func runInventoryDump(_ []string) error {
+	if err := ansible.InventoryDump(); err != nil {
+		return errors.New("inventory-dump failed")
+	}
+	return nil
+}
+
+func parseDeploy(args []string) (ansible.DeployOptions, error) {
+	var opts ansible.DeployOptions
+	index := 0
+	for index < len(args) {
+		consumed, err := applyDeployArg(&opts, args, index)
+		if err != nil {
+			return opts, err
+		}
+		index += consumed
+	}
+	if opts.Playbook == "" {
+		return opts, errors.New("usage: configs deploy <playbook> [flags]")
+	}
+	return opts, nil
+}
+
+// applyDeployArg applies one deploy argument and returns how many tokens it
+// consumed.
+func applyDeployArg(opts *ansible.DeployOptions, args []string, index int) (int, error) {
+	arg := args[index]
+	switch {
+	case arg == "--check":
+		opts.Check = true
+	case arg == "--diff":
+		opts.Diff = true
+	case arg == "--full-lint":
+		opts.FullLint = true
+	case arg == "--limit" && index+1 < len(args):
+		opts.Limit = args[index+1]
+		return 2, nil
+	case strings.HasPrefix(arg, "--limit="):
+		opts.Limit = strings.TrimPrefix(arg, "--limit=")
+	case arg == "--extra-var" && index+1 < len(args):
+		opts.ExtraVars = append(opts.ExtraVars, args[index+1])
+		return 2, nil
+	case strings.HasPrefix(arg, "--extra-var="):
+		opts.ExtraVars = append(opts.ExtraVars, strings.TrimPrefix(arg, "--extra-var="))
+	case !strings.HasPrefix(arg, "-"):
+		opts.Playbook = arg
+	default:
+		return 0, fmt.Errorf("unknown deploy argument: %q", arg)
+	}
+	return 1, nil
 }
 
 func vaultPassPath() (string, error) {
