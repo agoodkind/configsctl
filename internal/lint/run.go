@@ -1,6 +1,7 @@
 package lint
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	"sort"
@@ -15,6 +16,12 @@ type Finding struct {
 	Line int
 	Kind string
 	Root string
+}
+
+// String renders a finding as a stable line the baseline can key on.
+func (f Finding) String() string {
+	return fmt.Sprintf("%s:%d: banned default or presence check: %s on %s",
+		f.File, f.Line, f.Kind, f.Root)
 }
 
 // Run lints the given files and returns every violation, sorted by file and
