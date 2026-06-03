@@ -41,8 +41,9 @@ func equalStrings(a, b []string) bool {
 	return true
 }
 
-// TestFindConstructs mirrors the Python oracle (scripts/lint_ansible_ast.py)
-// case for case. gonja must produce the same violating-or-spared verdict.
+// TestFindConstructs checks each construct form against its expected
+// violating-or-spared verdict, covering the default and presence idioms the
+// linter bans and the legitimate uses it must leave alone.
 func TestFindConstructs(t *testing.T) {
 	cases := []struct {
 		expr    string
