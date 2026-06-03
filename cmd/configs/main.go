@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+
+	"goodkind.io/configs/internal/lint"
 )
 
 func main() {
@@ -20,5 +22,22 @@ func run(args []string) error {
 	if len(args) == 0 {
 		return errors.New("usage: configs <command>")
 	}
-	return fmt.Errorf("unknown command: %q", args[0])
+	switch args[0] {
+	case "lint":
+		return runLint(args[1:])
+	default:
+		return fmt.Errorf("unknown command: %q", args[0])
+	}
+}
+
+func runLint(paths []string) error {
+	findings := lint.Run(paths)
+	for _, finding := range findings {
+		fmt.Printf("%s:%d: banned default or presence check: %s on %s\n",
+			finding.File, finding.Line, finding.Kind, finding.Root)
+	}
+	if len(findings) > 0 {
+		return fmt.Errorf("%d input-default violation(s)", len(findings))
+	}
+	return nil
 }
