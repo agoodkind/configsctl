@@ -1,6 +1,7 @@
 package lint
 
 import (
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -10,6 +11,27 @@ import (
 type templateExpr struct {
 	line int
 	text string
+}
+
+// loopTargetRE matches a Jinja for-loop header and captures its target names,
+// such as `entry` in `{% for entry in items %}` or `k, v` in
+// `{% for k, v in d.items() %}`.
+var loopTargetRE = regexp.MustCompile(`\{%-?\s*for\s+(.+?)\s+in\s`)
+
+// collectLoopVars adds every Jinja for-loop target name in the content to the
+// runtime set. A loop value is a runtime value, so a default or presence check
+// on it is allowed. The template reader has no loop scope, so the names are
+// collected for the whole file, matching how register and set_fact names are
+// gathered per file rather than per block.
+func collectLoopVars(content string, runtime map[string]struct{}) {
+	for _, match := range loopTargetRE.FindAllStringSubmatch(content, -1) {
+		for target := range strings.SplitSeq(match[1], ",") {
+			name := strings.Trim(strings.TrimSpace(target), "()")
+			if name != "" {
+				runtime[name] = struct{}{}
+			}
+		}
+	}
 }
 
 // bareFields are the Ansible task keys whose values are bare Jinja expressions

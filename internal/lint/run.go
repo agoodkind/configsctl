@@ -153,18 +153,19 @@ func analyzeFile(path string) ([]Finding, []pendingForm) {
 // extractFile returns the expressions and runtime names for a file, choosing
 // the Jinja-template reader for .j2 and the YAML reader otherwise.
 func extractFile(path, content string) ([]templateExpr, map[string]struct{}) {
+	runtime := map[string]struct{}{}
+	collectLoopVars(content, runtime)
 	if strings.HasSuffix(path, ".j2") {
-		return spanExprs(content, 1), map[string]struct{}{}
+		return spanExprs(content, 1), runtime
 	}
 	var root yaml.Node
 	if err := yaml.Unmarshal([]byte(content), &root); err != nil {
 		slog.Warn("skip unparseable yaml", "path", path, "err", err)
-		return nil, map[string]struct{}{}
+		return nil, runtime
 	}
 	var exprs []templateExpr
-	registers := map[string]struct{}{}
-	walkYAML(&root, &exprs, registers)
-	return exprs, registers
+	walkYAML(&root, &exprs, runtime)
+	return exprs, runtime
 }
 
 // dedupePending collapses forms that share a file, line, and text, since one
