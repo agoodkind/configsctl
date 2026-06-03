@@ -5,7 +5,9 @@ Every input value must be declared explicitly in group_vars, inventory, or
 OpenTofu. A playbook or template reads it directly and fails loudly when it is
 missing. Inferring a value from whether it was set is banned in every form:
 `| default(...)`, `is defined`, `.get(key, default)` (a default in disguise),
-and any `| length` comparison (an "is this set" or "how big" check in disguise).
+any `| length` comparison (an "is this set" or "how big" check in disguise), and
+`lookup(..., default=...)` (an env-presence default in disguise). Every banned
+line is listed on its own; occurrences are not collapsed.
 
 There is no automatic exception and no per-line escape hatch. The only defensible
 reason to read a value defensively is a command result from an outside service
@@ -51,12 +53,22 @@ ISDEF_RE = re.compile(r"\bis\s+(?:not\s+)?defined\b")
 GET_DEFAULT_RE = re.compile(r"\.get\s*\(\s*[^,()]+,")
 # Any length comparison infers whether a value is set or how big it is.
 LENGTH_COMPARE_RE = re.compile(r"\|\s*length\s*\)?\s*(?:==|!=|<=|>=|<|>)")
+# A lookup default argument, `lookup(..., default=...)`, infers a value from
+# whether an env var or key is set and falls back otherwise; the pipe-filter
+# form above never sees it.
+LOOKUP_DEFAULT_RE = re.compile(r"\bdefault\s*=")
 
-# All four are banned outright. The only acceptable reason to read a value
+# All five are banned outright. The only acceptable reason to read a value
 # defensively is a command result from an outside service that is unset more
 # often than not. That is the author's judgment to make and defend in review;
 # the check has no automatic exception and no per-line escape hatch.
-BANNED_PATTERNS = (DEFAULT_RE, ISDEF_RE, GET_DEFAULT_RE, LENGTH_COMPARE_RE)
+BANNED_PATTERNS = (
+    DEFAULT_RE,
+    ISDEF_RE,
+    GET_DEFAULT_RE,
+    LENGTH_COMPARE_RE,
+    LOOKUP_DEFAULT_RE,
+)
 
 
 def scan_file(path: Path) -> list[tuple[int, str]]:
@@ -126,9 +138,9 @@ def main(argv: list[str]) -> int:
     print(f"\n{len(new_findings)} banned default / presence-check violation(s).")
     print("Declare every value in the service group_vars and read it bare.")
     print("Banned outright, no automatic exception and no escape hatch:")
-    print("| default(...), is defined, .get(key, default), and any | length")
-    print("comparison. The only defensible read is a command result from an")
-    print("outside service that is unset more often than not.")
+    print("| default(...), is defined, .get(key, default), any | length")
+    print("comparison, and lookup(..., default=...). The only defensible read is a")
+    print("command result from an outside service that is unset more often than not.")
     passed, token = gate_tokens.bypass_passes()
     if passed:
         print(

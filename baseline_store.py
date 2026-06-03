@@ -119,21 +119,19 @@ def evaluate(
     current_lines: list[str],
     baseline_keys: set[str],
 ) -> tuple[list[str], int]:
-    """Compare current findings against the baseline keys. Return the new findings,
-    those whose key is absent from the baseline, in input order and deduplicated by
-    key, and the gone count, the number of baseline keys absent from the current
-    findings."""
+    """Compare current findings against the baseline keys. Return every finding
+    whose key is absent from the baseline, in input order with no deduplication, so
+    each banned line is listed on its own, and the gone count, the number of
+    baseline keys absent from the current findings. A baseline key still suppresses
+    every line that shares it, so accepting a finding accepts all its occurrences."""
     new_findings: list[str] = []
-    seen: set[str] = set()
     current_keys: set[str] = set()
     for line in current_lines:
         key = finding_key(line)
         current_keys.add(key)
-        if key in baseline_keys or key in seen:
+        if key in baseline_keys:
             continue
-        seen.add(key)
-        if key not in baseline_keys:
-            new_findings.append(line)
+        new_findings.append(line)
     gone_count = sum(1 for key in baseline_keys if key not in current_keys)
     return new_findings, gone_count
 
