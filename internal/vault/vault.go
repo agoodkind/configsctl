@@ -4,6 +4,9 @@
 package vault
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -15,6 +18,12 @@ import (
 	ansiblevault "github.com/sosedoff/ansible-vault-go"
 	"gopkg.in/yaml.v3"
 )
+
+// fingerprintHexLen is the number of hex characters of the keyed digest shown
+// per key. The digest is HMAC keyed by the vault password, so an attacker
+// without the password cannot use it regardless of length; the truncation is
+// only for readability and is wide enough (32 bits) to separate distinct keys.
+const fingerprintHexLen = 8
 
 // Keys returns the vault key names, sorted.
 func Keys(vaultPath, passwordFile string) ([]string, error) {
@@ -28,6 +37,55 @@ func Keys(vaultPath, passwordFile string) ([]string, error) {
 	}
 	sort.Strings(names)
 	return names, nil
+}
+
+// KeyDetail is one vault entry's non-secret metadata: the key name, the byte
+// length of its value, and a keyed fingerprint of the value.
+type KeyDetail struct {
+	Name        string
+	Length      int
+	Fingerprint string
+}
+
+// KeyDetails returns each vault key's name, value byte length, and keyed
+// fingerprint, sorted by name. It never returns secret values. The fingerprint
+// is HMAC-SHA256 over the value with the vault password as the key, so only a
+// holder of the vault password can compute or verify it; that holder can
+// already decrypt the vault, so the fingerprint discloses nothing further while
+// still letting equal values across keys or environments be compared.
+func KeyDetails(vaultPath, passwordFile string) ([]KeyDetail, error) {
+	password, err := readPassword(passwordFile)
+	if err != nil {
+		return nil, err
+	}
+	mapping, err := decryptMapping(vaultPath, passwordFile)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(mapping))
+	for name := range mapping {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	details := make([]KeyDetail, 0, len(names))
+	for _, name := range names {
+		value := mapping[name]
+		details = append(details, KeyDetail{
+			Name:        name,
+			Length:      len(value),
+			Fingerprint: fingerprint(password, value),
+		})
+	}
+	return details, nil
+}
+
+// fingerprint computes a short keyed digest of value, using the vault password
+// as the HMAC key so the digest is meaningless to anyone without the password.
+func fingerprint(password, value string) string {
+	mac := hmac.New(sha256.New, []byte(password))
+	mac.Write([]byte(value))
+	sum := mac.Sum(nil)
+	return hex.EncodeToString(sum)[:fingerprintHexLen]
 }
 
 // Secret returns one vault value.

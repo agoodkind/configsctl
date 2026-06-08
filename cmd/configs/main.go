@@ -87,10 +87,18 @@ func runBaseline(args []string) error {
 	return nil
 }
 
-func runKeys(_ []string) error {
+func runKeys(args []string) error {
 	passwordFile, err := vaultPassPath()
 	if err != nil {
 		return err
+	}
+	if len(args) > 0 && args[0] == "--fingerprint" {
+		details, err := vault.KeyDetails(defaultVaultFile, passwordFile)
+		if err != nil {
+			return errors.New("list vault key details failed")
+		}
+		printKeyDetails(details)
+		return nil
 	}
 	keys, err := vault.Keys(defaultVaultFile, passwordFile)
 	if err != nil {
@@ -100,6 +108,19 @@ func runKeys(_ []string) error {
 		fmt.Println(key)
 	}
 	return nil
+}
+
+// printKeyDetails writes each key's name, value byte length, and keyed
+// fingerprint in aligned columns. It prints no secret values.
+func printKeyDetails(details []vault.KeyDetail) {
+	nameWidth := len("NAME")
+	for _, detail := range details {
+		nameWidth = max(nameWidth, len(detail.Name))
+	}
+	fmt.Printf("%-*s  %6s  %s\n", nameWidth, "NAME", "LENGTH", "FP")
+	for _, detail := range details {
+		fmt.Printf("%-*s  %6d  %s\n", nameWidth, detail.Name, detail.Length, detail.Fingerprint)
+	}
 }
 
 func runSecret(args []string) error {
