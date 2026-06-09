@@ -15,16 +15,7 @@ import (
 	"strings"
 
 	"goodkind.io/configs/internal/lint"
-	"gopkg.in/yaml.v3"
 )
-
-// vaultVarPrefix is the name prefix every secret variable carries, because all
-// secrets live in group_vars/all/vault.yml as vault_* keys. The inventory dump
-// redacts any variable with this prefix.
-const vaultVarPrefix = "vault_"
-
-// redactedPlaceholder replaces a secret value in the redacted inventory dump.
-const redactedPlaceholder = "<redacted>"
 
 // ansibleDir is the ansible working tree, relative to the repository root that
 // the binary runs from. The ansible CLIs run with this as their directory so the
@@ -82,69 +73,19 @@ func SyntaxCheck(playbook string) error {
 	return runStreaming("ansible-playbook", args)
 }
 
-// InventoryDump prints the resolved inventory as YAML with every vault-sourced
-// secret value redacted, so the structural dump never exposes decrypted
-// credentials.
+// InventoryDump prints the resolved inventory as YAML. Secret values in the
+// output are redacted by the global redaction layer installed in main, so this
+// streams ansible-inventory directly.
 func InventoryDump() error {
 	cmd := exec.CommandContext(context.Background(), "ansible-inventory", "--list", "--yaml")
 	cmd.Dir = ansibleDir
+	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	raw, err := cmd.Output()
-	if err != nil {
+	if err := cmd.Run(); err != nil {
 		slog.Error("ansible-inventory failed", "err", err)
 		return fmt.Errorf("ansible-inventory: %w", err)
 	}
-	redacted, err := redactInventorySecrets(raw)
-	if err != nil {
-		return err
-	}
-	if _, err := os.Stdout.Write(redacted); err != nil {
-		return fmt.Errorf("write inventory: %w", err)
-	}
 	return nil
-}
-
-// redactInventorySecrets parses the ansible-inventory YAML and replaces the
-// value of every vault-sourced variable with redactedPlaceholder.
-func redactInventorySecrets(raw []byte) ([]byte, error) {
-	var doc yaml.Node
-	if err := yaml.Unmarshal(raw, &doc); err != nil {
-		slog.Error("parse inventory yaml failed", "err", err)
-		return nil, fmt.Errorf("parse inventory yaml: %w", err)
-	}
-	redactVaultNodes(&doc)
-	out, err := yaml.Marshal(&doc)
-	if err != nil {
-		slog.Error("marshal redacted inventory failed", "err", err)
-		return nil, fmt.Errorf("marshal redacted inventory: %w", err)
-	}
-	return out, nil
-}
-
-// redactVaultNodes walks the YAML tree and, for every mapping entry whose key
-// starts with vaultVarPrefix, collapses the value node to a redacted scalar.
-// Collapsing the node handles multi-line and structured secret values, not just
-// single-line scalars.
-func redactVaultNodes(node *yaml.Node) {
-	if node.Kind == yaml.MappingNode {
-		for i := 0; i+1 < len(node.Content); i += 2 {
-			key := node.Content[i]
-			value := node.Content[i+1]
-			if strings.HasPrefix(key.Value, vaultVarPrefix) {
-				value.Kind = yaml.ScalarNode
-				value.Tag = "!!str"
-				value.Value = redactedPlaceholder
-				value.Content = nil
-				value.Alias = nil
-				continue
-			}
-			redactVaultNodes(value)
-		}
-		return
-	}
-	for _, child := range node.Content {
-		redactVaultNodes(child)
-	}
 }
 
 func runPlaybook(opts DeployOptions) error {
