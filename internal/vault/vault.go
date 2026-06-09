@@ -101,6 +101,13 @@ func Secret(key, vaultPath, passwordFile string) (string, error) {
 	return value, nil
 }
 
+// Values returns the decrypted vault as a name -> value map. It is the bulk
+// accessor the redaction layer uses to learn every secret value; callers must
+// not print the values.
+func Values(vaultPath, passwordFile string) (map[string]string, error) {
+	return decryptMapping(vaultPath, passwordFile)
+}
+
 // SetSecrets merges a YAML mapping into the vault, preserving other keys, and
 // reports the added and updated key names.
 func SetSecrets(stdin, vaultPath, passwordFile string) ([]string, []string, error) {
