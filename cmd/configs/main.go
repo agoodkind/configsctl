@@ -10,10 +10,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"goodkind.io/configs/internal/ansible"
 	"goodkind.io/configs/internal/baseline"
 	"goodkind.io/configs/internal/lint"
+	"goodkind.io/configs/internal/redact"
 	"goodkind.io/configs/internal/vault"
 )
 
@@ -44,10 +46,33 @@ func run(args []string) error {
 	if len(args) == 0 {
 		return errors.New("usage: configs <command>")
 	}
-	handler, ok := handlers[args[0]]
+	command := args[0]
+	handler, ok := handlers[command]
 	if !ok {
-		return fmt.Errorf("unknown command: %q", args[0])
+		return fmt.Errorf("unknown command: %q", command)
 	}
+
+	patterns, loadErr := loadSecretPatterns()
+	if loadErr != nil {
+		var short *shortSecretError
+		isShort := errors.As(loadErr, &short)
+		switch {
+		case isShort && command == "set-secrets":
+			patterns = nil // set-secrets is exempt; it prints only key names.
+		case isShort:
+			fmt.Fprintf(os.Stderr, "configs: refusing to run: vault key %q has a value shorter than %d characters; rotate it via 'configs set-secrets'\n", short.key, redact.MinLen)
+			return short
+		default:
+			return loadErr
+		}
+	}
+
+	restore, err := installRedaction(patterns)
+	if err != nil {
+		return err
+	}
+	defer restore()
+
 	return handler(args[1:])
 }
 
@@ -135,8 +160,46 @@ func runSecret(args []string) error {
 	if err != nil {
 		return fmt.Errorf("read vault secret %q", args[0])
 	}
-	fmt.Print(value)
+	dir, path, err := writeSecretFile(value)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Secret %q written to: %s\n", args[0], path)
+	fmt.Println("WARNING: this file holds the secret in plaintext on disk.")
+	fmt.Println("Do not cat, paste, log, or commit it. Delete it after use:")
+	fmt.Printf("  rm -rf %s\n", dir)
 	return nil
+}
+
+// writeSecretFile creates a 0700 temp dir and writes value to a file inside it
+// via [os.CreateTemp], which owns the path and creates the file at 0600. Writing
+// through the returned handle keeps the filesystem path entirely tool-owned. It
+// returns the dir (for the operator's cleanup line) and the file path.
+func writeSecretFile(value string) (dir, path string, err error) {
+	dir, err = os.MkdirTemp("", "configs-secret-*")
+	if err != nil {
+		slog.Error("create secret temp dir failed", "err", err)
+		return "", "", fmt.Errorf("create secret temp dir: %w", err)
+	}
+	if err = os.Chmod(dir, 0o700); err != nil {
+		slog.Error("chmod secret temp dir failed", "err", err)
+		return "", "", fmt.Errorf("chmod secret temp dir: %w", err)
+	}
+	f, err := os.CreateTemp(dir, "secret-*")
+	if err != nil {
+		slog.Error("create secret file failed", "err", err)
+		return "", "", fmt.Errorf("create secret file: %w", err)
+	}
+	if _, err = f.WriteString(value); err != nil {
+		_ = f.Close()
+		slog.Error("write secret file failed", "err", err)
+		return "", "", fmt.Errorf("write secret file: %w", err)
+	}
+	if err = f.Close(); err != nil {
+		slog.Error("close secret file failed", "err", err)
+		return "", "", fmt.Errorf("close secret file: %w", err)
+	}
+	return dir, f.Name(), nil
 }
 
 func runSetSecrets(_ []string) error {
@@ -254,4 +317,134 @@ func modeFlag(args []string) string {
 		}
 	}
 	return ""
+}
+
+// shortSecretError marks a fail-closed validation failure. It names the key,
+// never the value.
+type shortSecretError struct{ key string }
+
+func (e *shortSecretError) Error() string {
+	return fmt.Sprintf("vault key %q value shorter than %d chars", e.key, redact.MinLen)
+}
+
+// vaultInputs returns the vault and password-file paths and whether both are
+// present. When the home dir cannot be resolved or either file is absent,
+// available is false and the caller runs without redaction patterns, because
+// nothing decrypts anywhere in that case.
+func vaultInputs() (vaultPath, passwordFile string, available bool) {
+	passwordFile, err := vaultPassPath()
+	if err != nil {
+		return "", "", false
+	}
+	if _, statErr := os.Stat(defaultVaultFile); statErr != nil {
+		return "", "", false
+	}
+	if _, statErr := os.Stat(passwordFile); statErr != nil {
+		return "", "", false
+	}
+	return defaultVaultFile, passwordFile, true
+}
+
+// loadSecretPatterns reads the vault and builds redaction patterns. An absent
+// vault or password file yields no patterns and no error, because nothing
+// decrypts anywhere in that case. A too-short secret returns *shortSecretError.
+func loadSecretPatterns() ([]redact.Pattern, error) {
+	vaultPath, passwordFile, available := vaultInputs()
+	if !available {
+		return nil, nil
+	}
+	values, err := vault.Values(vaultPath, passwordFile)
+	if err != nil {
+		slog.Error("vault values load failed", "err", err)
+		return nil, fmt.Errorf("load vault values: %w", err)
+	}
+	patterns := make([]redact.Pattern, 0, len(values))
+	for name, value := range values {
+		if value == "" {
+			continue
+		}
+		patterns = append(patterns, redact.Pattern{Value: []byte(value), Label: name})
+	}
+	if badKey, ok := redact.Validate(patterns); !ok {
+		return nil, &shortSecretError{key: badKey}
+	}
+	return patterns, nil
+}
+
+// lockedWriter serializes writes to a shared real descriptor under a mutex, so
+// the stdout and stderr redactors never interleave a partial write.
+type lockedWriter struct {
+	mu  *sync.Mutex
+	dst *os.File
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n, err := l.dst.Write(p)
+	if err != nil {
+		return n, fmt.Errorf("locked write: %w", err)
+	}
+	return n, nil
+}
+
+// installRedaction routes [os.Stdout] and [os.Stderr] through redactors that
+// share one mutex, so writes to the two real streams never interleave mid-write.
+// With no patterns it is a no-op and leaves the real descriptors in place. It
+// returns a restore func to call on exit. A pipe-creation failure is fatal: with
+// secrets present and no way to filter, the tool must not run, so the error
+// propagates and no command dispatches.
+func installRedaction(patterns []redact.Pattern) (func(), error) {
+	realStdout, realStderr := os.Stdout, os.Stderr
+	if len(patterns) == 0 {
+		return func() {}, nil
+	}
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		slog.Error("stdout pipe failed", "err", err)
+		return nil, fmt.Errorf("stdout pipe: %w", err)
+	}
+	errR, errW, err := os.Pipe()
+	if err != nil {
+		_ = outR.Close()
+		_ = outW.Close()
+		slog.Error("stderr pipe failed", "err", err)
+		return nil, fmt.Errorf("stderr pipe: %w", err)
+	}
+
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	drain := func(src *os.File, dst *os.File) {
+		defer wg.Done()
+		w := redact.New(&lockedWriter{mu: &mu, dst: dst}, patterns)
+		_, _ = io.Copy(w, src)
+		_ = w.Close()
+	}
+	launch := func(src *os.File, dst *os.File) {
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("redaction drain panicked", "err", fmt.Errorf("%v", r))
+				}
+			}()
+			drain(src, dst)
+		}()
+	}
+	wg.Add(2)
+	launch(outR, realStdout)
+	launch(errR, realStderr)
+
+	os.Stdout = outW
+	os.Stderr = errW
+
+	restore := func() {
+		os.Stdout = realStdout
+		os.Stderr = realStderr
+		_ = outW.Close()
+		_ = errW.Close()
+		wg.Wait()
+		_ = outR.Close()
+		_ = errR.Close()
+	}
+	return restore, nil
 }
