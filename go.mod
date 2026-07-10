@@ -1,6 +1,6 @@
 module goodkind.io/configs
 
-go 1.26.4
+go 1.26.5
 
 require (
 	github.com/nikolalohinski/gonja/v2 v2.8.0
