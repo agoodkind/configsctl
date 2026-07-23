@@ -289,6 +289,11 @@ func applyDeployArg(opts *ansible.DeployOptions, args []string, index int) (int,
 		return 2, nil
 	case strings.HasPrefix(arg, "--extra-var="):
 		opts.ExtraVars = append(opts.ExtraVars, strings.TrimPrefix(arg, "--extra-var="))
+	case arg == "--tags" && index+1 < len(args):
+		opts.Tags = append(opts.Tags, args[index+1])
+		return 2, nil
+	case strings.HasPrefix(arg, "--tags="):
+		opts.Tags = append(opts.Tags, strings.TrimPrefix(arg, "--tags="))
 	case !strings.HasPrefix(arg, "-"):
 		opts.Playbook = arg
 	default:

@@ -29,6 +29,7 @@ type DeployOptions struct {
 	Check     bool
 	Diff      bool
 	ExtraVars []string
+	Tags      []string
 	FullLint  bool
 }
 
@@ -89,6 +90,13 @@ func InventoryDump() error {
 }
 
 func runPlaybook(opts DeployOptions) error {
+	return runStreaming("ansible-playbook", playbookArgs(opts))
+}
+
+// playbookArgs builds the ansible-playbook argument list for a deploy. It is
+// separated from runPlaybook so the flag emission is unit-testable without
+// shelling out.
+func playbookArgs(opts DeployOptions) []string {
 	args := []string{"--vault-password-file", vaultPassPath(), playbookArg(opts.Playbook)}
 	if opts.Limit != "" {
 		args = append(args, "--limit", opts.Limit)
@@ -102,7 +110,12 @@ func runPlaybook(opts DeployOptions) error {
 	for _, extra := range opts.ExtraVars {
 		args = append(args, "--extra-vars", extra)
 	}
-	return runStreaming("ansible-playbook", args)
+	if len(opts.Tags) > 0 {
+		// Glue the value with `=` so a tag beginning with `-` is not parsed as
+		// a separate ansible-playbook flag.
+		args = append(args, "--tags="+strings.Join(opts.Tags, ","))
+	}
+	return args
 }
 
 func runStreaming(name string, args []string) error {
