@@ -193,7 +193,7 @@ _SELFTEST_CASES = [
     ("{{ 'true' if flag else 'false' }}", set(), set()),
     ("{{ vault_a if env == 'testbed' else vault_b }}", set(), set()),
     ("{{ g in groups }}", set(), {"membership"}),
-    ("{{ inventory_hostname in groups['consul_servers'] }}", set(), set()),
+    ("{{ inventory_hostname in groups['adguard_servers'] }}", set(), set()),
     ("{{ lookup('env', 'X', default='y') }}", set(), {"lookup-default"}),
     (
         "{{ (groups[target_group] if target_group in groups else [target_group])"

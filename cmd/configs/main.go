@@ -3,12 +3,15 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -26,6 +29,10 @@ const defaultVaultFile = "ansible/inventory/group_vars/all/vault.yml"
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		slog.Error("configs failed", "err", err)
+		var exitErr *exitCodeError
+		if errors.As(err, &exitErr) {
+			os.Exit(exitErr.code)
+		}
 		os.Exit(1)
 	}
 }
@@ -38,6 +45,7 @@ var handlers = map[string]func([]string) error{
 	"secret":         runSecret,
 	"set-secrets":    runSetSecrets,
 	"deploy":         runDeploy,
+	"tofu":           runTofu,
 	"syntax-check":   runSyntaxCheck,
 	"inventory-dump": runInventoryDump,
 }
@@ -233,6 +241,89 @@ func runDeploy(args []string) error {
 		return errors.New("deploy failed")
 	}
 	return nil
+}
+
+// proxmoxAutomationPrincipal is the Proxmox API principal both hypervisors
+// issue for automation. The tofu provider wants "principal=secret" in one
+// string; the secret half lives in the vault.
+const proxmoxAutomationPrincipal = "ansible@pam!ansible-token"
+
+// runTofu execs tofu in opentofu/ with credentials injected from the vault:
+// the R2 state-backend keys and both Proxmox provider tokens. Output flows
+// through the redaction pipes installed in run, so secret values never reach
+// the terminal.
+func runTofu(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: configs tofu <tofu args...>")
+	}
+	passwordFile, err := vaultPassPath()
+	if err != nil {
+		return err
+	}
+	env := os.Environ()
+	for _, pair := range []struct {
+		envName  string
+		vaultKey string
+		prefix   string
+	}{
+		{"AWS_ACCESS_KEY_ID", "vault_r2_tofu_access_key_id", ""},
+		{"AWS_SECRET_ACCESS_KEY", "vault_r2_tofu_secret_access_key", ""},
+		{"TF_VAR_proxmox_api_token", "vault_proxmox_token_secret", proxmoxAutomationPrincipal + "="},
+		{"TF_VAR_suburban_proxmox_api_token", "vault_suburban_testbed_pve_token_secret", proxmoxAutomationPrincipal + "="},
+	} {
+		value, secretErr := vault.Secret(pair.vaultKey, defaultVaultFile, passwordFile)
+		if secretErr != nil {
+			return fmt.Errorf("read vault secret %q", pair.vaultKey)
+		}
+		env = append(env, pair.envName+"="+pair.prefix+value)
+	}
+	safeArgs, err := sanitizeTofuArgs(args)
+	if err != nil {
+		return err
+	}
+	slog.Info("tofu run", "args", strings.Join(safeArgs, " "))
+	cmd := exec.CommandContext(context.Background(), "tofu", safeArgs...)
+	cmd.Dir = "opentofu"
+	cmd.Env = env
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		slog.Error("tofu command failed", "err", err)
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return &exitCodeError{code: exitErr.ExitCode()}
+		}
+		return errors.New("tofu failed")
+	}
+	return nil
+}
+
+// exitCodeError carries a child process exit status to main, which exits with
+// the same code. Tofu distinguishes status 2 (pending changes under
+// -detailed-exitcode) from status 1 (error), and that distinction survives.
+type exitCodeError struct{ code int }
+
+func (e *exitCodeError) Error() string {
+	return fmt.Sprintf("tofu exited with status %d", e.code)
+}
+
+// tofuArgPattern accepts printable characters only. Arguments go to tofu as
+// an argv vector, never through a shell, so this exists to reject control
+// characters and to give the taint analysis a validation boundary.
+var tofuArgPattern = regexp.MustCompile(`^[\x20-\x7E]+$`)
+
+// sanitizeTofuArgs validates each argument and returns the validated copies.
+func sanitizeTofuArgs(args []string) ([]string, error) {
+	safe := make([]string, 0, len(args))
+	for _, arg := range args {
+		match := tofuArgPattern.FindString(arg)
+		if match != arg {
+			return nil, fmt.Errorf("tofu argument %q contains non-printable characters", arg)
+		}
+		safe = append(safe, match)
+	}
+	return safe, nil
 }
 
 func runSyntaxCheck(args []string) error {

@@ -65,7 +65,7 @@ func TestFindConstructs(t *testing.T) {
 		{"'true' if flag else 'false'", runtimeSet(), nil},
 		{"vault_a if env == 'testbed' else vault_b", runtimeSet(), nil},
 		{"g in groups", runtimeSet(), []string{"membership"}},
-		{"inventory_hostname in groups['consul_servers']", runtimeSet(), nil},
+		{"inventory_hostname in groups['adguard_servers']", runtimeSet(), nil},
 		{"lookup('env', 'X', default='y')", runtimeSet(), []string{"lookup-default"}},
 	}
 
