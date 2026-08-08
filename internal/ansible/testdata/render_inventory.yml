@@ -1,0 +1,20 @@
+---
+- name: Render inventory values
+  hosts: all
+  gather_facts: false
+  connection: local
+  tasks:
+    - name: Write rendered host values
+      ansible.builtin.copy:
+        content: >-
+          {{
+            {
+              'ansible_host': ansible_host,
+              'ansible_ssh_common_args': ansible_ssh_common_args,
+              'ssh_base_args': ssh_base_args,
+              'router_ipv6_transit':
+                service_mapping.opnsense_suburban.ipv6_transit
+            } | to_json
+          }}
+        dest: "{{ output_directory }}/{{ inventory_hostname }}.json"
+        mode: "0600"
