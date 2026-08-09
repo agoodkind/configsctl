@@ -184,7 +184,6 @@ func TestSuburbanInventoryUsesDirectSSH(t *testing.T) {
 	expectedHosts := []string{
 		"tack-qa.suburban.goodkind.io",
 		"seaweedfs.suburban.goodkind.io",
-		"tack-gh-runner.suburban.goodkind.io",
 		"dns64.suburban.goodkind.io",
 		"mwan.suburban.goodkind.io",
 		"mwan-failover.suburban.goodkind.io",
