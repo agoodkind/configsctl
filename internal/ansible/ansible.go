@@ -31,6 +31,10 @@ type DeployOptions struct {
 	ExtraVars []string
 	Tags      []string
 	FullLint  bool
+	// ReleaseTag names the published mwan release to stage before the play
+	// runs. The deploy command resolves it into extra vars; this package only
+	// carries it.
+	ReleaseTag string
 }
 
 var (
