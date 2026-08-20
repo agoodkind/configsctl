@@ -6,6 +6,7 @@ package ansible
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -35,6 +36,11 @@ type DeployOptions struct {
 	// runs. The deploy command resolves it into extra vars; this package only
 	// carries it.
 	ReleaseTag string
+	// Output receives the play's merged stdout and stderr. A nil Output sends
+	// them to the process streams, which is what the syntax check and the
+	// inventory dump do. The deploy command sets it to a file so the play's
+	// output survives whatever the caller does with the tool's own stdout.
+	Output io.Writer
 }
 
 var (
@@ -75,7 +81,7 @@ func SyntaxCheck(playbook string) error {
 	args := []string{
 		"--syntax-check", "--vault-password-file", vaultPassPath(), playbookArg(playbook),
 	}
-	return runStreaming("ansible-playbook", args)
+	return runStreaming("ansible-playbook", args, nil)
 }
 
 // InventoryDump prints the resolved inventory as YAML. Secret values in the
@@ -94,7 +100,7 @@ func InventoryDump() error {
 }
 
 func runPlaybook(opts DeployOptions) error {
-	return runStreaming("ansible-playbook", playbookArgs(opts))
+	return runStreaming("ansible-playbook", playbookArgs(opts), opts.Output)
 }
 
 // playbookArgs builds the ansible-playbook argument list for a deploy. It is
@@ -122,12 +128,27 @@ func playbookArgs(opts DeployOptions) []string {
 	return args
 }
 
-func runStreaming(name string, args []string) error {
+// runStreaming runs an ansible CLI and streams its output as it is produced. A
+// nil out sends stdout and stderr to the process streams; a non-nil out receives
+// both, merged in the order the child wrote them, because os/exec gives one
+// descriptor to both fields when they hold the same writer.
+func runStreaming(name string, args []string, out io.Writer) error {
 	cmd := exec.CommandContext(context.Background(), name, args...)
 	cmd.Dir = ansibleDir
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	if out != nil {
+		cmd.Stdout = out
+		cmd.Stderr = out
+	}
+	// Ansible's Display.display writes to sys.stdout and deliberately does not
+	// flush, leaving the final flush to interpreter shutdown. Against a pipe or
+	// a file that means CPython holds output in an 8 KiB block buffer, so a
+	// reader sees nothing until a block fills or the play ends. PYTHONUNBUFFERED
+	// makes each write reach the destination, which is what streaming means
+	// here.
+	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
 	if err := cmd.Run(); err != nil {
 		slog.Error("ansible command failed", "command", name, "err", err)
 		return fmt.Errorf("%s: %w", name, err)

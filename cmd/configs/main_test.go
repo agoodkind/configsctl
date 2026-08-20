@@ -59,7 +59,8 @@ func TestRunDeployStagesReleaseIntoExtraVars(t *testing.T) {
 		return nil
 	}
 
-	err := runDeployWith([]string{"deploy-mwan-failover", "--release", "202608162055-5-8ce01a2", "--extra-var", "x=1"}, fetch, deploy)
+	t.Chdir(t.TempDir())
+	err := runDeployWith(cmdEnv{}, []string{"deploy-mwan-failover", "--release", "202608162055-5-8ce01a2", "--extra-var", "x=1"}, fetch, deploy)
 	if err != nil {
 		t.Fatalf("runDeployWith: %v", err)
 	}
@@ -96,7 +97,8 @@ func TestRunDeployDoesNotRunThePlayWhenStagingFails(t *testing.T) {
 		deployCalled = true
 		return nil
 	}
-	err := runDeployWith([]string{"deploy-mwan", "--release", "bad"}, fetch, deploy)
+	t.Chdir(t.TempDir())
+	err := runDeployWith(cmdEnv{}, []string{"deploy-mwan", "--release", "bad"}, fetch, deploy)
 	if err == nil {
 		t.Fatal("runDeployWith returned nil, want the staging error")
 	}
@@ -118,7 +120,8 @@ func TestRunDeployWithoutReleaseSkipsStaging(t *testing.T) {
 		deployed = opts
 		return nil
 	}
-	if err := runDeployWith([]string{"deploy-clyde"}, fetch, deploy); err != nil {
+	t.Chdir(t.TempDir())
+	if err := runDeployWith(cmdEnv{}, []string{"deploy-clyde"}, fetch, deploy); err != nil {
 		t.Fatalf("runDeployWith: %v", err)
 	}
 	if len(deployed.ExtraVars) != 0 {

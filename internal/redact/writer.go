@@ -119,6 +119,12 @@ func New(dst io.Writer, patterns []Pattern) *Writer {
 // starts in the buffer but might continue in a later write is never emitted
 // split, because the emit boundary is pulled back before any matched span that
 // crosses it.
+//
+// The held-back tail is only as long as the buffer's longest suffix that is a
+// prefix of some pattern, which the automaton reports from the state its scan
+// ends in. Ordinary output ends in no such suffix and is emitted whole, so a
+// reader tailing the destination sees each write as it happens rather than
+// lagging by the longest secret's length.
 func (w *Writer) Write(p []byte) (int, error) {
 	if w.maxLen == 0 {
 		if _, err := w.dst.Write(p); err != nil {
@@ -127,11 +133,10 @@ func (w *Writer) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 	w.buf = append(w.buf, p...)
-	hold := w.maxLen - 1
+	merged, hold := w.mergedSpans(w.buf)
 	if len(w.buf) <= hold {
 		return len(p), nil
 	}
-	merged := w.mergedSpans(w.buf)
 	emitEnd := len(w.buf) - hold
 	for _, ls := range merged {
 		if ls.span.start < emitEnd && ls.span.end > emitEnd {
@@ -154,7 +159,8 @@ func (w *Writer) Close() error {
 	if len(w.buf) == 0 {
 		return nil
 	}
-	out := render(w.buf, w.mergedSpans(w.buf))
+	merged, _ := w.mergedSpans(w.buf)
+	out := render(w.buf, merged)
 	w.buf = nil
 	if _, err := w.dst.Write(out); err != nil {
 		slog.Error("redact close write failed", "err", err)
@@ -164,17 +170,19 @@ func (w *Writer) Close() error {
 }
 
 // mergedSpans finds every occurrence in data, labels each, and merges
-// overlapping or touching spans into non-overlapping labeled regions.
-func (w *Writer) mergedSpans(data []byte) []labeledSpan {
-	rawSpans := w.ac.findAll(data)
+// overlapping or touching spans into non-overlapping labeled regions. It also
+// returns how many trailing bytes of data could still be part of a match that
+// continues past the end, which is what a streaming caller holds back.
+func (w *Writer) mergedSpans(data []byte) (merged []labeledSpan, hold int) {
+	rawSpans, hold := w.ac.scan(data)
 	if len(rawSpans) == 0 {
-		return nil
+		return nil, hold
 	}
 	labeled := make([]labeledSpan, 0, len(rawSpans))
 	for _, s := range rawSpans {
 		labeled = append(labeled, labeledSpan{span: s, label: w.labelFor(data, s)})
 	}
-	return mergeSpans(labeled)
+	return mergeSpans(labeled), hold
 }
 
 // spansBefore returns the merged spans that end at or before bound. The input is

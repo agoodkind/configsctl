@@ -14,6 +14,7 @@ type automaton struct {
 	next   []map[byte]int // goto per state
 	fail   []int          // failure links
 	out    [][]int        // pattern lengths ending at each state
+	depth  []int          // trie depth per state
 	maxLen int
 }
 
@@ -24,6 +25,7 @@ func newAutomaton(patterns [][]byte) *automaton {
 		next:   []map[byte]int{{}},
 		fail:   []int{0},
 		out:    [][]int{nil},
+		depth:  []int{0},
 		maxLen: 0,
 	}
 	for _, p := range patterns {
@@ -48,6 +50,7 @@ func (ac *automaton) add(p []byte) {
 			ac.next = append(ac.next, map[byte]int{})
 			ac.fail = append(ac.fail, 0)
 			ac.out = append(ac.out, nil)
+			ac.depth = append(ac.depth, ac.depth[state]+1)
 			ac.next[state][b] = nxt
 		}
 		state = nxt
@@ -96,9 +99,12 @@ func (ac *automaton) step(state int, b byte) int {
 	}
 }
 
-// findAll returns every occurrence span over data, scanning from state 0.
-func (ac *automaton) findAll(data []byte) []span {
-	var spans []span
+// scan returns every occurrence span over data, scanning from state 0, plus the
+// length of the longest suffix of data that is a proper prefix of some pattern.
+// That length is the trie depth of the state the scan ends in, which is exactly
+// how many trailing bytes a streaming caller must hold back: any match that
+// continues past the end of data must begin inside that suffix.
+func (ac *automaton) scan(data []byte) (spans []span, partial int) {
 	state := 0
 	for i := range data {
 		state = ac.step(state, data[i])
@@ -106,5 +112,5 @@ func (ac *automaton) findAll(data []byte) []span {
 			spans = append(spans, span{start: i - length + 1, end: i + 1})
 		}
 	}
-	return spans
+	return spans, ac.depth[state]
 }

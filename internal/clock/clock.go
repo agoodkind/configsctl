@@ -14,3 +14,9 @@ func NowUTC() time.Time {
 func Stamp() string {
 	return NowUTC().Format(time.RFC3339)
 }
+
+// FileStamp returns the current UTC time in a form that is safe inside a
+// filename and still sorts chronologically, as 20060102T150405Z.
+func FileStamp() string {
+	return NowUTC().Format("20060102T150405Z")
+}

@@ -39,8 +39,15 @@ func main() {
 	}
 }
 
+// cmdEnv carries process-wide state a subcommand may need. Deploy uses the
+// secret patterns to build a redactor over its own log file, which sits outside
+// the stdout and stderr redactors installed for the process.
+type cmdEnv struct {
+	secrets []redact.Pattern
+}
+
 // handlers dispatches a subcommand name to its implementation.
-var handlers = map[string]func([]string) error{
+var handlers = map[string]func(cmdEnv, []string) error{
 	"lint":           runLint,
 	"baseline":       runBaseline,
 	"keys":           runKeys,
@@ -83,10 +90,10 @@ func run(args []string) error {
 	}
 	defer restore()
 
-	return handler(args[1:])
+	return handler(cmdEnv{secrets: patterns}, args[1:])
 }
 
-func runLint(paths []string) error {
+func runLint(_ cmdEnv, paths []string) error {
 	if len(paths) == 0 {
 		paths = lint.Discover(".")
 	}
@@ -110,7 +117,7 @@ func runLint(paths []string) error {
 	return nil
 }
 
-func runBaseline(args []string) error {
+func runBaseline(_ cmdEnv, args []string) error {
 	value := modeFlag(args)
 	mode, err := baseline.ParseMode(value)
 	if err != nil {
@@ -122,7 +129,7 @@ func runBaseline(args []string) error {
 	return nil
 }
 
-func runKeys(args []string) error {
+func runKeys(_ cmdEnv, args []string) error {
 	passwordFile, err := vaultPassPath()
 	if err != nil {
 		return err
@@ -158,7 +165,7 @@ func printKeyDetails(details []vault.KeyDetail) {
 	}
 }
 
-func runSecret(args []string) error {
+func runSecret(_ cmdEnv, args []string) error {
 	if len(args) != 1 {
 		return errors.New("usage: configs secret <key>")
 	}
@@ -212,7 +219,7 @@ func writeSecretFile(value string) (dir, path string, err error) {
 	return dir, f.Name(), nil
 }
 
-func runSetSecrets(_ []string) error {
+func runSetSecrets(_ cmdEnv, _ []string) error {
 	passwordFile, err := vaultPassPath()
 	if err != nil {
 		return err
@@ -244,14 +251,14 @@ type releaseFetcher func(ctx context.Context, opts release.FetchOptions) (releas
 // deployRunner runs the play; ansible.Deploy in production, a fake in tests.
 type deployRunner func(opts ansible.DeployOptions) error
 
-func runDeploy(args []string) error {
-	return runDeployWith(args, release.Fetch, ansible.Deploy)
+func runDeploy(env cmdEnv, args []string) error {
+	return runDeployWith(env, args, release.Fetch, ansible.Deploy)
 }
 
 // runDeployWith is runDeploy with its two process boundaries injectable, so the
 // staging contract (which extra vars reach the play, and that a failed stage
 // never reaches it) is testable without the network or ansible.
-func runDeployWith(args []string, fetch releaseFetcher, deploy deployRunner) error {
+func runDeployWith(env cmdEnv, args []string, fetch releaseFetcher, deploy deployRunner) error {
 	opts, err := parseDeploy(args)
 	if err != nil {
 		return err
@@ -264,8 +271,18 @@ func runDeployWith(args []string, fetch releaseFetcher, deploy deployRunner) err
 		}
 		opts.ExtraVars = append(opts.ExtraVars, extraVars...)
 	}
-	if err := deploy(opts); err != nil {
-		return errors.New("deploy failed")
+	log, err := openRunLog(opts.Playbook, env.secrets)
+	if err != nil {
+		return err
+	}
+	opts.Output = log
+	log.Announce("Play")
+	deployErr := deploy(opts)
+	if closeErr := log.Close(); closeErr != nil {
+		return closeErr
+	}
+	if deployErr != nil {
+		return fmt.Errorf("deploy failed; the play output is in %s", log.Path())
 	}
 	return nil
 }
@@ -325,10 +342,11 @@ func githubToken(ctx context.Context) string {
 const proxmoxAutomationPrincipal = "ansible@pam!ansible-token"
 
 // runTofu execs tofu in opentofu/ with credentials injected from the vault:
-// the R2 state-backend keys and both Proxmox provider tokens. Output flows
-// through the redaction pipes installed in run, so secret values never reach
-// the terminal.
-func runTofu(args []string) error {
+// the R2 state-backend keys and both Proxmox provider tokens. A run that streams
+// progress for minutes writes to a run log; anything that stops for an answer
+// keeps the terminal. Either way the output is redacted, so secret values never
+// reach the operator or the file.
+func runTofu(env cmdEnv, args []string) error {
 	if len(args) == 0 {
 		return errors.New("usage: configs tofu <tofu args...>")
 	}
@@ -336,7 +354,7 @@ func runTofu(args []string) error {
 	if err != nil {
 		return err
 	}
-	env := os.Environ()
+	childEnv := os.Environ()
 	for _, pair := range []struct {
 		envName  string
 		vaultKey string
@@ -351,7 +369,7 @@ func runTofu(args []string) error {
 		if secretErr != nil {
 			return fmt.Errorf("read vault secret %q", pair.vaultKey)
 		}
-		env = append(env, pair.envName+"="+pair.prefix+value)
+		childEnv = append(childEnv, pair.envName+"="+pair.prefix+value)
 	}
 	safeArgs, err := sanitizeTofuArgs(args)
 	if err != nil {
@@ -360,19 +378,93 @@ func runTofu(args []string) error {
 	slog.Info("tofu run", "args", strings.Join(safeArgs, " "))
 	cmd := exec.CommandContext(context.Background(), "tofu", safeArgs...)
 	cmd.Dir = "opentofu"
-	cmd.Env = env
+	cmd.Env = childEnv
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		slog.Error("tofu command failed", "err", err)
+
+	var log *runLog
+	if tofuStreams(safeArgs) {
+		log, err = openRunLog("tofu-"+string(tofuSubcommand(safeArgs)), env.secrets)
+		if err != nil {
+			return err
+		}
+		cmd.Stdout = log
+		cmd.Stderr = log
+		log.Announce("Tofu")
+	}
+
+	runErr := cmd.Run()
+	if log != nil {
+		if closeErr := log.Close(); closeErr != nil {
+			return closeErr
+		}
+	}
+	if runErr != nil {
+		slog.Error("tofu command failed", "err", runErr)
+		if log != nil {
+			fmt.Fprintf(os.Stderr, "The tofu output is in %s\n", log.Path())
+		}
 		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
+		if errors.As(runErr, &exitErr) {
 			return &exitCodeError{code: exitErr.ExitCode()}
 		}
 		return errors.New("tofu failed")
 	}
 	return nil
+}
+
+// tofuCommand is the subcommand name a tofu invocation carries.
+type tofuCommand string
+
+// The tofu subcommands whose output destination this tool decides. Every other
+// subcommand keeps the terminal.
+const (
+	tofuPlan    tofuCommand = "plan"
+	tofuRefresh tofuCommand = "refresh"
+	tofuApply   tofuCommand = "apply"
+	tofuDestroy tofuCommand = "destroy"
+)
+
+// tofuSubcommand returns the first argument that is not a flag, which is the
+// subcommand tofu runs.
+func tofuSubcommand(args []string) tofuCommand {
+	for _, arg := range args {
+		if !strings.HasPrefix(arg, "-") {
+			return tofuCommand(arg)
+		}
+	}
+	return ""
+}
+
+// tofuStreams reports whether this invocation produces a long stream of progress
+// without stopping for an answer, which is what makes a run log the right
+// destination. A run that stops at an approval prompt keeps the terminal
+// instead: the prompt is the output, and an operator cannot answer a question
+// they cannot see. Unlisted subcommands keep the terminal, so a tofu command
+// that grows a prompt later does not silently break.
+func tofuStreams(args []string) bool {
+	switch tofuSubcommand(args) {
+	case tofuPlan, tofuRefresh:
+		return true
+	case tofuApply, tofuDestroy:
+		return hasTofuAutoApprove(args)
+	default:
+		return false
+	}
+}
+
+// hasTofuAutoApprove reports whether the arguments skip the approval prompt. It
+// accepts every spelling tofu does: one or two leading dashes, bare or with an
+// explicit value.
+func hasTofuAutoApprove(args []string) bool {
+	for _, arg := range args {
+		flag := strings.TrimLeft(arg, "-")
+		if flag == "auto-approve" || strings.HasPrefix(flag, "auto-approve=") {
+			return true
+		}
+	}
+	return false
 }
 
 // exitCodeError carries a child process exit status to main, which exits with
@@ -402,7 +494,7 @@ func sanitizeTofuArgs(args []string) ([]string, error) {
 	return safe, nil
 }
 
-func runSyntaxCheck(args []string) error {
+func runSyntaxCheck(_ cmdEnv, args []string) error {
 	if len(args) != 1 {
 		return errors.New("usage: configs syntax-check <playbook>")
 	}
@@ -412,7 +504,7 @@ func runSyntaxCheck(args []string) error {
 	return nil
 }
 
-func runInventoryDump(_ []string) error {
+func runInventoryDump(_ cmdEnv, _ []string) error {
 	if err := ansible.InventoryDump(); err != nil {
 		return errors.New("inventory-dump failed")
 	}

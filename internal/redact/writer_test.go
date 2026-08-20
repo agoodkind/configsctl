@@ -1,6 +1,7 @@
 package redact
 
 import (
+	"bytes"
 	"reflect"
 	"strings"
 	"testing"
@@ -93,6 +94,57 @@ func TestWriterByteAtATime(t *testing.T) {
 	got := redactAll(t, pats, chunks...)
 	if got != "a=<redacted:vault_token>;b" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// TestWriterEmitsNonMatchingTextImmediately pins the streaming property the
+// deploy log depends on: text that ends in nothing a secret could continue from
+// reaches the destination on the Write that produced it, however long the
+// longest secret is. Without it a reader tailing the log lags by maxLen-1 bytes,
+// which for this repo's vault is several thousand.
+func TestWriterEmitsNonMatchingTextImmediately(t *testing.T) {
+	long := bytes.Repeat([]byte("S"), 4096)
+	pats := []Pattern{{Value: long, Label: "vault_long"}}
+	var sb strings.Builder
+	w := New(&sb, pats)
+
+	line := "TASK [install packages] ********\n"
+	if _, err := w.Write([]byte(line)); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if sb.String() != line {
+		t.Fatalf("held back non-matching text: got %q, want %q", sb.String(), line)
+	}
+}
+
+// TestWriterHoldsBackOnlyThePartialMatch pins the other half: when a write ends
+// part-way into a secret, exactly that partial tail is withheld, the text before
+// it is emitted, and the secret is still redacted whole once the rest arrives.
+func TestWriterHoldsBackOnlyThePartialMatch(t *testing.T) {
+	secret := "supersecretvalue1234"
+	pats := []Pattern{{Value: []byte(secret), Label: "vault_token"}}
+	var sb strings.Builder
+	w := New(&sb, pats)
+
+	head := secret[:8]
+	if _, err := w.Write([]byte("ok line\n" + head)); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if got := sb.String(); got != "ok line\n" {
+		t.Fatalf("after partial secret, dst = %q, want %q", got, "ok line\n")
+	}
+	if _, err := w.Write([]byte(secret[8:] + "\n")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	want := "ok line\n<redacted:vault_token>\n"
+	if got := sb.String(); got != want {
+		t.Fatalf("dst = %q, want %q", got, want)
+	}
+	if strings.Contains(sb.String(), head) {
+		t.Fatalf("leaked a secret fragment: %q", sb.String())
 	}
 }
 
