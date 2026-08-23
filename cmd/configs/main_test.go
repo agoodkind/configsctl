@@ -51,7 +51,13 @@ func TestRunDeployStagesReleaseIntoExtraVars(t *testing.T) {
 		if opts.CacheRoot != releaseCacheRoot {
 			t.Fatalf("CacheRoot = %q", opts.CacheRoot)
 		}
-		return release.Staged{Tag: opts.Tag, Commit: "8ce01a27d5f1762e75b3877e766e4c8864f1aa70", Dir: "/stage/" + opts.Tag}, nil
+		return release.Staged{
+			Tag:           opts.Tag,
+			Commit:        "8ce01a27d5f1762e75b3877e766e4c8864f1aa70",
+			Dir:           "/stage/" + opts.Tag,
+			StackDir:      "/stage/" + opts.Tag + "/wanconfig-stack",
+			StackManifest: "/stage/" + opts.Tag + "/wanconfig-stack/manifest.txt",
+		}, nil
 	}
 	var deployed ansible.DeployOptions
 	deploy := func(opts ansible.DeployOptions) error {
@@ -75,9 +81,11 @@ func TestRunDeployStagesReleaseIntoExtraVars(t *testing.T) {
 		t.Fatalf("release extra var is not JSON: %v", err)
 	}
 	want := map[string]string{
-		"mwan_release_tag":    "202608162055-5-8ce01a2",
-		"mwan_release_commit": "8ce01a27d5f1762e75b3877e766e4c8864f1aa70",
-		"mwan_release_dir":    "/stage/202608162055-5-8ce01a2",
+		"mwan_release_tag":         "202608162055-5-8ce01a2",
+		"mwan_release_commit":      "8ce01a27d5f1762e75b3877e766e4c8864f1aa70",
+		"mwan_release_dir":         "/stage/202608162055-5-8ce01a2",
+		"wanconfig_stack_dir":      "/stage/202608162055-5-8ce01a2/wanconfig-stack",
+		"wanconfig_stack_manifest": "/stage/202608162055-5-8ce01a2/wanconfig-stack/manifest.txt",
 	}
 	for key, value := range want {
 		if vars[key] != value {

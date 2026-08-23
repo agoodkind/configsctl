@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -39,6 +41,35 @@ func tarGz(t *testing.T, members map[string][]byte, order []string) []byte {
 		t.Fatal(err)
 	}
 	return buffer.Bytes()
+}
+
+// stackBundle builds a wanconfig stack bundle holding the named package
+// contents, with a correct manifest line for each.
+func stackBundle(t *testing.T, names []string, contents map[string][]byte) []byte {
+	t.Helper()
+	manifest := "# package version architecture sha256 file\n"
+	members := map[string][]byte{}
+	order := []string{stackManifestName}
+	for _, name := range names {
+		content := contents[name]
+		sum := sha256.Sum256(content)
+		manifest += strings.TrimSuffix(name, ".deb") + " 1.0 amd64 " + hex.EncodeToString(sum[:]) + " debs/" + name + "\n"
+		members["debs/"+name] = content
+		order = append(order, "debs/"+name)
+	}
+	members[stackManifestName] = []byte(manifest)
+	return tarGz(t, members, order)
+}
+
+// testStackDebs are the packages the happy-path bundle carries.
+var testStackDebs = map[string][]byte{
+	"libyang3_3.13.6-1_amd64.deb":             []byte("libyang deb"),
+	"mwan-wanconfig-rousette_2.0.0_amd64.deb": []byte("rousette deb"),
+}
+
+func testStackBundle(t *testing.T) []byte {
+	t.Helper()
+	return stackBundle(t, []string{"libyang3_3.13.6-1_amd64.deb", "mwan-wanconfig-rousette_2.0.0_amd64.deb"}, testStackDebs)
 }
 
 // writingVerifier stands in for the network verifier: it writes the given
@@ -89,6 +120,7 @@ func TestFetchStagesEveryPlatformBinary(t *testing.T) {
 	verify := writingVerifier(t, map[string][]byte{
 		"mwan_linux_amd64.tar.gz":   linux,
 		"mwan_freebsd_amd64.tar.gz": freebsd,
+		StackBundleAsset:            testStackBundle(t),
 	}, &seenTag, &seenDir)
 	root := t.TempDir()
 
@@ -140,6 +172,7 @@ func TestFetchDereferencesAnnotatedTag(t *testing.T) {
 	verify := writingVerifier(t, map[string][]byte{
 		"mwan_linux_amd64.tar.gz":   archive,
 		"mwan_freebsd_amd64.tar.gz": archive,
+		StackBundleAsset:            testStackBundle(t),
 	}, &seenTag, &seenDir)
 
 	staged, err := Fetch(context.Background(), FetchOptions{
@@ -196,6 +229,126 @@ func TestFetchRequiresTag(t *testing.T) {
 	_, err := Fetch(context.Background(), FetchOptions{CacheRoot: t.TempDir()})
 	if err == nil || !strings.Contains(err.Error(), "tag is required") {
 		t.Fatalf("Fetch error = %v", err)
+	}
+}
+
+// TestFetchStagesTheStackBundle pins the staging contract MWAN-433 adds: the
+// bundle unpacks to <stage>/wanconfig-stack with the manifest at its root and
+// each package under debs/, every sha256 matching the manifest.
+func TestFetchStagesTheStackBundle(t *testing.T) {
+	t.Parallel()
+	server := tagAPI(t)
+	binary := tarGz(t, map[string][]byte{Binary: []byte("x")}, []string{Binary})
+	var seenTag, seenDir string
+	verify := writingVerifier(t, map[string][]byte{
+		"mwan_linux_amd64.tar.gz":   binary,
+		"mwan_freebsd_amd64.tar.gz": binary,
+		StackBundleAsset:            testStackBundle(t),
+	}, &seenTag, &seenDir)
+
+	staged, err := Fetch(context.Background(), FetchOptions{
+		Tag: "light", CacheRoot: t.TempDir(), APIBaseURL: server.URL, Client: server.Client(), Verify: verify,
+	})
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if staged.StackDir != filepath.Join(staged.Dir, "wanconfig-stack") {
+		t.Fatalf("StackDir = %q", staged.StackDir)
+	}
+	if staged.StackManifest != filepath.Join(staged.StackDir, "manifest.txt") {
+		t.Fatalf("StackManifest = %q", staged.StackManifest)
+	}
+	for name, want := range testStackDebs {
+		content, err := os.ReadFile(filepath.Join(staged.StackDir, "debs", name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if !bytes.Equal(content, want) {
+			t.Fatalf("%s content = %q, want %q", name, content, want)
+		}
+	}
+	if entries, _ := filepath.Glob(filepath.Join(staged.StackDir, "*", "*.partial")); len(entries) != 0 {
+		t.Fatalf("partial files left behind: %v", entries)
+	}
+}
+
+// TestFetchFailsWhenTheStackBundleIsMissing pins that a tag from before the
+// packaging build fails at stage time with a plain message, before any play.
+func TestFetchFailsWhenTheStackBundleIsMissing(t *testing.T) {
+	t.Parallel()
+	server := tagAPI(t)
+	binary := tarGz(t, map[string][]byte{Binary: []byte("x")}, []string{Binary})
+	var seenTag, seenDir string
+	verify := writingVerifier(t, map[string][]byte{
+		"mwan_linux_amd64.tar.gz":   binary,
+		"mwan_freebsd_amd64.tar.gz": binary,
+	}, &seenTag, &seenDir)
+
+	_, err := Fetch(context.Background(), FetchOptions{
+		Tag: "light", CacheRoot: t.TempDir(), APIBaseURL: server.URL, Client: server.Client(), Verify: verify,
+	})
+	if err == nil || !strings.Contains(err.Error(), "ships no "+StackBundleAsset) {
+		t.Fatalf("Fetch error = %v, want the missing bundle named", err)
+	}
+}
+
+// TestFetchRejectsForeignStackBundleMember pins that a member outside the
+// manifest-plus-debs contract stops the stage.
+func TestFetchRejectsForeignStackBundleMember(t *testing.T) {
+	t.Parallel()
+	for _, member := range []string{"../../etc/passwd.deb", "debs/../escape.deb", "debs/sub/dir.deb", "notes.txt"} {
+		t.Run(member, func(t *testing.T) {
+			t.Parallel()
+			server := tagAPI(t)
+			binary := tarGz(t, map[string][]byte{Binary: []byte("x")}, []string{Binary})
+			bundle := tarGz(t, map[string][]byte{
+				stackManifestName: []byte("# manifest\n"),
+				member:            []byte("payload"),
+			}, []string{stackManifestName, member})
+			var seenTag, seenDir string
+			verify := writingVerifier(t, map[string][]byte{
+				"mwan_linux_amd64.tar.gz":   binary,
+				"mwan_freebsd_amd64.tar.gz": binary,
+				StackBundleAsset:            bundle,
+			}, &seenTag, &seenDir)
+			root := t.TempDir()
+
+			_, err := Fetch(context.Background(), FetchOptions{
+				Tag: "light", CacheRoot: root, APIBaseURL: server.URL, Client: server.Client(), Verify: verify,
+			})
+			if err == nil || !strings.Contains(err.Error(), "unexpected stack bundle member") {
+				t.Fatalf("Fetch error = %v, want the member rejected", err)
+			}
+			if _, statErr := os.Stat(filepath.Join(root, "etc", "passwd.deb")); statErr == nil {
+				t.Fatal("foreign member was written")
+			}
+		})
+	}
+}
+
+// TestFetchFailsOnAStackChecksumMismatch pins that a package whose bytes do
+// not match the manifest stops the stage.
+func TestFetchFailsOnAStackChecksumMismatch(t *testing.T) {
+	t.Parallel()
+	server := tagAPI(t)
+	binary := tarGz(t, map[string][]byte{Binary: []byte("x")}, []string{Binary})
+	manifest := "libyang3 1.0 amd64 " + strings.Repeat("0", 64) + " debs/libyang3_1.0_amd64.deb\n"
+	bundle := tarGz(t, map[string][]byte{
+		stackManifestName:             []byte(manifest),
+		"debs/libyang3_1.0_amd64.deb": []byte("deb bytes"),
+	}, []string{stackManifestName, "debs/libyang3_1.0_amd64.deb"})
+	var seenTag, seenDir string
+	verify := writingVerifier(t, map[string][]byte{
+		"mwan_linux_amd64.tar.gz":   binary,
+		"mwan_freebsd_amd64.tar.gz": binary,
+		StackBundleAsset:            bundle,
+	}, &seenTag, &seenDir)
+
+	_, err := Fetch(context.Background(), FetchOptions{
+		Tag: "light", CacheRoot: t.TempDir(), APIBaseURL: server.URL, Client: server.Client(), Verify: verify,
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not match the manifest") {
+		t.Fatalf("Fetch error = %v, want the checksum mismatch named", err)
 	}
 }
 

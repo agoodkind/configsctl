@@ -306,9 +306,11 @@ func stageRelease(ctx context.Context, tag string, fetch releaseFetcher) ([]stri
 		return nil, fmt.Errorf("stage release %s: %w", tag, err)
 	}
 	vars := map[string]string{
-		"mwan_release_tag":    staged.Tag,
-		"mwan_release_commit": staged.Commit,
-		"mwan_release_dir":    staged.Dir,
+		"mwan_release_tag":         staged.Tag,
+		"mwan_release_commit":      staged.Commit,
+		"mwan_release_dir":         staged.Dir,
+		"wanconfig_stack_dir":      staged.StackDir,
+		"wanconfig_stack_manifest": staged.StackManifest,
 	}
 	encoded, err := json.Marshal(vars)
 	if err != nil {

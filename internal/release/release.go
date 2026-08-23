@@ -3,19 +3,24 @@
 // The archives are downloaded and verified against their GitHub attestations
 // by go-makefile's selfupdate verifier, the same code the release workflow
 // runs after publishing, then the one binary inside each platform archive is
-// extracted into a per-tag directory that the playbooks copy from. The tag's
-// commit is resolved as well, so a playbook can confirm the binary it
-// installed reports the commit the tag points at.
+// extracted into a per-tag directory that the playbooks copy from. The
+// wanconfig stack bundle is unpacked beside the binaries and its packages are
+// checked against its manifest, so a play can install packages the release
+// attested. The tag's commit is resolved as well, so a playbook can confirm
+// the binary it installed reports the commit the tag points at.
 package release
 
 import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -44,6 +49,22 @@ const maxBinaryBytes int64 = 256 << 20
 // archiveMemberREADME is the only member besides the binary that a release
 // archive may carry.
 const archiveMemberREADME = "README.md"
+
+// StackBundleAsset is the wanconfig stack bundle a release publishes beside
+// the binaries: the Debian packages a gateway installs instead of compiling.
+const StackBundleAsset = "wanconfig-stack_linux_amd64.tar.gz"
+
+// stackManifestName is the bundle member that lists every package it carries.
+const stackManifestName = "manifest.txt"
+
+// stackMemberPrefix is where the bundle keeps its packages.
+const stackMemberPrefix = "debs/"
+
+// stackDirName is the directory under the stage the bundle unpacks into.
+const stackDirName = "wanconfig-stack"
+
+// maxStackMemberBytes bounds one extracted bundle member.
+const maxStackMemberBytes int64 = 256 << 20
 
 // defaultAPIBaseURL is the GitHub API root the tag lookup uses.
 const defaultAPIBaseURL = "https://api.github.com"
@@ -103,6 +124,11 @@ type Staged struct {
 	Dir string
 	// Binaries maps each platform to the absolute path of its extracted binary.
 	Binaries map[string]string
+	// StackDir is where the wanconfig stack bundle is unpacked: the manifest
+	// at its root and the packages under debs/.
+	StackDir string
+	// StackManifest is the absolute path of the unpacked bundle manifest.
+	StackManifest string
 }
 
 // stager carries the resolved options through one Fetch.
@@ -200,11 +226,17 @@ func (s stager) run(ctx context.Context) (Staged, error) {
 	}
 	s.log.InfoContext(ctx, "release: binaries staged", "tag", s.tag, "dir", stageDir, "platforms", len(binaries))
 
+	stackDir := filepath.Join(stageDir, stackDirName)
+	manifestPath, err := s.extractStack(ctx, filepath.Join(archiveDir, StackBundleAsset), stackDir)
+	if err != nil {
+		return Staged{}, err
+	}
+
 	commit, err := s.resolveTagCommit(ctx)
 	if err != nil {
 		return Staged{}, err
 	}
-	return Staged{Tag: s.tag, Commit: commit, Dir: stageDir, Binaries: binaries}, nil
+	return Staged{Tag: s.tag, Commit: commit, Dir: stageDir, Binaries: binaries, StackDir: stackDir, StackManifest: manifestPath}, nil
 }
 
 // extractBinary unpacks the single binary member of a release archive to
@@ -306,6 +338,200 @@ func (s stager) copyAndPlace(ctx context.Context, temp *os.File, reader io.Reade
 		return fmt.Errorf("place binary: %w", err)
 	}
 	return nil
+}
+
+// extractStack unpacks the stack bundle into stackDir: the manifest at its
+// root and each package under debs/ by base name, so a member path can never
+// land anywhere else. Every unpacked package is then checked against the
+// manifest. A release cut before the packaging build ships no bundle, which
+// fails here so a play that needs packages never runs against such a tag.
+func (s stager) extractStack(ctx context.Context, archivePath, stackDir string) (string, error) {
+	archive, err := os.Open(archivePath)
+	if errors.Is(err, fs.ErrNotExist) {
+		err := fmt.Errorf("release %s ships no %s: the wanconfig stack packages exist only in releases cut after the packaging build", s.tag, StackBundleAsset)
+		s.log.ErrorContext(ctx, "release: stack bundle missing", "tag", s.tag, "err", err)
+		return "", err
+	}
+	if err != nil {
+		s.log.WarnContext(ctx, "release: stack bundle open failed", "archive", archivePath, "err", err)
+		return "", fmt.Errorf("open stack bundle: %w", err)
+	}
+	defer func() { _ = archive.Close() }()
+	gzipReader, err := gzip.NewReader(archive)
+	if err != nil {
+		s.log.WarnContext(ctx, "release: stack bundle gzip open failed", "archive", archivePath, "err", err)
+		return "", fmt.Errorf("read stack bundle: %w", err)
+	}
+	defer func() { _ = gzipReader.Close() }()
+	manifestPath, err := s.unpackStackMembers(ctx, tar.NewReader(gzipReader), archivePath, stackDir)
+	if err != nil {
+		return "", err
+	}
+	if err := s.verifyStackManifest(ctx, manifestPath, stackDir); err != nil {
+		return "", err
+	}
+	return manifestPath, nil
+}
+
+// unpackStackMembers writes each bundle member and returns the manifest path.
+func (s stager) unpackStackMembers(ctx context.Context, tarReader *tar.Reader, archivePath, stackDir string) (string, error) {
+	manifestPath := ""
+	for {
+		header, err := tarReader.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			s.log.WarnContext(ctx, "release: stack bundle member read failed", "archive", archivePath, "err", err)
+			return "", fmt.Errorf("read stack bundle member: %w", err)
+		}
+		destPath, err := s.stackMemberPath(ctx, header.Name, stackDir)
+		if err != nil {
+			return "", err
+		}
+		if err := s.writeStackMember(ctx, tarReader, header.Size, destPath); err != nil {
+			return "", err
+		}
+		if header.Name == stackManifestName {
+			manifestPath = destPath
+		}
+	}
+	if manifestPath == "" {
+		err := fmt.Errorf("stack bundle has no %s member", stackManifestName)
+		s.log.WarnContext(ctx, "release: stack bundle missing manifest", "archive", archivePath, "err", err)
+		return "", err
+	}
+	return manifestPath, nil
+}
+
+// stackMemberPath maps one bundle member name to its destination, rejecting
+// everything but the manifest and debs/<name>.deb.
+func (s stager) stackMemberPath(ctx context.Context, member, stackDir string) (string, error) {
+	if member == stackManifestName {
+		return filepath.Join(stackDir, stackManifestName), nil
+	}
+	base := strings.TrimPrefix(member, stackMemberPrefix)
+	if member == base || base != filepath.Base(base) || !strings.HasSuffix(base, ".deb") || strings.Contains(member, "..") {
+		err := fmt.Errorf("unexpected stack bundle member %q", member)
+		s.log.WarnContext(ctx, "release: stack bundle member rejected", "member", member, "err", err)
+		return "", err
+	}
+	// filepath.Base in the join keeps the destination inside the debs
+	// directory whatever the member name held.
+	return filepath.Join(stackDir, stackMemberPrefix, filepath.Base(base)), nil
+}
+
+// writeStackMember streams one member to destPath through a temporary file in
+// the same directory, so a partial write never sits at the final path.
+func (s stager) writeStackMember(ctx context.Context, reader io.Reader, size int64, destPath string) error {
+	if size <= 0 || size > maxStackMemberBytes {
+		err := fmt.Errorf("stack member size %d outside (0, %d]", size, maxStackMemberBytes)
+		s.log.WarnContext(ctx, "release: stack member size rejected", "dest", destPath, "size", size, "err", err)
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
+		s.log.WarnContext(ctx, "release: stack dir create failed", "dest", destPath, "err", err)
+		return fmt.Errorf("create stack dir: %w", err)
+	}
+	temp, err := os.CreateTemp(filepath.Dir(destPath), filepath.Base(destPath)+".*.partial")
+	if err != nil {
+		s.log.WarnContext(ctx, "release: temp stack member create failed", "dest", destPath, "err", err)
+		return fmt.Errorf("create temp stack member: %w", err)
+	}
+	tempPath := temp.Name()
+	if _, err := io.Copy(temp, io.LimitReader(reader, size)); err != nil {
+		_ = temp.Close()
+		_ = os.Remove(tempPath)
+		s.log.WarnContext(ctx, "release: stack member write failed", "dest", destPath, "err", err)
+		return fmt.Errorf("write stack member: %w", err)
+	}
+	if err := temp.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		s.log.WarnContext(ctx, "release: stack member close failed", "dest", destPath, "err", err)
+		return fmt.Errorf("close stack member: %w", err)
+	}
+	if err := os.Rename(tempPath, destPath); err != nil {
+		_ = os.Remove(tempPath)
+		s.log.WarnContext(ctx, "release: stack member place failed", "dest", destPath, "err", err)
+		return fmt.Errorf("place stack member: %w", err)
+	}
+	return nil
+}
+
+// verifyStackManifest checks every manifest line against the unpacked
+// packages: the named file exists, its sha256 matches, and no unpacked
+// package is unlisted.
+func (s stager) verifyStackManifest(ctx context.Context, manifestPath, stackDir string) error {
+	content, err := os.ReadFile(manifestPath)
+	if err != nil {
+		s.log.WarnContext(ctx, "release: stack manifest read failed", "path", manifestPath, "err", err)
+		return fmt.Errorf("read stack manifest: %w", err)
+	}
+	listed := map[string]bool{}
+	for line := range strings.Lines(string(content)) {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if err := s.verifyStackManifestLine(ctx, line, stackDir, listed); err != nil {
+			return err
+		}
+	}
+	debs, err := filepath.Glob(filepath.Join(stackDir, stackMemberPrefix, "*.deb"))
+	if err != nil {
+		s.log.WarnContext(ctx, "release: stack package list failed", "dir", stackDir, "err", err)
+		return fmt.Errorf("list stack packages: %w", err)
+	}
+	if len(listed) == 0 || len(debs) != len(listed) {
+		err := fmt.Errorf("stack bundle carries %d packages but its manifest lists %d", len(debs), len(listed))
+		s.log.WarnContext(ctx, "release: stack manifest incomplete", "packages", len(debs), "listed", len(listed), "err", err)
+		return err
+	}
+	s.log.InfoContext(ctx, "release: stack bundle staged", "dir", stackDir, "packages", len(debs))
+	return nil
+}
+
+// verifyStackManifestLine checks one "package version architecture sha256
+// file" line and records the file it lists.
+func (s stager) verifyStackManifestLine(ctx context.Context, line, stackDir string, listed map[string]bool) error {
+	fields := strings.Fields(line)
+	if len(fields) != 5 {
+		err := fmt.Errorf("stack manifest line %q is not \"package version architecture sha256 file\"", line)
+		s.log.WarnContext(ctx, "release: stack manifest line rejected", "line", line, "err", err)
+		return err
+	}
+	wantSum, file := fields[3], fields[4]
+	memberPath, err := s.stackMemberPath(ctx, file, stackDir)
+	if err != nil {
+		return err
+	}
+	gotSum, err := s.stackFileSHA256(ctx, memberPath)
+	if err != nil {
+		return err
+	}
+	if gotSum != wantSum {
+		err := fmt.Errorf("stack package %s sha256 %s does not match the manifest's %s", file, gotSum, wantSum)
+		s.log.WarnContext(ctx, "release: stack package checksum mismatch", "file", file, "err", err)
+		return err
+	}
+	listed[filepath.Base(file)] = true
+	return nil
+}
+
+// stackFileSHA256 hashes one unpacked bundle file.
+func (s stager) stackFileSHA256(ctx context.Context, path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		s.log.WarnContext(ctx, "release: stack package open failed", "path", path, "err", err)
+		return "", fmt.Errorf("open stack package: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		s.log.WarnContext(ctx, "release: stack package hash failed", "path", path, "err", err)
+		return "", fmt.Errorf("hash stack package: %w", err)
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 type gitObject struct {
