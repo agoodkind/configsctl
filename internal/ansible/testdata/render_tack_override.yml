@@ -1,0 +1,18 @@
+---
+# Renders the real tack compose override against the real tack group_vars, so
+# a test can assert on the connection string the deploy actually writes. Only
+# the per-environment and per-guest values arrive as extra variables; every
+# shared value comes from the group_vars file this play loads.
+- name: Render the tack compose override
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  become: false
+  vars_files:
+    - "{{ group_vars_file }}"
+  tasks:
+    - name: Render the compose override
+      ansible.builtin.template:
+        src: "{{ template_file }}"
+        dest: "{{ output_file }}"
+        mode: "0600"
