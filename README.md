@@ -4,7 +4,7 @@ configsctl is the control tool for the configs repository. It runs Ansible deplo
 
 ## Run it from a configs checkout
 
-configsctl resolves every path it uses relative to its working directory, so it only works from the root of a configs checkout. From there it finds the Ansible tree, the vault, the OpenTofu tree, the lint baseline, the jinja2 lint oracle under the checkout's scripts directory, and the release cache under `.make/releases`. Run from anywhere else, it finds none of them.
+configsctl resolves every path it uses relative to its working directory, so it only works from the root of a configs checkout. From there it finds the Ansible tree, the vault, the OpenTofu tree, the lint baseline, and the release cache under `.make/releases`. The jinja2 lint oracle ships inside the binary. Run from anywhere else, it finds none of them.
 
 To run a deploy from the root of a configs checkout:
 
@@ -29,5 +29,3 @@ Lint, build, test, and release come from the shared go-makefile pipeline, so use
 1. Run `make check` to run every lint gate.
 2. Run `make test` to run the tests.
 3. Run `make help` to list every other target.
-
-The `internal/ansible` tests that render inventory and templates need `ansible-playbook` on the path.

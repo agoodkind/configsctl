@@ -7,9 +7,11 @@ import (
 	"testing"
 )
 
-// oracleAvailable reports whether python3 and jinja2 are present, since the route
-// test drives the real subprocess.
-func oracleAvailable(t *testing.T) string {
+// requireOracle skips when python3 or jinja2 is absent, since the route tests
+// drive the real subprocess. It also moves the test into an empty working
+// directory, so a pass proves the embedded oracle runs without any script beside
+// the caller.
+func requireOracle(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not available")
@@ -17,14 +19,7 @@ func oracleAvailable(t *testing.T) string {
 	if err := exec.Command("python3", "-c", "import jinja2").Run(); err != nil {
 		t.Skip("jinja2 not importable")
 	}
-	script, err := filepath.Abs(filepath.Join("..", "..", "lint_ansible_ast.py"))
-	if err != nil {
-		t.Fatalf("resolve oracle path: %v", err)
-	}
-	if _, err := os.Stat(script); err != nil {
-		t.Skipf("oracle script not found: %v", err)
-	}
-	return script
+	t.Chdir(t.TempDir())
 }
 
 // TestRunRoutesMembershipThroughOracle locks in the enforcement path: a
@@ -32,7 +27,7 @@ func oracleAvailable(t *testing.T) string {
 // it sits inside a parenthesized conditional piped into a filter, is routed to
 // the jinja2 oracle and returned as a hard violation.
 func TestRunRoutesMembershipThroughOracle(t *testing.T) {
-	t.Setenv("CONFIGS_ORACLE", oracleAvailable(t))
+	requireOracle(t)
 
 	dir := t.TempDir()
 	play := filepath.Join(dir, "play.yml")
@@ -66,7 +61,7 @@ func TestRunRoutesMembershipThroughOracle(t *testing.T) {
 // TestRunSparesRuntimeRootInRoutedForm confirms the oracle path does not
 // over-flag: the same unparsed shape over a registered result is spared.
 func TestRunSparesRuntimeRootInRoutedForm(t *testing.T) {
-	t.Setenv("CONFIGS_ORACLE", oracleAvailable(t))
+	requireOracle(t)
 
 	dir := t.TempDir()
 	play := filepath.Join(dir, "play.yml")
