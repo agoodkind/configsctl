@@ -29,3 +29,6 @@ jobs:
       id-token: write
       attestations: write
     secrets: inherit
+    # The lint oracle tests run the embedded jinja2 script and fail without it.
+    with:
+      apt_packages: python3-jinja2
