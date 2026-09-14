@@ -176,54 +176,11 @@ def route(payload: str) -> str:
     return json.dumps(results)
 
 
-_SELFTEST_CASES = [
-    # (source, runtime_names, expected_violation_kinds)
-    ("{{ x | default('') }}", set(), {"default"}),
-    ("{{ x | d('') }}", set(), {"default"}),
-    ("{{ cmd.rc | default(1) }}", {"cmd"}, set()),
-    ("{{ (smtp_user | trim) | length > 0 }}", set(), {"length"}),
-    ("{{ guests | length }} guests", set(), set()),
-    ("{{ x is defined }}", set(), {"presence"}),
-    ("{{ x is undefined }}", set(), {"presence"}),
-    ("{{ x is none }}", set(), {"presence"}),
-    ("{{ ansible_default_ipv4 is defined }}", set(), set()),
-    ("{{ d.get('k') }}", set(), {"get"}),
-    ("{{ d.get('k', 0) }}", set(), {"get-default"}),
-    ("{{ a + '\\n' if a else '' }}", set(), {"self-ternary"}),
-    ("{{ 'true' if flag else 'false' }}", set(), set()),
-    ("{{ vault_a if env == 'testbed' else vault_b }}", set(), set()),
-    ("{{ g in groups }}", set(), {"membership"}),
-    ("{{ inventory_hostname in groups['adguard_servers'] }}", set(), set()),
-    ("{{ lookup('env', 'X', default='y') }}", set(), {"lookup-default"}),
-    (
-        "{{ (groups[target_group] if target_group in groups else [target_group])"
-        " | map('extract', hostvars, 'guest_info') | select('defined') | list }}",
-        set(),
-        {"membership"},
-    ),
-]
-
-
-def _selftest() -> int:
-    failures = 0
-    for source, runtime, expected in _SELFTEST_CASES:
-        constructs = find_constructs(source)
-        violating = {c.kind for c in constructs if is_violation(c, frozenset(runtime))}
-        status = "ok" if violating == expected else "FAIL"
-        if violating != expected:
-            failures += 1
-        print(f"  [{status}] {source!r} -> {sorted(violating)} (want {sorted(expected)})")
-    print(f"\n{len(_SELFTEST_CASES) - failures}/{len(_SELFTEST_CASES)} cases passed.")
-    return 1 if failures else 0
-
-
 def main(argv: list[str]) -> int:
-    if "--selftest" in argv:
-        return _selftest()
     if "--route" in argv:
         sys.stdout.write(route(sys.stdin.read()))
         return 0
-    print("usage: lint_ansible_ast.py [--selftest | --route]", file=sys.stderr)
+    print("usage: lint_ansible_ast.py --route", file=sys.stderr)
     return 2
 
 

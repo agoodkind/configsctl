@@ -1,6 +1,7 @@
 package ansible
 
 import (
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -45,22 +46,32 @@ func TestPlaybookArgsTags(t *testing.T) {
 	}
 }
 
-// TestPlaybookArgsTagsCoexist checks --tags does not disturb --limit and
-// --extra-vars emission.
-func TestPlaybookArgsTagsCoexist(t *testing.T) {
+// TestPlaybookArgsEmitsEveryDeployFlag pins the exact argument vector
+// ansible-playbook receives for a deploy that sets every option: each flag sits
+// next to its own value, in a stable order, after the vault password file and the
+// playbook path.
+func TestPlaybookArgsEmitsEveryDeployFlag(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	args := playbookArgs(DeployOptions{
 		Playbook:  "deploy-x",
 		Limit:     "host1",
-		ExtraVars: []string{"k=v"},
+		Check:     true,
+		Diff:      true,
+		ExtraVars: []string{"k=v", `{"a":1}`},
 		Tags:      []string{"a", "b"},
 	})
-	if !slices.Contains(args, "--tags=a,b") {
-		t.Fatalf("missing --tags=a,b in %v", args)
+	want := []string{
+		"--vault-password-file", filepath.Join(home, ".config", "ansible", "vault.pass"),
+		"playbooks/deploy-x.yml",
+		"--limit", "host1",
+		"--check",
+		"--diff",
+		"--extra-vars", "k=v",
+		"--extra-vars", `{"a":1}`,
+		"--tags=a,b",
 	}
-	if !slices.Contains(args, "--limit") || !slices.Contains(args, "host1") {
-		t.Fatalf("missing --limit host1 in %v", args)
-	}
-	if !slices.Contains(args, "--extra-vars") || !slices.Contains(args, "k=v") {
-		t.Fatalf("missing --extra-vars k=v in %v", args)
+	if !slices.Equal(args, want) {
+		t.Fatalf("playbookArgs = %q, want %q", args, want)
 	}
 }

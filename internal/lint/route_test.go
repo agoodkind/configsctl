@@ -7,17 +7,18 @@ import (
 	"testing"
 )
 
-// requireOracle skips when python3 or jinja2 is absent, since the route tests
-// drive the real subprocess. It also moves the test into an empty working
+// requireOracle fails when python3 or jinja2 is absent, since the lint gate
+// cannot enforce a routed form without them and a skipped route test would pass
+// while that path is broken. It also moves the test into an empty working
 // directory, so a pass proves the embedded oracle runs without any script beside
 // the caller.
 func requireOracle(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("python3"); err != nil {
-		t.Skip("python3 not available")
+		t.Fatalf("python3 is required: %v", err)
 	}
 	if err := exec.Command("python3", "-c", "import jinja2").Run(); err != nil {
-		t.Skip("jinja2 not importable")
+		t.Fatalf("jinja2 is required for python3: %v", err)
 	}
 	t.Chdir(t.TempDir())
 }
