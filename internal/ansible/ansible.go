@@ -15,7 +15,7 @@ import (
 	"sort"
 	"strings"
 
-	"goodkind.io/configs/internal/lint"
+	"goodkind.io/configsctl/internal/lint"
 )
 
 // ansibleDir is the ansible working tree, relative to the repository root that

@@ -7,8 +7,8 @@ import (
 	"slices"
 	"testing"
 
-	"goodkind.io/configs/internal/ansible"
-	"goodkind.io/configs/internal/release"
+	"goodkind.io/configsctl/internal/ansible"
+	"goodkind.io/configsctl/internal/release"
 )
 
 // TestApplyDeployArgTags pins that both --tags forms parse and that repeated

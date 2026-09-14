@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"goodkind.io/configs/internal/ansible"
-	"goodkind.io/configs/internal/redact"
+	"goodkind.io/configsctl/internal/ansible"
+	"goodkind.io/configsctl/internal/redact"
 )
 
 // privateTempDir points the host temp directory at one this test owns, so the
@@ -41,20 +41,31 @@ func readOnlyRunLog(t *testing.T) (path, contents string) {
 	return path, string(body)
 }
 
-// TestRunLogRootIsOutsideTheRepository pins that a run leaves no artifact in the
-// working tree. The operator runs these commands from a git checkout, and a log
-// written there would show up in status and in a build.
-func TestRunLogRootIsOutsideTheRepository(t *testing.T) {
+// TestRunDeployLeavesNoLogInTheWorkingDirectory pins that a run leaves no
+// artifact in the working tree. The operator runs these commands from a git
+// checkout, and a log written there would show up in status and in a build.
+func TestRunDeployLeavesNoLogInTheWorkingDirectory(t *testing.T) {
 	privateTempDir(t)
-	root := runLogRoot()
-	if !filepath.IsAbs(root) {
-		t.Fatalf("runLogRoot() = %q, want an absolute path", root)
+	checkout := t.TempDir()
+	t.Chdir(checkout)
+	deploy := func(opts ansible.DeployOptions) error {
+		_, err := opts.Output.Write([]byte("ok: [mwan]\n"))
+		return err
 	}
-	if filepath.Base(root) != runLogDirName {
-		t.Fatalf("runLogRoot() = %q, want it to end in %q", root, runLogDirName)
+	if err := runDeployWith(cmdEnv{}, []string{"deploy-mwan"}, nil, deploy); err != nil {
+		t.Fatalf("runDeployWith: %v", err)
 	}
-	if got, want := filepath.Dir(root), os.TempDir(); got != want {
-		t.Fatalf("run log dir sits in %q, want the host temp dir %q", got, want)
+
+	entries, err := os.ReadDir(checkout)
+	if err != nil {
+		t.Fatalf("ReadDir(%s): %v", checkout, err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("the working directory holds %d entries after a deploy, want none", len(entries))
+	}
+	path, _ := readOnlyRunLog(t)
+	if !strings.HasPrefix(path, os.TempDir()) {
+		t.Fatalf("run log %q is not under the host temp dir %q", path, os.TempDir())
 	}
 }
 

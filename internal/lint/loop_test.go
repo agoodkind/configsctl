@@ -1,31 +1,33 @@
 package lint
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
-// TestCollectLoopVars checks that Jinja for-loop targets, including tuple
-// targets and whitespace-control markers, are gathered as runtime names.
-func TestCollectLoopVars(t *testing.T) {
-	content := "{% for entry in ingress %}\n" +
-		"{% for k, v in mapping.items() %}\n" +
-		"{%- for cidr in pinned -%}\n"
-	runtime := map[string]struct{}{}
-	collectLoopVars(content, runtime)
-	for _, want := range []string{"entry", "k", "v", "cidr"} {
-		if _, ok := runtime[want]; !ok {
-			t.Errorf("expected loop target %q to be collected as runtime", want)
-		}
+// TestRunSparesLoopTargetsInTemplate lints a template whose presence and
+// default checks read Jinja for-loop targets, including a tuple target and a
+// whitespace-controlled loop header. A loop value is a runtime value, so only
+// the check on the input variable is a finding.
+func TestRunSparesLoopTargetsInTemplate(t *testing.T) {
+	template := filepath.Join(t.TempDir(), "ingress.conf.j2")
+	content := "{% for entry in ingress %}{{ entry.hostname is defined }}{% endfor %}\n" +
+		"{% for k, v in mapping.items() %}{{ v | default('') }}{% endfor %}\n" +
+		"{%- for cidr in pinned -%}{{ cidr is none }}{%- endfor %}\n" +
+		"{{ listen_port is defined }}\n"
+	if err := os.WriteFile(template, []byte(content), 0o600); err != nil {
+		t.Fatalf("write template: %v", err)
 	}
-}
 
-// TestLoopVarPresenceSpared confirms a presence check on a for-loop target is
-// spared, since a loop value is a runtime value the doctrine allows.
-func TestLoopVarPresenceSpared(t *testing.T) {
-	runtime := map[string]struct{}{}
-	collectLoopVars("{% for entry in ingress %}", runtime)
-	constructs, _ := Analyze("{{ entry.hostname is defined }}")
-	for _, construct := range constructs {
-		if IsViolation(construct, runtime) {
-			t.Errorf("loop target entry should be spared, got violation %+v", construct)
-		}
+	findings, _, err := Run([]string{template})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("findings = %v, want exactly the listen_port presence check", findings)
+	}
+	if findings[0].Root != "listen_port" || findings[0].Kind != "presence" || findings[0].Line != 4 {
+		t.Fatalf("finding = %+v, want presence on listen_port at line 4", findings[0])
 	}
 }

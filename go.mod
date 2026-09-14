@@ -1,4 +1,4 @@
-module goodkind.io/configs
+module goodkind.io/configsctl
 
 go 1.27.1
 

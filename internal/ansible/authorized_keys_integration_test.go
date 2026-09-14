@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"goodkind.io/configs/internal/authorizedkeys"
+	"goodkind.io/configsctl/internal/authorizedkeys"
 )
 
 const (
