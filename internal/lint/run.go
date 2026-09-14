@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"goodkind.io/configs/internal/oracle"
+	"goodkind.io/configsctl/internal/oracle"
 	"gopkg.in/yaml.v3"
 )
 

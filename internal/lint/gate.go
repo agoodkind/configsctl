@@ -5,9 +5,9 @@ import (
 	"os"
 	"strings"
 
-	"goodkind.io/configs/internal/baseline"
-	"goodkind.io/configs/internal/clock"
-	"goodkind.io/configs/internal/tokens"
+	"goodkind.io/configsctl/internal/baseline"
+	"goodkind.io/configsctl/internal/clock"
+	"goodkind.io/configsctl/internal/tokens"
 )
 
 // BaselineFile is the accepted-findings record, read and written at the working

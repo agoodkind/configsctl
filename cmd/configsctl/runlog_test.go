@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"goodkind.io/configs/internal/ansible"
-	"goodkind.io/configs/internal/redact"
+	"goodkind.io/configsctl/internal/ansible"
+	"goodkind.io/configsctl/internal/redact"
 )
 
 // privateTempDir points the host temp directory at one this test owns, so the

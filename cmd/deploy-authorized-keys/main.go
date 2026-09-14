@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"os"
 
-	"goodkind.io/configs/internal/authorizedkeys"
+	"goodkind.io/configsctl/internal/authorizedkeys"
 )
 
 func main() {

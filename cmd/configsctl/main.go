@@ -1,4 +1,4 @@
-// Command configs is the control tool for the configs repository. It runs
+// Command configsctl is the control tool for the configs repository. It runs
 // Ansible deploys, manages vault secrets, and lints Ansible input variables.
 package main
 
@@ -16,12 +16,12 @@ import (
 	"strings"
 	"sync"
 
-	"goodkind.io/configs/internal/ansible"
-	"goodkind.io/configs/internal/baseline"
-	"goodkind.io/configs/internal/lint"
-	"goodkind.io/configs/internal/redact"
-	"goodkind.io/configs/internal/release"
-	"goodkind.io/configs/internal/vault"
+	"goodkind.io/configsctl/internal/ansible"
+	"goodkind.io/configsctl/internal/baseline"
+	"goodkind.io/configsctl/internal/lint"
+	"goodkind.io/configsctl/internal/redact"
+	"goodkind.io/configsctl/internal/release"
+	"goodkind.io/configsctl/internal/vault"
 )
 
 // defaultVaultFile is the vault path relative to the repository root, which is
@@ -30,7 +30,7 @@ const defaultVaultFile = "ansible/inventory/group_vars/all/vault.yml"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		slog.Error("configs failed", "err", err)
+		slog.Error("configsctl failed", "err", err)
 		var exitErr *exitCodeError
 		if errors.As(err, &exitErr) {
 			os.Exit(exitErr.code)
@@ -61,7 +61,7 @@ var handlers = map[string]func(cmdEnv, []string) error{
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: configs <command>")
+		return errors.New("usage: configsctl <command>")
 	}
 	command := args[0]
 	handler, ok := handlers[command]
@@ -77,7 +77,7 @@ func run(args []string) error {
 		case isShort && command == "set-secrets":
 			patterns = nil // set-secrets is exempt; it prints only key names.
 		case isShort:
-			fmt.Fprintf(os.Stderr, "configs: refusing to run: vault key %q has a value shorter than %d characters; rotate it via 'configs set-secrets'\n", short.key, redact.MinLen)
+			fmt.Fprintf(os.Stderr, "configsctl: refusing to run: vault key %q has a value shorter than %d characters; rotate it via 'configsctl set-secrets'\n", short.key, redact.MinLen)
 			return short
 		default:
 			return loadErr
@@ -167,7 +167,7 @@ func printKeyDetails(details []vault.KeyDetail) {
 
 func runSecret(_ cmdEnv, args []string) error {
 	if len(args) != 1 {
-		return errors.New("usage: configs secret <key>")
+		return errors.New("usage: configsctl secret <key>")
 	}
 	passwordFile, err := vaultPassPath()
 	if err != nil {
@@ -350,7 +350,7 @@ const proxmoxAutomationPrincipal = "ansible@pam!ansible-token"
 // reach the operator or the file.
 func runTofu(env cmdEnv, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: configs tofu <tofu args...>")
+		return errors.New("usage: configsctl tofu <tofu args...>")
 	}
 	passwordFile, err := vaultPassPath()
 	if err != nil {
@@ -498,7 +498,7 @@ func sanitizeTofuArgs(args []string) ([]string, error) {
 
 func runSyntaxCheck(_ cmdEnv, args []string) error {
 	if len(args) != 1 {
-		return errors.New("usage: configs syntax-check <playbook>")
+		return errors.New("usage: configsctl syntax-check <playbook>")
 	}
 	if err := ansible.SyntaxCheck(args[0]); err != nil {
 		return errors.New("syntax-check failed")
@@ -524,7 +524,7 @@ func parseDeploy(args []string) (ansible.DeployOptions, error) {
 		index += consumed
 	}
 	if opts.Playbook == "" {
-		return opts, errors.New("usage: configs deploy <playbook> [flags]")
+		return opts, errors.New("usage: configsctl deploy <playbook> [flags]")
 	}
 	return opts, nil
 }

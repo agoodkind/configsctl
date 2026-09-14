@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Resolve Jinja default and presence constructs to their operand root.
 
-The configs lint command parses each Jinja expression with a Go engine. A few
+The configsctl lint command parses each Jinja expression with a Go engine. A few
 Ansible-Jinja forms that Go engine cannot read, such as a parenthesized
 conditional piped into a filter, are routed here. This module parses the
 expression with jinja2 and reports each default or presence construct with the

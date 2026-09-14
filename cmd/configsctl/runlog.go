@@ -10,8 +10,8 @@ import (
 	"regexp"
 	"strings"
 
-	"goodkind.io/configs/internal/clock"
-	"goodkind.io/configs/internal/redact"
+	"goodkind.io/configsctl/internal/clock"
+	"goodkind.io/configsctl/internal/redact"
 )
 
 // A run log holds the output of a command that talks to a service over time,
