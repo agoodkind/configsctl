@@ -22,6 +22,7 @@ import (
 	"goodkind.io/configsctl/internal/redact"
 	"goodkind.io/configsctl/internal/release"
 	"goodkind.io/configsctl/internal/vault"
+	"goodkind.io/configsctl/internal/version"
 )
 
 // defaultVaultFile is the vault path relative to the repository root, which is
@@ -57,6 +58,14 @@ var handlers = map[string]func(cmdEnv, []string) error{
 	"tofu":           runTofu,
 	"syntax-check":   runSyntaxCheck,
 	"inventory-dump": runInventoryDump,
+	"version":        runVersion,
+}
+
+// runVersion prints the link-time build identity and the hash of the running
+// binary as one line.
+func runVersion(_ cmdEnv, _ []string) error {
+	fmt.Println(version.BuildVersionString())
+	return nil
 }
 
 func run(args []string) error {
