@@ -1,22 +1,31 @@
 package oracle
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"testing"
 )
+
+// requireOracle fails when python3 cannot import jinja2 in isolated mode, which
+// is how Route runs the oracle. A skip would pass while the oracle path is broken.
+func requireOracle(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Fatalf("python3 is required: %v", err)
+	}
+	if err := exec.Command("python3", "-I", "-c", "import jinja2").Run(); err != nil {
+		t.Fatalf("jinja2 is required for python3 in isolated mode: %v", err)
+	}
+}
 
 // TestRouteClassifiesForms drives the embedded jinja2 oracle through Route and
 // checks each form's parse flag and violating construct kinds, covering the
 // banned default and presence idioms, the runtime and fact names that spare
 // them, and a form jinja2 cannot parse.
 func TestRouteClassifiesForms(t *testing.T) {
-	if _, err := exec.LookPath("python3"); err != nil {
-		t.Fatalf("python3 is required: %v", err)
-	}
-	if err := exec.Command("python3", "-c", "import jinja2").Run(); err != nil {
-		t.Fatalf("jinja2 is required for python3: %v", err)
-	}
+	requireOracle(t)
 	t.Chdir(t.TempDir())
 
 	cases := []struct {
@@ -79,5 +88,36 @@ func TestRouteClassifiesForms(t *testing.T) {
 		if !slices.Equal(kinds, want) {
 			t.Errorf("%q: violation kinds = %v, want %v", testCase.expr, kinds, want)
 		}
+	}
+}
+
+// TestRouteIgnoresModulesPlantedInTheTempDirectory plants a hostile json.py in
+// a directory, then points both TMPDIR and PYTHONPATH at it. On a shared host
+// another user can write to the temp directory, so the oracle must never import
+// a module from there or from the caller's Python environment variables.
+func TestRouteIgnoresModulesPlantedInTheTempDirectory(t *testing.T) {
+	requireOracle(t)
+	hostile, err := os.ReadFile(filepath.Join("testdata", "json.py"))
+	if err != nil {
+		t.Fatalf("read hostile module: %v", err)
+	}
+	planted := t.TempDir()
+	if err := os.WriteFile(filepath.Join(planted, "json.py"), hostile, 0o600); err != nil {
+		t.Fatalf("plant hostile module: %v", err)
+	}
+	marker := filepath.Join(t.TempDir(), "hijacked")
+	t.Setenv("CONFIGSCTL_HIJACK_MARKER", marker)
+	t.Setenv("TMPDIR", planted)
+	t.Setenv("PYTHONPATH", planted)
+
+	results, routeErr := Route([]Form{{Expr: "x | default('')", Runtime: []string{}}})
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Fatalf("Route imported the json.py planted in %s", planted)
+	}
+	if routeErr != nil {
+		t.Fatalf("Route: %v", routeErr)
+	}
+	if len(results) != 1 || !results[0].Parsed || len(results[0].Violations) != 1 {
+		t.Fatalf("Route results = %+v, want one parsed form with one violation", results)
 	}
 }

@@ -17,8 +17,8 @@ func requireOracle(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Fatalf("python3 is required: %v", err)
 	}
-	if err := exec.Command("python3", "-c", "import jinja2").Run(); err != nil {
-		t.Fatalf("jinja2 is required for python3: %v", err)
+	if err := exec.Command("python3", "-I", "-c", "import jinja2").Run(); err != nil {
+		t.Fatalf("jinja2 is required for python3 in isolated mode: %v", err)
 	}
 	t.Chdir(t.TempDir())
 }

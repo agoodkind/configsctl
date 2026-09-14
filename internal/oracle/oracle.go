@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 )
 
@@ -24,8 +25,11 @@ import (
 //go:embed lint_ansible_ast.py
 var script []byte
 
-// scriptPattern names the temporary copy python3 runs.
-const scriptPattern = "configsctl-oracle-*.py"
+// scriptDirPattern names the private directory that holds the temporary copy.
+const scriptDirPattern = "configsctl-oracle-*"
+
+// scriptName is the file name of the copy python3 runs.
+const scriptName = "lint_ansible_ast.py"
 
 // routeTimeout bounds the subprocess, which parses a small batch of expressions.
 const routeTimeout = 30 * time.Second
@@ -64,14 +68,18 @@ func Route(forms []Form) ([]Result, error) {
 		slog.Error("marshal oracle forms failed", "err", err)
 		return nil, fmt.Errorf("marshal oracle forms: %w", err)
 	}
-	scriptPath, err := writeScript()
+	scriptDir, scriptPath, err := writeScript()
 	if err != nil {
 		return nil, err
 	}
-	defer removeScript(scriptPath)
+	defer removeScriptDir(scriptDir)
 	ctx, cancel := context.WithTimeout(context.Background(), routeTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "python3", scriptPath, "--route")
+	// -I runs python3 in isolated mode: the script's directory, the user
+	// site-packages, and every PYTHON* environment variable stay off the import
+	// path, so a module another user plants in the temp directory or names in
+	// PYTHONPATH is never imported.
+	cmd := exec.CommandContext(ctx, "python3", "-I", scriptPath, "--route")
 	cmd.Stdin = bytes.NewReader(payload)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -88,34 +96,30 @@ func Route(forms []Form) ([]Result, error) {
 	return results, nil
 }
 
-// writeScript copies the embedded oracle to a new file in the host temp
-// directory and returns its path. [os.CreateTemp] creates the file at 0600 under a
-// name no other run shares.
-func writeScript() (string, error) {
-	file, err := os.CreateTemp("", scriptPattern)
+// writeScript copies the embedded oracle into a new directory in the host temp
+// directory and returns that directory and the script path. [os.MkdirTemp]
+// creates the directory at 0700 under a name no other run shares, so no other
+// user can place a file beside the script.
+func writeScript() (string, string, error) {
+	dir, err := os.MkdirTemp("", scriptDirPattern)
 	if err != nil {
-		slog.Error("create oracle script failed", "err", err)
-		return "", fmt.Errorf("create oracle script: %w", err)
+		slog.Error("create oracle script dir failed", "err", err)
+		return "", "", fmt.Errorf("create oracle script dir: %w", err)
 	}
-	if _, err := file.Write(script); err != nil {
-		_ = file.Close()
-		removeScript(file.Name())
-		slog.Error("write oracle script failed", "path", file.Name(), "err", err)
-		return "", fmt.Errorf("write oracle script: %w", err)
+	path := filepath.Join(dir, scriptName)
+	if err := os.WriteFile(path, script, 0o600); err != nil {
+		removeScriptDir(dir)
+		slog.Error("write oracle script failed", "path", path, "err", err)
+		return "", "", fmt.Errorf("write oracle script: %w", err)
 	}
-	if err := file.Close(); err != nil {
-		removeScript(file.Name())
-		slog.Error("close oracle script failed", "path", file.Name(), "err", err)
-		return "", fmt.Errorf("close oracle script: %w", err)
-	}
-	return file.Name(), nil
+	return dir, path, nil
 }
 
-// removeScript deletes the temporary oracle copy. A failed removal leaves a
-// small file in the host temp directory, which is logged rather than returned
-// because the lint result it served is already valid.
-func removeScript(path string) {
-	if err := os.Remove(path); err != nil {
-		slog.Warn("remove oracle script failed", "path", path, "err", err)
+// removeScriptDir deletes the private directory and the oracle copy inside it. A
+// failed removal leaves a small directory in the host temp directory, which is
+// logged rather than returned because the lint result it served is already valid.
+func removeScriptDir(dir string) {
+	if err := os.RemoveAll(dir); err != nil {
+		slog.Warn("remove oracle script dir failed", "dir", dir, "err", err)
 	}
 }
