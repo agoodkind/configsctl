@@ -13,6 +13,10 @@ CMD    := ./cmd/configsctl
 # set LAUNCHD_LABEL, SYSTEMD_UNIT, LOG_PATH before the include bootstrap.mk line.
 GO_MK_MODULES := go-build.mk go-release.mk
 
+# The certificate-transparency x509 darwin cgo file only loads system roots,
+# which configsctl never calls, so its !cgo fallback is intended.
+export GO_MK_CGO_OPTIONAL := github.com/google/certificate-transparency-go/x509
+
 # Optional codegen hook. If this repo generates source before compiling (for
 # example a tree-sitter parser or proto), set GO_MK_GENERATE to the codegen
 # target name(s) here, before include bootstrap.mk. go.mk runs them as an
