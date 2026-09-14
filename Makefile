@@ -8,6 +8,9 @@
 # Identity
 BINARY := configsctl
 CMD    := ./cmd/configsctl
+# go-makefile stamps Commit, Version, Dirty, and BuildTime into this package,
+# so `configsctl version` reports the commit a binary was built from.
+VPKG   := goodkind.io/configsctl/internal/version
 
 # Pipeline modules. Add go-service.mk if this binary ships as a daemon and
 # set LAUNCHD_LABEL, SYSTEMD_UNIT, LOG_PATH before the include bootstrap.mk line.
