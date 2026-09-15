@@ -40,7 +40,7 @@ const Binary = "mwan"
 
 // Platforms are the os_arch archives every release ships and every deploy
 // stages, in the form the archive names carry.
-var Platforms = []string{"linux_amd64", "freebsd_amd64"}
+var Platforms = []string{"linux_amd64"}
 
 // maxBinaryBytes bounds one extracted binary. The static linux artifact is
 // about 30 MB; a member past this limit is not the binary this package expects.

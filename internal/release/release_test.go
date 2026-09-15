@@ -115,12 +115,10 @@ func TestFetchStagesEveryPlatformBinary(t *testing.T) {
 	t.Parallel()
 	server := tagAPI(t)
 	linux := tarGz(t, map[string][]byte{Binary: []byte("linux-elf"), "README.md": []byte("readme")}, []string{"README.md", Binary})
-	freebsd := tarGz(t, map[string][]byte{Binary: []byte("freebsd-elf")}, []string{Binary})
 	var seenTag, seenDir string
 	verify := writingVerifier(t, map[string][]byte{
-		"mwan_linux_amd64.tar.gz":   linux,
-		"mwan_freebsd_amd64.tar.gz": freebsd,
-		StackBundleAsset:            testStackBundle(t),
+		"mwan_linux_amd64.tar.gz": linux,
+		StackBundleAsset:          testStackBundle(t),
 	}, &seenTag, &seenDir)
 	root := t.TempDir()
 
@@ -139,7 +137,10 @@ func TestFetchStagesEveryPlatformBinary(t *testing.T) {
 	if staged.Commit != "0123456789abcdef0123456789abcdef01234567" {
 		t.Fatalf("Commit = %q", staged.Commit)
 	}
-	for platform, want := range map[string]string{"linux_amd64": "linux-elf", "freebsd_amd64": "freebsd-elf"} {
+	if len(staged.Binaries) != len(Platforms) {
+		t.Fatalf("staged %d binaries, want %d", len(staged.Binaries), len(Platforms))
+	}
+	for platform, want := range map[string]string{"linux_amd64": "linux-elf"} {
 		path := staged.Binaries[platform]
 		if path != filepath.Join(staged.Dir, platform, Binary) {
 			t.Fatalf("%s path = %q", platform, path)
@@ -170,9 +171,8 @@ func TestFetchDereferencesAnnotatedTag(t *testing.T) {
 	archive := tarGz(t, map[string][]byte{Binary: []byte("x")}, []string{Binary})
 	var seenTag, seenDir string
 	verify := writingVerifier(t, map[string][]byte{
-		"mwan_linux_amd64.tar.gz":   archive,
-		"mwan_freebsd_amd64.tar.gz": archive,
-		StackBundleAsset:            testStackBundle(t),
+		"mwan_linux_amd64.tar.gz": archive,
+		StackBundleAsset:          testStackBundle(t),
 	}, &seenTag, &seenDir)
 
 	staged, err := Fetch(context.Background(), FetchOptions{
@@ -189,12 +189,10 @@ func TestFetchDereferencesAnnotatedTag(t *testing.T) {
 func TestFetchRejectsForeignArchiveMember(t *testing.T) {
 	t.Parallel()
 	server := tagAPI(t)
-	good := tarGz(t, map[string][]byte{Binary: []byte("x")}, []string{Binary})
 	bad := tarGz(t, map[string][]byte{Binary: []byte("x"), "../etc/passwd": []byte("root")}, []string{Binary, "../etc/passwd"})
 	var seenTag, seenDir string
 	verify := writingVerifier(t, map[string][]byte{
-		"mwan_linux_amd64.tar.gz":   good,
-		"mwan_freebsd_amd64.tar.gz": bad,
+		"mwan_linux_amd64.tar.gz": bad,
 	}, &seenTag, &seenDir)
 	root := t.TempDir()
 
@@ -212,15 +210,14 @@ func TestFetchRejectsForeignArchiveMember(t *testing.T) {
 func TestFetchFailsWhenAPlatformArchiveIsMissing(t *testing.T) {
 	t.Parallel()
 	server := tagAPI(t)
-	archive := tarGz(t, map[string][]byte{Binary: []byte("x")}, []string{Binary})
 	var seenTag, seenDir string
-	verify := writingVerifier(t, map[string][]byte{"mwan_linux_amd64.tar.gz": archive}, &seenTag, &seenDir)
+	verify := writingVerifier(t, map[string][]byte{StackBundleAsset: testStackBundle(t)}, &seenTag, &seenDir)
 
 	_, err := Fetch(context.Background(), FetchOptions{
 		Tag: "light", CacheRoot: t.TempDir(), APIBaseURL: server.URL, Client: server.Client(), Verify: verify,
 	})
-	if err == nil || !strings.Contains(err.Error(), "freebsd_amd64") {
-		t.Fatalf("Fetch error = %v, want the missing freebsd archive named", err)
+	if err == nil || !strings.Contains(err.Error(), "linux_amd64") {
+		t.Fatalf("Fetch error = %v, want the missing linux archive named", err)
 	}
 }
 
@@ -241,9 +238,8 @@ func TestFetchStagesTheStackBundle(t *testing.T) {
 	binary := tarGz(t, map[string][]byte{Binary: []byte("x")}, []string{Binary})
 	var seenTag, seenDir string
 	verify := writingVerifier(t, map[string][]byte{
-		"mwan_linux_amd64.tar.gz":   binary,
-		"mwan_freebsd_amd64.tar.gz": binary,
-		StackBundleAsset:            testStackBundle(t),
+		"mwan_linux_amd64.tar.gz": binary,
+		StackBundleAsset:          testStackBundle(t),
 	}, &seenTag, &seenDir)
 
 	staged, err := Fetch(context.Background(), FetchOptions{
@@ -280,8 +276,7 @@ func TestFetchFailsWhenTheStackBundleIsMissing(t *testing.T) {
 	binary := tarGz(t, map[string][]byte{Binary: []byte("x")}, []string{Binary})
 	var seenTag, seenDir string
 	verify := writingVerifier(t, map[string][]byte{
-		"mwan_linux_amd64.tar.gz":   binary,
-		"mwan_freebsd_amd64.tar.gz": binary,
+		"mwan_linux_amd64.tar.gz": binary,
 	}, &seenTag, &seenDir)
 
 	_, err := Fetch(context.Background(), FetchOptions{
@@ -307,9 +302,8 @@ func TestFetchRejectsForeignStackBundleMember(t *testing.T) {
 			}, []string{stackManifestName, member})
 			var seenTag, seenDir string
 			verify := writingVerifier(t, map[string][]byte{
-				"mwan_linux_amd64.tar.gz":   binary,
-				"mwan_freebsd_amd64.tar.gz": binary,
-				StackBundleAsset:            bundle,
+				"mwan_linux_amd64.tar.gz": binary,
+				StackBundleAsset:          bundle,
 			}, &seenTag, &seenDir)
 			root := t.TempDir()
 
@@ -339,9 +333,8 @@ func TestFetchFailsOnAStackChecksumMismatch(t *testing.T) {
 	}, []string{stackManifestName, "debs/libyang3_1.0_amd64.deb"})
 	var seenTag, seenDir string
 	verify := writingVerifier(t, map[string][]byte{
-		"mwan_linux_amd64.tar.gz":   binary,
-		"mwan_freebsd_amd64.tar.gz": binary,
-		StackBundleAsset:            bundle,
+		"mwan_linux_amd64.tar.gz": binary,
+		StackBundleAsset:          bundle,
 	}, &seenTag, &seenDir)
 
 	_, err := Fetch(context.Background(), FetchOptions{
