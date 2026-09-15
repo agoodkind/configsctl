@@ -36,6 +36,9 @@ type DeployOptions struct {
 	// runs. The deploy command resolves it into extra vars; this package only
 	// carries it.
 	ReleaseTag string
+	// OpnsensectlReleaseTag names the published opnsensectl release to stage
+	// before the play runs, carried the same way as ReleaseTag.
+	OpnsensectlReleaseTag string
 	// Output receives the play's merged stdout and stderr. A nil Output sends
 	// them to the process streams, which is what the syntax check and the
 	// inventory dump do. The deploy command sets it to a file so the play's

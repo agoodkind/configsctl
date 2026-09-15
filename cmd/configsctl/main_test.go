@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"testing"
 
@@ -40,87 +41,160 @@ func TestApplyDeployArgTags(t *testing.T) {
 	}
 }
 
-// TestRunDeployStagesReleaseIntoExtraVars pins the staging contract: the play
-// receives the staged tag, commit, and directory as one JSON extra var, after
-// any extra vars the operator passed, and the fetch is asked for the tag the
-// operator named.
-func TestRunDeployStagesReleaseIntoExtraVars(t *testing.T) {
-	var fetchedTag string
-	fetch := func(_ context.Context, opts release.FetchOptions) (release.Staged, error) {
-		fetchedTag = opts.Tag
+// testCommit is the commit every fake stage reports.
+const testCommit = "8ce01a27d5f1762e75b3877e766e4c8864f1aa70"
+
+// recordingFetch stands in for release.Fetch. It stages under
+// /stage/<source>/<tag>, the layout release.Fetch uses, sets stack paths only
+// for a source with a stack bundle, and records every source and tag it was
+// asked for.
+func recordingFetch(t *testing.T, fetched *[]release.FetchOptions) releaseFetcher {
+	t.Helper()
+	return func(_ context.Context, opts release.FetchOptions) (release.Staged, error) {
 		if opts.CacheRoot != releaseCacheRoot {
 			t.Fatalf("CacheRoot = %q", opts.CacheRoot)
 		}
-		return release.Staged{
-			Tag:           opts.Tag,
-			Commit:        "8ce01a27d5f1762e75b3877e766e4c8864f1aa70",
-			Dir:           "/stage/" + opts.Tag,
-			StackDir:      "/stage/" + opts.Tag + "/wanconfig-stack",
-			StackManifest: "/stage/" + opts.Tag + "/wanconfig-stack/manifest.txt",
-		}, nil
-	}
-	var deployed ansible.DeployOptions
-	deploy := func(opts ansible.DeployOptions) error {
-		deployed = opts
-		return nil
-	}
-
-	privateTempDir(t)
-	err := runDeployWith(cmdEnv{}, []string{"deploy-mwan-failover", "--release", "202608162055-5-8ce01a2", "--extra-var", "x=1"}, fetch, deploy)
-	if err != nil {
-		t.Fatalf("runDeployWith: %v", err)
-	}
-	if fetchedTag != "202608162055-5-8ce01a2" {
-		t.Fatalf("fetched tag = %q", fetchedTag)
-	}
-	if len(deployed.ExtraVars) != 2 || deployed.ExtraVars[0] != "x=1" {
-		t.Fatalf("ExtraVars = %v", deployed.ExtraVars)
-	}
-	var vars map[string]string
-	if err := json.Unmarshal([]byte(deployed.ExtraVars[1]), &vars); err != nil {
-		t.Fatalf("release extra var is not JSON: %v", err)
-	}
-	want := map[string]string{
-		"mwan_release_tag":         "202608162055-5-8ce01a2",
-		"mwan_release_commit":      "8ce01a27d5f1762e75b3877e766e4c8864f1aa70",
-		"mwan_release_dir":         "/stage/202608162055-5-8ce01a2",
-		"wanconfig_stack_dir":      "/stage/202608162055-5-8ce01a2/wanconfig-stack",
-		"wanconfig_stack_manifest": "/stage/202608162055-5-8ce01a2/wanconfig-stack/manifest.txt",
-	}
-	for key, value := range want {
-		if vars[key] != value {
-			t.Fatalf("%s = %q, want %q", key, vars[key], value)
+		*fetched = append(*fetched, opts)
+		dir := "/stage/" + opts.Source.Name + "/" + opts.Tag
+		staged := release.Staged{Tag: opts.Tag, Commit: testCommit, Dir: dir}
+		if opts.Source.StackBundle {
+			staged.StackDir = dir + "/wanconfig-stack"
+			staged.StackManifest = dir + "/wanconfig-stack/manifest.txt"
 		}
+		return staged, nil
 	}
 }
 
-// TestRunDeployDoesNotRunThePlayWhenStagingFails pins that a fetch failure
-// stops the deploy before ansible is invoked.
+// decodeReleaseVars decodes one JSON extra var the deploy command appended.
+func decodeReleaseVars(t *testing.T, extraVar string) map[string]string {
+	t.Helper()
+	var vars map[string]string
+	if err := json.Unmarshal([]byte(extraVar), &vars); err != nil {
+		t.Fatalf("release extra var %q is not JSON: %v", extraVar, err)
+	}
+	return vars
+}
+
+// wantGatewayVars is the gateway extra var for a tag staged by recordingFetch.
+func wantGatewayVars(tag string) map[string]string {
+	return map[string]string{
+		"mwan_release_tag":         tag,
+		"mwan_release_commit":      testCommit,
+		"mwan_release_dir":         "/stage/mwan/" + tag,
+		"wanconfig_stack_dir":      "/stage/mwan/" + tag + "/wanconfig-stack",
+		"wanconfig_stack_manifest": "/stage/mwan/" + tag + "/wanconfig-stack/manifest.txt",
+	}
+}
+
+// wantOpnsensectlVars is the opnsensectl extra var for a tag staged by
+// recordingFetch.
+func wantOpnsensectlVars(tag string) map[string]string {
+	return map[string]string{
+		"opnsensectl_release_tag":    tag,
+		"opnsensectl_release_commit": testCommit,
+		"opnsensectl_release_dir":    "/stage/opnsensectl/" + tag,
+	}
+}
+
+// TestRunDeployStagesReleaseIntoExtraVars pins the staging contract: the play
+// receives the staged tag, commit, and directory as one JSON extra var per
+// release flag, after any extra vars the operator passed, and each fetch is
+// asked for the source and tag its flag names. Without --opnsensectl-release
+// nothing about opnsensectl is fetched or passed.
+func TestRunDeployStagesReleaseIntoExtraVars(t *testing.T) {
+	cases := []struct {
+		name        string
+		args        []string
+		wantSources []release.Source
+		wantVars    []map[string]string
+	}{
+		{
+			name:        "gateway only",
+			args:        []string{"deploy-mwan-failover", "--release", "202608162055-5-8ce01a2", "--extra-var", "x=1"},
+			wantSources: []release.Source{release.Gateway},
+			wantVars:    []map[string]string{wantGatewayVars("202608162055-5-8ce01a2")},
+		},
+		{
+			name:        "gateway and opnsensectl",
+			args:        []string{"deploy-opnsense", "--opnsensectl-release=v0.1.0", "--release", "202608162055-5-8ce01a2", "--extra-var", "x=1"},
+			wantSources: []release.Source{release.Gateway, release.Opnsensectl},
+			wantVars:    []map[string]string{wantGatewayVars("202608162055-5-8ce01a2"), wantOpnsensectlVars("v0.1.0")},
+		},
+		{
+			name:        "opnsensectl only",
+			args:        []string{"deploy-opnsense", "--opnsensectl-release", "v0.1.0", "--extra-var", "x=1"},
+			wantSources: []release.Source{release.Opnsensectl},
+			wantVars:    []map[string]string{wantOpnsensectlVars("v0.1.0")},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var fetched []release.FetchOptions
+			var deployed ansible.DeployOptions
+			deploy := func(opts ansible.DeployOptions) error {
+				deployed = opts
+				return nil
+			}
+
+			privateTempDir(t)
+			if err := runDeployWith(cmdEnv{}, tc.args, recordingFetch(t, &fetched), deploy); err != nil {
+				t.Fatalf("runDeployWith: %v", err)
+			}
+			if len(fetched) != len(tc.wantSources) {
+				t.Fatalf("fetched %d releases, want %d", len(fetched), len(tc.wantSources))
+			}
+			for i, want := range tc.wantSources {
+				if fetched[i].Source.Name != want.Name || fetched[i].Source.Repo != want.Repo || fetched[i].Source.Binary != want.Binary {
+					t.Fatalf("fetch %d source = %+v, want %+v", i, fetched[i].Source, want)
+				}
+			}
+			if len(deployed.ExtraVars) != 1+len(tc.wantVars) || deployed.ExtraVars[0] != "x=1" {
+				t.Fatalf("ExtraVars = %v", deployed.ExtraVars)
+			}
+			for i, want := range tc.wantVars {
+				got := decodeReleaseVars(t, deployed.ExtraVars[1+i])
+				if !maps.Equal(got, want) {
+					t.Fatalf("release extra var %d = %v, want %v", i, got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestRunDeployDoesNotRunThePlayWhenStagingFails pins that a fetch failure of
+// either release stops the deploy before ansible is invoked.
 func TestRunDeployDoesNotRunThePlayWhenStagingFails(t *testing.T) {
-	fetch := func(_ context.Context, _ release.FetchOptions) (release.Staged, error) {
-		return release.Staged{}, errors.New("verify failed")
-	}
-	deployCalled := false
-	deploy := func(_ ansible.DeployOptions) error {
-		deployCalled = true
-		return nil
-	}
-	privateTempDir(t)
-	err := runDeployWith(cmdEnv{}, []string{"deploy-mwan", "--release", "bad"}, fetch, deploy)
-	if err == nil {
-		t.Fatal("runDeployWith returned nil, want the staging error")
-	}
-	if deployCalled {
-		t.Fatal("the play ran after staging failed")
+	for _, failing := range []release.Source{release.Gateway, release.Opnsensectl} {
+		t.Run(failing.Name, func(t *testing.T) {
+			fetch := func(_ context.Context, opts release.FetchOptions) (release.Staged, error) {
+				if opts.Source.Name == failing.Name {
+					return release.Staged{}, errors.New("verify failed")
+				}
+				return release.Staged{Tag: opts.Tag, Commit: testCommit, Dir: "/stage"}, nil
+			}
+			deployCalled := false
+			deploy := func(_ ansible.DeployOptions) error {
+				deployCalled = true
+				return nil
+			}
+			privateTempDir(t)
+			err := runDeployWith(cmdEnv{}, []string{"deploy-opnsense", "--release", "good", "--opnsensectl-release", "good"}, fetch, deploy)
+			if err == nil {
+				t.Fatal("runDeployWith returned nil, want the staging error")
+			}
+			if deployCalled {
+				t.Fatal("the play ran after staging failed")
+			}
+		})
 	}
 }
 
-// TestRunDeployWithoutReleaseSkipsStaging pins that a deploy with no --release
-// neither fetches nor adds release vars, so playbooks that do not install mwan
-// are unaffected.
+// TestRunDeployWithoutReleaseSkipsStaging pins that a deploy with no release
+// flag neither fetches nor adds release vars, so playbooks that do not install
+// a released binary are unaffected.
 func TestRunDeployWithoutReleaseSkipsStaging(t *testing.T) {
 	fetch := func(_ context.Context, _ release.FetchOptions) (release.Staged, error) {
-		t.Fatal("fetch called without --release")
+		t.Fatal("fetch called without a release flag")
 		return release.Staged{}, nil
 	}
 	var deployed ansible.DeployOptions
@@ -137,21 +211,22 @@ func TestRunDeployWithoutReleaseSkipsStaging(t *testing.T) {
 	}
 }
 
-// TestParseDeployRelease pins that both --release forms carry the tag through
-// to DeployOptions, so a deploy can stage the named release before the play.
+// TestParseDeployRelease pins that both forms of each release flag carry the
+// tag through to DeployOptions, so a deploy can stage the named release before
+// the play.
 func TestParseDeployRelease(t *testing.T) {
-	spaced, err := parseDeploy([]string{"deploy-mwan", "--release", "202608160638-3-03cf29a", "--limit", "mwan_suburban_servers"})
+	spaced, err := parseDeploy([]string{"deploy-mwan", "--release", "202608160638-3-03cf29a", "--opnsensectl-release", "v0.1.0", "--limit", "mwan_suburban_servers"})
 	if err != nil {
 		t.Fatalf("parseDeploy: %v", err)
 	}
-	if spaced.ReleaseTag != "202608160638-3-03cf29a" || spaced.Limit != "mwan_suburban_servers" {
+	if spaced.ReleaseTag != "202608160638-3-03cf29a" || spaced.OpnsensectlReleaseTag != "v0.1.0" || spaced.Limit != "mwan_suburban_servers" {
 		t.Fatalf("parseDeploy = %+v", spaced)
 	}
-	glued, err := parseDeploy([]string{"deploy-mwan", "--release=v1.2.3"})
+	glued, err := parseDeploy([]string{"deploy-mwan", "--release=v1.2.3", "--opnsensectl-release=v0.2.0"})
 	if err != nil {
 		t.Fatalf("parseDeploy: %v", err)
 	}
-	if glued.ReleaseTag != "v1.2.3" {
-		t.Fatalf("ReleaseTag = %q", glued.ReleaseTag)
+	if glued.ReleaseTag != "v1.2.3" || glued.OpnsensectlReleaseTag != "v0.2.0" {
+		t.Fatalf("ReleaseTag = %q, OpnsensectlReleaseTag = %q", glued.ReleaseTag, glued.OpnsensectlReleaseTag)
 	}
 }
