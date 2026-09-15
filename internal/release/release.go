@@ -1,13 +1,16 @@
-// Package release stages a published mwan release for a deploy. The operator
-// names the release tag on every deploy; nothing is pinned in the repository.
-// The archives are downloaded and verified against their GitHub attestations
-// by go-makefile's selfupdate verifier, the same code the release workflow
-// runs after publishing, then the one binary inside each platform archive is
-// extracted into a per-tag directory that the playbooks copy from. The
-// wanconfig stack bundle is unpacked beside the binaries and its packages are
-// checked against its manifest, so a play can install packages the release
-// attested. The tag's commit is resolved as well, so a playbook can confirm
-// the binary it installed reports the commit the tag points at.
+// Package release stages a published release of one source for a deploy. A
+// source is the GitHub repository a release publishes to, the binary its
+// archives carry, and the platforms a deploy stages. The operator names the
+// release tag on every deploy; nothing is pinned in the repository. The
+// archives are downloaded and verified against their GitHub attestations for
+// the source's repository by go-makefile's selfupdate verifier, the same code
+// the release workflow runs after publishing, then the one binary inside each
+// platform archive is extracted into a per-source, per-tag directory that the
+// playbooks copy from. For the gateway source, the wanconfig stack bundle is
+// unpacked beside the binaries and its packages are checked against its
+// manifest, so a play can install packages the release attested. The tag's
+// commit is resolved as well, so a playbook can confirm the binary it
+// installed reports the commit the tag points at.
 package release
 
 import (
@@ -32,15 +35,43 @@ import (
 	"goodkind.io/go-makefile/selfupdate"
 )
 
-// Repo is the GitHub repository the mwan releases publish to.
-const Repo = "agoodkind/configs"
+// Source describes one GitHub repository whose releases a deploy stages.
+type Source struct {
+	// Name is the directory under the cache root this source's tags stage
+	// into, so two sources never share a stage directory.
+	Name string
+	// Repo is the GitHub repository the releases publish to, as owner/name.
+	// The attestation verifier requires each archive to come from it.
+	Repo string
+	// Binary is the released binary name, which is also the archive prefix and
+	// the only archive member besides the README.
+	Binary string
+	// Platforms are the os_arch archives a deploy stages, in the form the
+	// archive names carry.
+	Platforms []string
+	// StackBundle reports whether the release publishes the wanconfig stack
+	// bundle beside the binaries, which a stage then requires and unpacks.
+	StackBundle bool
+}
 
-// Binary is the released binary name, which is also the archive prefix.
-const Binary = "mwan"
+// Gateway is the mwan gateway release, published from agoodkind/configs.
+var Gateway = Source{
+	Name:        "mwan",
+	Repo:        "agoodkind/configs",
+	Binary:      "mwan",
+	Platforms:   []string{"linux_amd64"},
+	StackBundle: true,
+}
 
-// Platforms are the os_arch archives every release ships and every deploy
-// stages, in the form the archive names carry.
-var Platforms = []string{"linux_amd64"}
+// Opnsensectl is the opnsensectl release, published from
+// agoodkind/opnsensectl for linux and FreeBSD.
+var Opnsensectl = Source{
+	Name:        "opnsensectl",
+	Repo:        "agoodkind/opnsensectl",
+	Binary:      "opnsensectl",
+	Platforms:   []string{"linux_amd64", "freebsd_amd64"},
+	StackBundle: false,
+}
 
 // maxBinaryBytes bounds one extracted binary. The static linux artifact is
 // about 30 MB; a member past this limit is not the binary this package expects.
@@ -78,8 +109,15 @@ const defaultHTTPTimeout = 10 * time.Minute
 // path segment under the cache root and a path segment of the GitHub API URL,
 // so anything that could escape either (a slash, a dot-dot, a query or
 // fragment character) is refused before it reaches them. Release tags here are
-// either <yyyymmddHHMM>-<n>-<sha7> or a v-prefixed version.
+// either <yyyymmddHHMM>-<n>-<sha7> or a v-prefixed version. A source's name,
+// binary, and platforms become path segments too and pass the same check.
 var tagPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+
+// isPathSegment reports whether value is safe as one path segment under the
+// cache root and one segment of a GitHub API URL.
+func isPathSegment(value string) bool {
+	return tagPattern.MatchString(value) && !strings.Contains(value, "..")
+}
 
 // gitObjectType is the type field of a git object the GitHub API returns.
 type gitObjectType string
@@ -94,9 +132,11 @@ type Verifier func(ctx context.Context, options selfupdate.Options, tag string) 
 
 // FetchOptions names one release to stage.
 type FetchOptions struct {
+	// Source is the repository, binary, and platforms to stage, required.
+	Source Source
 	// Tag is the release tag, required.
 	Tag string
-	// CacheRoot is the directory the per-tag stage directories live under.
+	// CacheRoot is the directory the per-source stage directories live under.
 	CacheRoot string
 	// Token authenticates GitHub API calls. Empty means anonymous, which the
 	// public repository allows.
@@ -119,20 +159,23 @@ type Staged struct {
 	Tag string
 	// Commit is the full commit SHA the tag points at.
 	Commit string
-	// Dir is the per-tag stage directory. Each platform's binary sits at
-	// Dir/<platform>/<Binary>.
+	// Dir is the stage directory, <CacheRoot>/<Source.Name>/<Tag>. Each
+	// platform's binary sits at Dir/<platform>/<Source.Binary>.
 	Dir string
 	// Binaries maps each platform to the absolute path of its extracted binary.
 	Binaries map[string]string
 	// StackDir is where the wanconfig stack bundle is unpacked: the manifest
-	// at its root and the packages under debs/.
+	// at its root and the packages under debs/. It is empty for a source
+	// without a stack bundle.
 	StackDir string
-	// StackManifest is the absolute path of the unpacked bundle manifest.
+	// StackManifest is the absolute path of the unpacked bundle manifest, or
+	// empty for a source without a stack bundle.
 	StackManifest string
 }
 
 // stager carries the resolved options through one Fetch.
 type stager struct {
+	source     Source
 	tag        string
 	cacheRoot  string
 	token      string
@@ -154,7 +197,7 @@ func Fetch(ctx context.Context, opts FetchOptions) (Staged, error) {
 		log.ErrorContext(ctx, "release: fetch refused", "err", err)
 		return Staged{}, err
 	}
-	if !tagPattern.MatchString(opts.Tag) || strings.Contains(opts.Tag, "..") {
+	if !isPathSegment(opts.Tag) {
 		err := fmt.Errorf("release: tag %q may only use letters, digits, dot, underscore, and dash, without a dot-dot sequence", opts.Tag)
 		log.ErrorContext(ctx, "release: fetch refused", "err", err)
 		return Staged{}, err
@@ -164,7 +207,12 @@ func Fetch(ctx context.Context, opts FetchOptions) (Staged, error) {
 		log.ErrorContext(ctx, "release: fetch refused", "err", err)
 		return Staged{}, err
 	}
+	if err := validateSource(opts.Source); err != nil {
+		log.ErrorContext(ctx, "release: fetch refused", "err", err)
+		return Staged{}, err
+	}
 	s := stager{
+		source:     opts.Source,
 		tag:        opts.Tag,
 		cacheRoot:  opts.CacheRoot,
 		token:      opts.Token,
@@ -185,10 +233,26 @@ func Fetch(ctx context.Context, opts FetchOptions) (Staged, error) {
 	return s.run(ctx)
 }
 
+// validateSource refuses a descriptor that names no repository, binary, or
+// platform, or whose name, binary, or platforms could escape the stage
+// directory.
+func validateSource(source Source) error {
+	if strings.TrimSpace(source.Repo) == "" || len(source.Platforms) == 0 {
+		return fmt.Errorf("release: source %q needs a repo and at least one platform", source.Name)
+	}
+	segments := append([]string{source.Name, source.Binary}, source.Platforms...)
+	for _, segment := range segments {
+		if !isPathSegment(segment) {
+			return fmt.Errorf("release: source %q has a name, binary, or platform %q that is not a plain path segment", source.Name, segment)
+		}
+	}
+	return nil
+}
+
 func (s stager) run(ctx context.Context) (Staged, error) {
-	stageDir, err := filepath.Abs(filepath.Join(s.cacheRoot, s.tag))
+	stageDir, err := filepath.Abs(filepath.Join(s.cacheRoot, s.source.Name, s.tag))
 	if err != nil {
-		s.log.ErrorContext(ctx, "release: stage dir resolve failed", "tag", s.tag, "err", err)
+		s.log.ErrorContext(ctx, "release: stage dir resolve failed", "source", s.source.Name, "tag", s.tag, "err", err)
 		return Staged{}, fmt.Errorf("release: resolve stage dir: %w", err)
 	}
 	archiveDir := filepath.Join(stageDir, "archives")
@@ -197,11 +261,11 @@ func (s stager) run(ctx context.Context) (Staged, error) {
 		return Staged{}, fmt.Errorf("release: create stage dir: %w", err)
 	}
 
-	s.log.InfoContext(ctx, "release: verify", "tag", s.tag, "repo", Repo)
+	s.log.InfoContext(ctx, "release: verify", "tag", s.tag, "repo", s.source.Repo)
 	verifyOptions := selfupdate.Options{
 		Config: selfupdate.Config{
-			Repo:       Repo,
-			Binary:     Binary,
+			Repo:       s.source.Repo,
+			Binary:     s.source.Binary,
 			APIBaseURL: s.apiBaseURL,
 			AuthToken:  s.token,
 		},
@@ -214,22 +278,26 @@ func (s stager) run(ctx context.Context) (Staged, error) {
 		return Staged{}, fmt.Errorf("release: verify %s: %w", s.tag, err)
 	}
 
-	binaries := make(map[string]string, len(Platforms))
-	for _, platform := range Platforms {
-		archivePath := filepath.Join(archiveDir, Binary+"_"+platform+".tar.gz")
-		binaryPath := filepath.Join(stageDir, platform, Binary)
+	binaries := make(map[string]string, len(s.source.Platforms))
+	for _, platform := range s.source.Platforms {
+		archivePath := filepath.Join(archiveDir, s.source.Binary+"_"+platform+".tar.gz")
+		binaryPath := filepath.Join(stageDir, platform, s.source.Binary)
 		if err := s.extractBinary(ctx, archivePath, binaryPath); err != nil {
 			s.log.ErrorContext(ctx, "release: extract failed", "platform", platform, "archive", archivePath, "err", err)
 			return Staged{}, fmt.Errorf("release: %s: %w", platform, err)
 		}
 		binaries[platform] = binaryPath
 	}
-	s.log.InfoContext(ctx, "release: binaries staged", "tag", s.tag, "dir", stageDir, "platforms", len(binaries))
+	s.log.InfoContext(ctx, "release: binaries staged", "source", s.source.Name, "tag", s.tag, "dir", stageDir, "platforms", len(binaries))
 
-	stackDir := filepath.Join(stageDir, stackDirName)
-	manifestPath, err := s.extractStack(ctx, filepath.Join(archiveDir, StackBundleAsset), stackDir)
-	if err != nil {
-		return Staged{}, err
+	stackDir := ""
+	manifestPath := ""
+	if s.source.StackBundle {
+		stackDir = filepath.Join(stageDir, stackDirName)
+		manifestPath, err = s.extractStack(ctx, filepath.Join(archiveDir, StackBundleAsset), stackDir)
+		if err != nil {
+			return Staged{}, err
+		}
 	}
 
 	commit, err := s.resolveTagCommit(ctx)
@@ -269,7 +337,7 @@ func (s stager) extractBinary(ctx context.Context, archivePath, destPath string)
 			return fmt.Errorf("read archive member: %w", err)
 		}
 		switch header.Name {
-		case Binary:
+		case s.source.Binary:
 			if err := s.writeBinary(ctx, tarReader, header.Size, destPath); err != nil {
 				return err
 			}
@@ -283,7 +351,7 @@ func (s stager) extractBinary(ctx context.Context, archivePath, destPath string)
 		}
 	}
 	if !found {
-		err := fmt.Errorf("archive has no %s member", Binary)
+		err := fmt.Errorf("archive has no %s member", s.source.Binary)
 		s.log.WarnContext(ctx, "release: archive missing binary", "archive", archivePath, "err", err)
 		return err
 	}
@@ -302,7 +370,7 @@ func (s stager) writeBinary(ctx context.Context, reader io.Reader, size int64, d
 		s.log.WarnContext(ctx, "release: platform dir create failed", "dest", destPath, "err", err)
 		return fmt.Errorf("create platform dir: %w", err)
 	}
-	temp, err := os.CreateTemp(filepath.Dir(destPath), Binary+".*.partial")
+	temp, err := os.CreateTemp(filepath.Dir(destPath), s.source.Binary+".*.partial")
 	if err != nil {
 		s.log.WarnContext(ctx, "release: temp binary create failed", "dest", destPath, "err", err)
 		return fmt.Errorf("create temp binary: %w", err)
@@ -546,7 +614,7 @@ type gitRefResponse struct {
 // resolveTagCommit returns the full commit SHA the release tag points at,
 // dereferencing an annotated tag once.
 func (s stager) resolveTagCommit(ctx context.Context) (string, error) {
-	ref, err := s.getGitObject(ctx, s.apiBaseURL+"/repos/"+Repo+"/git/ref/tags/"+s.tag)
+	ref, err := s.getGitObject(ctx, s.apiBaseURL+"/repos/"+s.source.Repo+"/git/ref/tags/"+s.tag)
 	if err != nil {
 		s.log.ErrorContext(ctx, "release: tag lookup failed", "tag", s.tag, "err", err)
 		return "", fmt.Errorf("release: resolve tag %s: %w", s.tag, err)
@@ -554,7 +622,7 @@ func (s stager) resolveTagCommit(ctx context.Context) (string, error) {
 	if ref.Object.Type != gitObjectTypeTag {
 		return ref.Object.SHA, nil
 	}
-	annotated, err := s.getGitObject(ctx, s.apiBaseURL+"/repos/"+Repo+"/git/tags/"+ref.Object.SHA)
+	annotated, err := s.getGitObject(ctx, s.apiBaseURL+"/repos/"+s.source.Repo+"/git/tags/"+ref.Object.SHA)
 	if err != nil {
 		s.log.ErrorContext(ctx, "release: annotated tag dereference failed", "tag", s.tag, "err", err)
 		return "", fmt.Errorf("release: dereference tag %s: %w", s.tag, err)

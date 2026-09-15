@@ -1,6 +1,6 @@
 # configsctl
 
-configsctl is the control tool for the configs repository. It runs Ansible deploys, stages published mwan releases for those deploys, lints Ansible input variables, reads and updates the Ansible vault, and runs OpenTofu with credentials from the vault. The repository also builds deploy-authorized-keys, which writes SSH authorization bundles from GitHub keys.
+configsctl is the control tool for the configs repository. It runs Ansible deploys, stages published mwan and opnsensectl releases for those deploys, lints Ansible input variables, reads and updates the Ansible vault, and runs OpenTofu with credentials from the vault. The repository also builds deploy-authorized-keys, which writes SSH authorization bundles from GitHub keys.
 
 ## Run it from a configs checkout
 
@@ -12,7 +12,7 @@ To run a deploy from the root of a configs checkout:
 go run goodkind.io/configsctl/cmd/configsctl@latest deploy <playbook>
 ```
 
-The commands are `lint`, `baseline`, `keys`, `secret`, `set-secrets`, `deploy`, `tofu`, `syntax-check`, `inventory-dump`, and `version`. `version` prints the commit the binary was built from, whether that tree was dirty, and a hash of the binary. A deploy lints the files its playbook reads and refuses to run on a new finding. `deploy --release <tag>` downloads and verifies that mwan release before the play starts.
+The commands are `lint`, `baseline`, `keys`, `secret`, `set-secrets`, `deploy`, `tofu`, `syntax-check`, `inventory-dump`, and `version`. `version` prints the commit the binary was built from, whether that tree was dirty, and a hash of the binary. A deploy lints the files its playbook reads and refuses to run on a new finding. `deploy --release <tag>` downloads and verifies that mwan release before the play starts, and `deploy --opnsensectl-release <tag>` does the same for an opnsensectl release.
 
 ## Prerequisites
 
