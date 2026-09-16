@@ -604,7 +604,7 @@ func TestFetchStagesEveryManifestAsset(t *testing.T) {
 			}
 			want := map[string]string{
 				"wanconfig_stack_dir": filepath.Join(staged.Dir, "wanconfig-stack"),
-				"mwan_yang_dir":     filepath.Join(staged.Dir, "yang"),
+				"mwan_yang_dir":       filepath.Join(staged.Dir, "yang"),
 			}
 			if len(staged.Assets) != len(want) {
 				t.Fatalf("Assets = %v, want %v", staged.Assets, want)

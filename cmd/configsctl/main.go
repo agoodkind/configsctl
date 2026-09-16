@@ -408,9 +408,11 @@ func releaseVars(pin releasePin, staged release.Staged, taken map[string]string)
 // among them: a pin sets those only from a bundle, and a manifest names the
 // stack directory itself.
 func fixedReleaseVarNames() map[string]bool {
+	var noDeploy ansible.DeployOptions
+	var unstaged release.Staged
 	names := map[string]bool{}
-	for _, pin := range deployReleasePins(ansible.DeployOptions{}) {
-		for name := range pin.vars(release.Staged{}) {
+	for _, pin := range deployReleasePins(noDeploy) {
+		for name := range pin.vars(unstaged) {
 			names[name] = true
 		}
 	}
