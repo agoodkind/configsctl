@@ -316,15 +316,21 @@ func deployReleasePins(opts ansible.DeployOptions) []releasePin {
 	}
 }
 
-// gatewayReleaseVars names a staged gateway release for the play.
+// gatewayReleaseVars names a staged gateway release for the play. The stack
+// variables come from the source's bundle only for a release without a
+// manifest; a release with one hands the play wanconfig_stack_dir through its
+// manifest entry instead.
 func gatewayReleaseVars(staged release.Staged) map[string]string {
-	return map[string]string{
-		"mwan_release_tag":         staged.Tag,
-		"mwan_release_commit":      staged.Commit,
-		"mwan_release_dir":         staged.Dir,
-		"wanconfig_stack_dir":      staged.StackDir,
-		"wanconfig_stack_manifest": staged.StackManifest,
+	vars := map[string]string{
+		"mwan_release_tag":    staged.Tag,
+		"mwan_release_commit": staged.Commit,
+		"mwan_release_dir":    staged.Dir,
 	}
+	if staged.StackDir != "" {
+		vars["wanconfig_stack_dir"] = staged.StackDir
+		vars["wanconfig_stack_manifest"] = staged.StackManifest
+	}
+	return vars
 }
 
 // opnsensectlReleaseVars names a staged opnsensectl release for the play.
@@ -355,13 +361,33 @@ func stageRelease(ctx context.Context, pin releasePin, fetch releaseFetcher) (st
 	if err != nil {
 		return "", fmt.Errorf("stage %s release %s: %w", pin.source.Name, pin.tag, err)
 	}
-	encoded, err := json.Marshal(pin.vars(staged))
+	vars, err := releaseVars(pin, staged)
+	if err != nil {
+		slog.ErrorContext(ctx, "release vars refused", "source", pin.source.Name, "tag", staged.Tag, "err", err)
+		return "", err
+	}
+	encoded, err := json.Marshal(vars)
 	if err != nil {
 		slog.ErrorContext(ctx, "release vars encode failed", "source", pin.source.Name, "err", err)
 		return "", fmt.Errorf("encode %s release vars: %w", pin.source.Name, err)
 	}
 	slog.InfoContext(ctx, "release staged", "source", pin.source.Name, "tag", staged.Tag, "commit", staged.Commit, "dir", staged.Dir)
 	return string(encoded), nil
+}
+
+// releaseVars is every extra var a staged release hands the play: the fixed
+// variables its pin names plus one per manifest asset. A manifest variable
+// that would overwrite a fixed one is refused, so a manifest can never point
+// the play at another binary directory or commit.
+func releaseVars(pin releasePin, staged release.Staged) (map[string]string, error) {
+	vars := pin.vars(staged)
+	for name, dir := range staged.Assets {
+		if _, taken := vars[name]; taken {
+			return nil, fmt.Errorf("%s release %s: manifest variable %q collides with a variable the deploy sets", pin.source.Name, staged.Tag, name)
+		}
+		vars[name] = dir
+	}
+	return vars, nil
 }
 
 // githubToken returns the token the GitHub API calls use: GITHUB_TOKEN when

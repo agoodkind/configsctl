@@ -211,6 +211,71 @@ func TestRunDeployWithoutReleaseSkipsStaging(t *testing.T) {
 	}
 }
 
+// manifestFetch stands in for release.Fetch for a release that carries a
+// manifest: the stack paths are empty and every manifest asset is reported
+// under Assets, the way release.Fetch reports one.
+func manifestFetch(assets map[string]string) releaseFetcher {
+	return func(_ context.Context, opts release.FetchOptions) (release.Staged, error) {
+		dir := "/stage/" + opts.Source.Name + "/" + opts.Tag
+		return release.Staged{Tag: opts.Tag, Commit: testCommit, Dir: dir, Assets: assets}, nil
+	}
+}
+
+// TestRunDeployHandsManifestAssetsToThePlay pins that a release staged from a
+// manifest reaches the play with one variable per asset beside the fixed
+// release variables, and without the stack variables the bundle path sets.
+func TestRunDeployHandsManifestAssetsToThePlay(t *testing.T) {
+	assets := map[string]string{
+		"wanconfig_stack_dir": "/stage/mwan/v1/wanconfig-stack",
+		"mwan_yang_dir":       "/stage/mwan/v1/yang",
+	}
+	var deployed ansible.DeployOptions
+	deploy := func(opts ansible.DeployOptions) error {
+		deployed = opts
+		return nil
+	}
+	privateTempDir(t)
+	if err := runDeployWith(cmdEnv{}, []string{"deploy-mwan", "--release", "v1"}, manifestFetch(assets), deploy); err != nil {
+		t.Fatalf("runDeployWith: %v", err)
+	}
+	if len(deployed.ExtraVars) != 1 {
+		t.Fatalf("ExtraVars = %v, want one release var", deployed.ExtraVars)
+	}
+	want := map[string]string{
+		"mwan_release_tag":    "v1",
+		"mwan_release_commit": testCommit,
+		"mwan_release_dir":    "/stage/mwan/v1",
+		"wanconfig_stack_dir": "/stage/mwan/v1/wanconfig-stack",
+		"mwan_yang_dir":       "/stage/mwan/v1/yang",
+	}
+	if got := decodeReleaseVars(t, deployed.ExtraVars[0]); !maps.Equal(got, want) {
+		t.Fatalf("release extra var = %v, want %v", got, want)
+	}
+}
+
+// TestRunDeployRefusesAManifestVariableThatCollides pins that a manifest
+// entry naming one of the fixed release variables stops the deploy before
+// the play, so a manifest can never redirect the binary directory.
+func TestRunDeployRefusesAManifestVariableThatCollides(t *testing.T) {
+	for _, name := range []string{"mwan_release_dir", "mwan_release_commit", "mwan_release_tag"} {
+		t.Run(name, func(t *testing.T) {
+			deployCalled := false
+			deploy := func(_ ansible.DeployOptions) error {
+				deployCalled = true
+				return nil
+			}
+			privateTempDir(t)
+			err := runDeployWith(cmdEnv{}, []string{"deploy-mwan", "--release", "v1"}, manifestFetch(map[string]string{name: "/elsewhere"}), deploy)
+			if err == nil {
+				t.Fatal("runDeployWith returned nil, want the collision refused")
+			}
+			if deployCalled {
+				t.Fatal("the play ran after a manifest variable collided")
+			}
+		})
+	}
+}
+
 // TestParseDeployRelease pins that both forms of each release flag carry the
 // tag through to DeployOptions, so a deploy can stage the named release before
 // the play.

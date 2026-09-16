@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -222,6 +223,9 @@ func TestFetchStagesOpnsensectlWithoutAStackBundle(t *testing.T) {
 	if staged.StackDir != "" || staged.StackManifest != "" {
 		t.Fatalf("StackDir = %q, StackManifest = %q, want both empty", staged.StackDir, staged.StackManifest)
 	}
+	if len(staged.Assets) != 0 {
+		t.Fatalf("Assets = %v, want none without a manifest", staged.Assets)
+	}
 	if _, statErr := os.Stat(filepath.Join(staged.Dir, stackDirName)); statErr == nil {
 		t.Fatal("a stack directory was created for a source without a bundle")
 	}
@@ -416,6 +420,9 @@ func TestFetchStagesTheStackBundle(t *testing.T) {
 	if staged.StackManifest != filepath.Join(staged.StackDir, "manifest.txt") {
 		t.Fatalf("StackManifest = %q", staged.StackManifest)
 	}
+	if len(staged.Assets) != 0 {
+		t.Fatalf("Assets = %v, want none without a manifest", staged.Assets)
+	}
 	for name, want := range testStackDebs {
 		content, err := os.ReadFile(filepath.Join(staged.StackDir, "debs", name))
 		if err != nil {
@@ -527,5 +534,386 @@ func TestFetchRefusesTagThatCouldEscapeAPathOrURL(t *testing.T) {
 		if !tagPattern.MatchString(tag) {
 			t.Fatalf("tagPattern rejects legitimate tag %q", tag)
 		}
+	}
+}
+
+// yangAsset is the schema asset a manifest-carrying gateway release publishes
+// beside the stack bundle, with a nested member so the unpack layout is pinned.
+const yangAsset = "mwan-yang_linux_amd64.tar.gz"
+
+// testYangFiles are the members yangAsset carries, by member name.
+var testYangFiles = map[string][]byte{
+	"goodkind-mwan-steering@2026-09-01.yang": []byte("module steering"),
+	"ietf/ietf-interfaces@2018-02-20.yang":   []byte("module interfaces"),
+}
+
+func testYangArchive(t *testing.T) []byte {
+	t.Helper()
+	return tarGz(t, testYangFiles, []string{"goodkind-mwan-steering@2026-09-01.yang", "ietf/ietf-interfaces@2018-02-20.yang"})
+}
+
+// manifestArchive builds the release manifest asset: one member,
+// release-manifest.json, listing the given entries.
+func manifestArchive(t *testing.T, entries []manifestEntry) []byte {
+	t.Helper()
+	content, err := json.Marshal(manifest{Assets: entries})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tarGz(t, map[string][]byte{manifestMemberName: content}, []string{manifestMemberName})
+}
+
+// testManifestEntries list the stack bundle under its existing deploy variable
+// and the schema asset under a new one, the entries a gateway release carries.
+var testManifestEntries = []manifestEntry{
+	{Name: StackBundleAsset, Unpack: "wanconfig-stack", Var: "wanconfig_stack_dir"},
+	{Name: yangAsset, Unpack: "yang", Var: "mwan_yang_dir"},
+}
+
+// manifestRelease is a release of source that carries a manifest listing the
+// stack bundle and the schema asset, on top of its platform archives.
+func manifestRelease(t *testing.T, source Source, entries []manifestEntry) map[string][]byte {
+	t.Helper()
+	assets := completeRelease(t, source)
+	assets[StackBundleAsset] = testStackBundle(t)
+	assets[yangAsset] = testYangArchive(t)
+	assets[ManifestAsset] = manifestArchive(t, entries)
+	return assets
+}
+
+// TestFetchStagesEveryManifestAsset pins the manifest staging contract for
+// both sources: every listed archive unpacks to <stage>/<unpack> with its
+// members intact, Assets maps each var to that directory, and the source's
+// StackBundle flag is not consulted, so the stack paths stay empty even for
+// the gateway.
+func TestFetchStagesEveryManifestAsset(t *testing.T) {
+	t.Parallel()
+	for _, source := range fetchSources {
+		t.Run(source.Name, func(t *testing.T) {
+			t.Parallel()
+			server := tagAPI(t, source)
+			var seenTag, seenDir string
+			verify := writingVerifier(t, source, manifestRelease(t, source, testManifestEntries), &seenTag, &seenDir)
+			root := t.TempDir()
+
+			staged, err := Fetch(context.Background(), FetchOptions{
+				Source: source, Tag: "light", CacheRoot: root, APIBaseURL: server.URL, Client: server.Client(), Verify: verify,
+			})
+			if err != nil {
+				t.Fatalf("Fetch: %v", err)
+			}
+			want := map[string]string{
+				"wanconfig_stack_dir": filepath.Join(staged.Dir, "wanconfig-stack"),
+				"mwan_yang_dir":     filepath.Join(staged.Dir, "yang"),
+			}
+			if len(staged.Assets) != len(want) {
+				t.Fatalf("Assets = %v, want %v", staged.Assets, want)
+			}
+			for name, dir := range want {
+				if staged.Assets[name] != dir {
+					t.Fatalf("Assets[%s] = %q, want %q", name, staged.Assets[name], dir)
+				}
+			}
+			if staged.StackDir != "" || staged.StackManifest != "" {
+				t.Fatalf("StackDir = %q, StackManifest = %q, want both empty with a manifest", staged.StackDir, staged.StackManifest)
+			}
+			for name, content := range testStackDebs {
+				got, err := os.ReadFile(filepath.Join(staged.Assets["wanconfig_stack_dir"], "debs", name))
+				if err != nil {
+					t.Fatalf("read %s: %v", name, err)
+				}
+				if !bytes.Equal(got, content) {
+					t.Fatalf("%s content = %q, want %q", name, got, content)
+				}
+			}
+			for name, content := range testYangFiles {
+				got, err := os.ReadFile(filepath.Join(staged.Assets["mwan_yang_dir"], filepath.FromSlash(name)))
+				if err != nil {
+					t.Fatalf("read %s: %v", name, err)
+				}
+				if !bytes.Equal(got, content) {
+					t.Fatalf("%s content = %q, want %q", name, got, content)
+				}
+			}
+			if entries, _ := filepath.Glob(filepath.Join(staged.Dir, "*", "*", "*.partial")); len(entries) != 0 {
+				t.Fatalf("partial files left behind: %v", entries)
+			}
+		})
+	}
+}
+
+// TestFetchFailsWhenAManifestAssetIsMissing pins that a manifest naming an
+// archive the release does not contain stops the stage and names the asset,
+// before any listed asset is unpacked.
+func TestFetchFailsWhenAManifestAssetIsMissing(t *testing.T) {
+	t.Parallel()
+	server := tagAPI(t, Gateway)
+	assets := manifestRelease(t, Gateway, testManifestEntries)
+	delete(assets, yangAsset)
+	var seenTag, seenDir string
+	verify := writingVerifier(t, Gateway, assets, &seenTag, &seenDir)
+	root := t.TempDir()
+
+	_, err := Fetch(context.Background(), FetchOptions{
+		Source: Gateway, Tag: "light", CacheRoot: root, APIBaseURL: server.URL, Client: server.Client(), Verify: verify,
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not contain "+yangAsset) {
+		t.Fatalf("Fetch error = %v, want the missing asset named", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, Gateway.Name, "light", "yang")); statErr == nil {
+		t.Fatal("a directory was created for the missing asset")
+	}
+}
+
+// TestFetchRefusesADuplicateManifestEntry pins that two entries sharing an
+// unpack directory, a variable, or an asset name stop the stage before any
+// asset is unpacked, and the message names the repeated value.
+func TestFetchRefusesADuplicateManifestEntry(t *testing.T) {
+	t.Parallel()
+	cases := map[string]manifestEntry{
+		"unpack": {Name: yangAsset, Unpack: "wanconfig-stack", Var: "mwan_yang_dir"},
+		"var":    {Name: yangAsset, Unpack: "yang", Var: "wanconfig_stack_dir"},
+		"name":   {Name: StackBundleAsset, Unpack: "yang", Var: "mwan_yang_dir"},
+	}
+	for field, second := range cases {
+		t.Run(field, func(t *testing.T) {
+			t.Parallel()
+			server := tagAPI(t, Gateway)
+			entries := []manifestEntry{testManifestEntries[0], second}
+			var seenTag, seenDir string
+			verify := writingVerifier(t, Gateway, manifestRelease(t, Gateway, entries), &seenTag, &seenDir)
+			root := t.TempDir()
+
+			_, err := Fetch(context.Background(), FetchOptions{
+				Source: Gateway, Tag: "light", CacheRoot: root, APIBaseURL: server.URL, Client: server.Client(), Verify: verify,
+			})
+			if err == nil || !strings.Contains(err.Error(), "release manifest") {
+				t.Fatalf("Fetch error = %v, want the duplicate refused", err)
+			}
+			for _, dir := range []string{"wanconfig-stack", "yang"} {
+				if _, statErr := os.Stat(filepath.Join(root, Gateway.Name, "light", dir)); statErr == nil {
+					t.Fatalf("%s was unpacked from a refused manifest", dir)
+				}
+			}
+		})
+	}
+}
+
+// TestFetchRefusesAnUnusableManifestEntry pins that an entry the stage could
+// not honor is refused: an asset the verifier never downloads, a name or
+// directory the binaries already use, or a value that could escape the stage.
+func TestFetchRefusesAnUnusableManifestEntry(t *testing.T) {
+	t.Parallel()
+	cases := map[string]manifestEntry{
+		"not an archive":          {Name: "release-notes.json", Unpack: "notes", Var: "mwan_notes_dir"},
+		"escaping name":           {Name: "../x.tar.gz", Unpack: "x", Var: "mwan_x_dir"},
+		"the manifest itself":     {Name: ManifestAsset, Unpack: "x", Var: "mwan_x_dir"},
+		"a platform archive":      {Name: archiveName(Gateway, "linux_amd64"), Unpack: "x", Var: "mwan_x_dir"},
+		"unpack archives":         {Name: yangAsset, Unpack: "archives", Var: "mwan_yang_dir"},
+		"unpack a platform":       {Name: yangAsset, Unpack: "linux_amd64", Var: "mwan_yang_dir"},
+		"escaping unpack":         {Name: yangAsset, Unpack: "../yang", Var: "mwan_yang_dir"},
+		"nested unpack":           {Name: yangAsset, Unpack: "a/b", Var: "mwan_yang_dir"},
+		"empty unpack":            {Name: yangAsset, Unpack: "", Var: "mwan_yang_dir"},
+		"var with a dash":         {Name: yangAsset, Unpack: "yang", Var: "mwan-models-dir"},
+		"var starting with digit": {Name: yangAsset, Unpack: "yang", Var: "1models"},
+		"empty var":               {Name: yangAsset, Unpack: "yang", Var: ""},
+	}
+	for label, entry := range cases {
+		t.Run(label, func(t *testing.T) {
+			t.Parallel()
+			server := tagAPI(t, Gateway)
+			var seenTag, seenDir string
+			verify := writingVerifier(t, Gateway, manifestRelease(t, Gateway, []manifestEntry{entry}), &seenTag, &seenDir)
+			root := t.TempDir()
+
+			_, err := Fetch(context.Background(), FetchOptions{
+				Source: Gateway, Tag: "light", CacheRoot: root, APIBaseURL: server.URL, Client: server.Client(), Verify: verify,
+			})
+			if err == nil || !strings.Contains(err.Error(), "release manifest") {
+				t.Fatalf("Fetch error = %v, want the entry refused", err)
+			}
+			entries, _ := os.ReadDir(filepath.Join(root, Gateway.Name, "light"))
+			for _, dirEntry := range entries {
+				if dirEntry.Name() != "archives" && dirEntry.Name() != "linux_amd64" {
+					t.Fatalf("%s was created from a refused manifest", dirEntry.Name())
+				}
+			}
+		})
+	}
+}
+
+// TestFetchNeverParsesAnUnverifiedManifest pins that a manifest the verifier
+// rejected is never read: the verifier writes the whole release, including a
+// manifest whose content is not JSON, then reports a failed check, and the
+// stage fails with that report rather than a parse error, unpacking nothing.
+func TestFetchNeverParsesAnUnverifiedManifest(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		"manifest attestation": "release attestation verification failed for " + ManifestAsset,
+		"asset checksum":       "checksum mismatch for " + yangAsset,
+	}
+	for label, failure := range cases {
+		t.Run(label, func(t *testing.T) {
+			t.Parallel()
+			server := tagAPI(t, Gateway)
+			assets := manifestRelease(t, Gateway, testManifestEntries)
+			assets[ManifestAsset] = tarGz(t, map[string][]byte{manifestMemberName: []byte("not json")}, []string{manifestMemberName})
+			var seenTag, seenDir string
+			writing := writingVerifier(t, Gateway, assets, &seenTag, &seenDir)
+			verify := func(ctx context.Context, options selfupdate.Options, tag string) error {
+				if err := writing(ctx, options, tag); err != nil {
+					return err
+				}
+				return errors.New(failure)
+			}
+			root := t.TempDir()
+
+			_, err := Fetch(context.Background(), FetchOptions{
+				Source: Gateway, Tag: "light", CacheRoot: root, APIBaseURL: server.URL, Client: server.Client(), Verify: verify,
+			})
+			if err == nil || !strings.Contains(err.Error(), failure) {
+				t.Fatalf("Fetch error = %v, want the verifier's failure", err)
+			}
+			if strings.Contains(err.Error(), manifestMemberName) {
+				t.Fatalf("Fetch error = %v, the unverified manifest was parsed", err)
+			}
+			if _, statErr := os.Stat(filepath.Join(root, Gateway.Name, "light", "archives", ManifestAsset)); statErr != nil {
+				t.Fatalf("the manifest archive was not written before the verifier failed: %v", statErr)
+			}
+			for _, dir := range []string{"wanconfig-stack", "yang", "linux_amd64"} {
+				if _, statErr := os.Stat(filepath.Join(root, Gateway.Name, "light", dir)); statErr == nil {
+					t.Fatalf("%s was unpacked after the verifier failed", dir)
+				}
+			}
+		})
+	}
+}
+
+// TestFetchDiscardsAManifestTheVerifierDidNotWrite pins that an archive left
+// under the stage by an earlier run is not read as verified: a stale manifest
+// sits in the archive directory, the verifier writes a release without one,
+// and the stage proceeds as a release without a manifest.
+func TestFetchDiscardsAManifestTheVerifierDidNotWrite(t *testing.T) {
+	t.Parallel()
+	server := tagAPI(t, Gateway)
+	root := t.TempDir()
+	archiveDir := filepath.Join(root, Gateway.Name, "light", "archives")
+	if err := os.MkdirAll(archiveDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stale := manifestArchive(t, testManifestEntries)
+	if err := os.WriteFile(filepath.Join(archiveDir, ManifestAsset), stale, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var seenTag, seenDir string
+	verify := writingVerifier(t, Gateway, completeRelease(t, Gateway), &seenTag, &seenDir)
+
+	staged, err := Fetch(context.Background(), FetchOptions{
+		Source: Gateway, Tag: "light", CacheRoot: root, APIBaseURL: server.URL, Client: server.Client(), Verify: verify,
+	})
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if len(staged.Assets) != 0 {
+		t.Fatalf("Assets = %v from a manifest the verifier did not write", staged.Assets)
+	}
+	if staged.StackDir != filepath.Join(staged.Dir, "wanconfig-stack") {
+		t.Fatalf("StackDir = %q, want the bundle staged as a release without a manifest", staged.StackDir)
+	}
+	if _, statErr := os.Stat(filepath.Join(archiveDir, ManifestAsset)); statErr == nil {
+		t.Fatal("the stale manifest archive survived the stage")
+	}
+}
+
+// TestFetchRefusesAManifestArchiveWithTheWrongMember pins that the manifest
+// archive must carry exactly release-manifest.json and nothing else.
+func TestFetchRefusesAManifestArchiveWithTheWrongMember(t *testing.T) {
+	t.Parallel()
+	valid, err := json.Marshal(manifest{Assets: testManifestEntries})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string][]byte{
+		"other member": tarGz(t, map[string][]byte{"notes.txt": valid}, []string{"notes.txt"}),
+		"two members":  tarGz(t, map[string][]byte{manifestMemberName: valid, "extra.json": valid}, []string{manifestMemberName, "extra.json"}),
+		"no members":   tarGz(t, map[string][]byte{}, nil),
+		"not json":     tarGz(t, map[string][]byte{manifestMemberName: []byte("{")}, []string{manifestMemberName}),
+	}
+	for label, archive := range cases {
+		t.Run(label, func(t *testing.T) {
+			t.Parallel()
+			server := tagAPI(t, Gateway)
+			assets := manifestRelease(t, Gateway, testManifestEntries)
+			assets[ManifestAsset] = archive
+			var seenTag, seenDir string
+			verify := writingVerifier(t, Gateway, assets, &seenTag, &seenDir)
+			root := t.TempDir()
+
+			_, err := Fetch(context.Background(), FetchOptions{
+				Source: Gateway, Tag: "light", CacheRoot: root, APIBaseURL: server.URL, Client: server.Client(), Verify: verify,
+			})
+			if err == nil || !strings.Contains(err.Error(), ManifestAsset) && !strings.Contains(err.Error(), manifestMemberName) {
+				t.Fatalf("Fetch error = %v, want the manifest archive refused", err)
+			}
+			for _, dir := range []string{"wanconfig-stack", "yang"} {
+				if _, statErr := os.Stat(filepath.Join(root, Gateway.Name, "light", dir)); statErr == nil {
+					t.Fatalf("%s was unpacked from a refused manifest", dir)
+				}
+			}
+		})
+	}
+}
+
+// TestFetchRejectsForeignManifestAssetMember pins that a listed asset's
+// member can never land outside the asset's directory: an escaping path, an
+// absolute path, and a symbolic link each stop the stage.
+func TestFetchRejectsForeignManifestAssetMember(t *testing.T) {
+	t.Parallel()
+	symlink := func(t *testing.T) []byte {
+		t.Helper()
+		var buffer bytes.Buffer
+		gzipWriter := gzip.NewWriter(&buffer)
+		tarWriter := tar.NewWriter(gzipWriter)
+		header := &tar.Header{Name: "link.yang", Typeflag: tar.TypeSymlink, Linkname: "/etc/passwd", Mode: 0o777}
+		if err := tarWriter.WriteHeader(header); err != nil {
+			t.Fatal(err)
+		}
+		if err := tarWriter.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := gzipWriter.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return buffer.Bytes()
+	}
+	cases := map[string][]byte{
+		"dot-dot":  tarGz(t, map[string][]byte{"../escape.yang": []byte("x")}, []string{"../escape.yang"}),
+		"absolute": tarGz(t, map[string][]byte{"/etc/escape.yang": []byte("x")}, []string{"/etc/escape.yang"}),
+		"symlink":  symlink(t),
+		"empty":    tarGz(t, map[string][]byte{}, nil),
+	}
+	for label, archive := range cases {
+		t.Run(label, func(t *testing.T) {
+			t.Parallel()
+			server := tagAPI(t, Gateway)
+			assets := manifestRelease(t, Gateway, testManifestEntries)
+			assets[yangAsset] = archive
+			var seenTag, seenDir string
+			verify := writingVerifier(t, Gateway, assets, &seenTag, &seenDir)
+			root := t.TempDir()
+
+			_, err := Fetch(context.Background(), FetchOptions{
+				Source: Gateway, Tag: "light", CacheRoot: root, APIBaseURL: server.URL, Client: server.Client(), Verify: verify,
+			})
+			if err == nil || !strings.Contains(err.Error(), yangAsset) {
+				t.Fatalf("Fetch error = %v, want the asset member rejected", err)
+			}
+			if _, statErr := os.Stat(filepath.Join(root, Gateway.Name, "light", "escape.yang")); statErr == nil {
+				t.Fatal("foreign member was written")
+			}
+			if _, statErr := os.Stat(filepath.Join(root, "etc", "escape.yang")); statErr == nil {
+				t.Fatal("foreign member was written")
+			}
+		})
 	}
 }

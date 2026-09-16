@@ -6,10 +6,12 @@
 // the source's repository by go-makefile's selfupdate verifier, the same code
 // the release workflow runs after publishing, then the one binary inside each
 // platform archive is extracted into a per-source, per-tag directory that the
-// playbooks copy from. For the gateway source, the wanconfig stack bundle is
-// unpacked beside the binaries and its packages are checked against its
-// manifest, so a play can install packages the release attested. The tag's
-// commit is resolved as well, so a playbook can confirm the binary it
+// playbooks copy from. A release that publishes a manifest lists the extra
+// archives it carries; each one is unpacked beside the binaries and handed to
+// the play as the variable the manifest names, so a new data file needs no
+// change here. A gateway release without a manifest still stages the wanconfig
+// stack bundle and checks its packages against the bundle's own listing. The
+// tag's commit is resolved as well, so a playbook can confirm the binary it
 // installed reports the commit the tag points at.
 package release
 
@@ -27,6 +29,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -50,7 +53,9 @@ type Source struct {
 	// archive names carry.
 	Platforms []string
 	// StackBundle reports whether the release publishes the wanconfig stack
-	// bundle beside the binaries, which a stage then requires and unpacks.
+	// bundle beside the binaries, which a stage then requires and unpacks. It
+	// is consulted only for a release without a manifest; a manifest is the
+	// only source of extra assets when the release carries one.
 	StackBundle bool
 }
 
@@ -94,8 +99,56 @@ const stackMemberPrefix = "debs/"
 // stackDirName is the directory under the stage the bundle unpacks into.
 const stackDirName = "wanconfig-stack"
 
-// maxStackMemberBytes bounds one extracted bundle member.
-const maxStackMemberBytes int64 = 256 << 20
+// maxMemberBytes bounds one extracted bundle or manifest asset member.
+const maxMemberBytes int64 = 256 << 20
+
+// ManifestAsset is the release manifest: an archive holding one member,
+// release-manifest.json, that lists the extra assets the release carries. It
+// is an archive rather than a bare JSON file because the release engine
+// publishes, attests, and the verifier here downloads only .tar.gz assets, so
+// the manifest is verified before it is read, exactly like every other asset.
+// The platform suffix follows how the release engine names every archive it
+// produces. This is the one asset name a stage knows; every other extra asset
+// is named only by the manifest.
+const ManifestAsset = "release-manifest_linux_amd64.tar.gz"
+
+// manifestMemberName is the only member the manifest archive may carry.
+const manifestMemberName = "release-manifest.json"
+
+// maxManifestBytes bounds the manifest member. A listing of a few assets is
+// well under a kilobyte.
+const maxManifestBytes int64 = 1 << 20
+
+// archiveSuffix is the asset name suffix the verifier downloads and attests.
+// A manifest entry naming anything else was never verified, so it is refused
+// before the stage looks for it.
+const archiveSuffix = ".tar.gz"
+
+// varPattern is the shape of a deploy variable a manifest entry may name: an
+// Ansible variable name.
+var varPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// memberSegmentPattern is one path segment of a manifest asset member. It is
+// wider than tagPattern because the files a release stages carry the
+// characters Debian package and YANG model names use, such as the @ between a
+// module name and its revision, and it still refuses a leading dot or dash,
+// so neither a hidden file nor a dot-dot segment passes.
+var memberSegmentPattern = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.@+~-]*$`)
+
+// manifestEntry is one extra asset a release manifest lists.
+type manifestEntry struct {
+	// Name is the release asset, an archive beside the binaries.
+	Name string `json:"name"`
+	// Unpack is the directory under the stage the archive unpacks into.
+	Unpack string `json:"unpack"`
+	// Var is the deploy variable that receives the unpacked directory.
+	Var string `json:"var"`
+}
+
+// manifest is the content of release-manifest.json.
+type manifest struct {
+	Assets []manifestEntry `json:"assets"`
+}
 
 // defaultAPIBaseURL is the GitHub API root the tag lookup uses.
 const defaultAPIBaseURL = "https://api.github.com"
@@ -171,6 +224,10 @@ type Staged struct {
 	// StackManifest is the absolute path of the unpacked bundle manifest, or
 	// empty for a source without a stack bundle.
 	StackManifest string
+	// Assets maps each deploy variable the release manifest names to the
+	// absolute directory its archive unpacked into. It is empty for a release
+	// without a manifest.
+	Assets map[string]string
 }
 
 // stager carries the resolved options through one Fetch.
@@ -255,7 +312,15 @@ func (s stager) run(ctx context.Context) (Staged, error) {
 		s.log.ErrorContext(ctx, "release: stage dir resolve failed", "source", s.source.Name, "tag", s.tag, "err", err)
 		return Staged{}, fmt.Errorf("release: resolve stage dir: %w", err)
 	}
+	// The archive directory starts empty so every archive read below is one
+	// the verifier wrote this run. An archive left by an earlier stage of the
+	// tag, such as a manifest the release no longer publishes, would otherwise
+	// sit beside the verified ones and be read as if it were verified.
 	archiveDir := filepath.Join(stageDir, "archives")
+	if err := os.RemoveAll(archiveDir); err != nil {
+		s.log.ErrorContext(ctx, "release: stale archive dir remove failed", "path", archiveDir, "err", err)
+		return Staged{}, fmt.Errorf("clear stage archives: %w", err)
+	}
 	if err := os.MkdirAll(archiveDir, 0o755); err != nil {
 		s.log.ErrorContext(ctx, "release: stage dir create failed", "path", archiveDir, "err", err)
 		return Staged{}, fmt.Errorf("release: create stage dir: %w", err)
@@ -290,21 +355,286 @@ func (s stager) run(ctx context.Context) (Staged, error) {
 	}
 	s.log.InfoContext(ctx, "release: binaries staged", "source", s.source.Name, "tag", s.tag, "dir", stageDir, "platforms", len(binaries))
 
-	stackDir := ""
-	manifestPath := ""
-	if s.source.StackBundle {
-		stackDir = filepath.Join(stageDir, stackDirName)
-		manifestPath, err = s.extractStack(ctx, filepath.Join(archiveDir, StackBundleAsset), stackDir)
-		if err != nil {
-			return Staged{}, err
-		}
+	extras, err := s.stageExtras(ctx, stageDir, archiveDir)
+	if err != nil {
+		return Staged{}, err
 	}
 
 	commit, err := s.resolveTagCommit(ctx)
 	if err != nil {
 		return Staged{}, err
 	}
-	return Staged{Tag: s.tag, Commit: commit, Dir: stageDir, Binaries: binaries, StackDir: stackDir, StackManifest: manifestPath}, nil
+	return Staged{
+		Tag:           s.tag,
+		Commit:        commit,
+		Dir:           stageDir,
+		Binaries:      binaries,
+		StackDir:      extras.stackDir,
+		StackManifest: extras.stackManifest,
+		Assets:        extras.assets,
+	}, nil
+}
+
+// stagedExtras is what a release publishes beside its binaries: the assets
+// its manifest lists, or the stack bundle of a source that declares one.
+type stagedExtras struct {
+	stackDir      string
+	stackManifest string
+	assets        map[string]string
+}
+
+// stageExtras unpacks whatever the release publishes beside its binaries. A
+// manifest, when the verifier wrote one, is the only source of extra assets;
+// the source's StackBundle flag is consulted only for a release without one.
+func (s stager) stageExtras(ctx context.Context, stageDir, archiveDir string) (stagedExtras, error) {
+	manifestArchive := filepath.Join(archiveDir, ManifestAsset)
+	_, err := os.Stat(manifestArchive)
+	if err == nil {
+		assets, err := s.stageManifest(ctx, manifestArchive, stageDir, archiveDir)
+		if err != nil {
+			return stagedExtras{}, err
+		}
+		return stagedExtras{stackDir: "", stackManifest: "", assets: assets}, nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		s.log.ErrorContext(ctx, "release: manifest stat failed", "archive", manifestArchive, "err", err)
+		return stagedExtras{}, fmt.Errorf("release: stat %s: %w", ManifestAsset, err)
+	}
+	if !s.source.StackBundle {
+		return stagedExtras{stackDir: "", stackManifest: "", assets: nil}, nil
+	}
+	stackDir := filepath.Join(stageDir, stackDirName)
+	manifestPath, err := s.extractStack(ctx, filepath.Join(archiveDir, StackBundleAsset), stackDir)
+	if err != nil {
+		return stagedExtras{}, err
+	}
+	return stagedExtras{stackDir: stackDir, stackManifest: manifestPath, assets: nil}, nil
+}
+
+// stageManifest reads the verified manifest and unpacks every asset it lists
+// under the stage, returning the deploy variable each one is handed as.
+func (s stager) stageManifest(ctx context.Context, manifestArchive, stageDir, archiveDir string) (map[string]string, error) {
+	entries, err := s.readManifest(ctx, manifestArchive)
+	if err != nil {
+		return nil, err
+	}
+	assets := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		destDir := filepath.Join(stageDir, entry.Unpack)
+		if err := s.extractAsset(ctx, entry, filepath.Join(archiveDir, entry.Name), destDir); err != nil {
+			return nil, err
+		}
+		assets[entry.Var] = destDir
+	}
+	s.log.InfoContext(ctx, "release: manifest assets staged", "tag", s.tag, "assets", len(assets))
+	return assets, nil
+}
+
+// readManifest decodes the manifest archive's one member and checks every
+// entry before any asset is touched. The archive is read only after the
+// verifier accepted it, so an unverified manifest is never parsed.
+func (s stager) readManifest(ctx context.Context, manifestArchive string) ([]manifestEntry, error) {
+	content, err := s.readManifestMember(ctx, manifestArchive)
+	if err != nil {
+		return nil, err
+	}
+	var decoded manifest
+	if err := json.Unmarshal(content, &decoded); err != nil {
+		s.log.ErrorContext(ctx, "release: manifest decode failed", "archive", manifestArchive, "err", err)
+		return nil, fmt.Errorf("release: decode %s: %w", manifestMemberName, err)
+	}
+	if err := s.validateManifest(ctx, decoded.Assets); err != nil {
+		return nil, err
+	}
+	return decoded.Assets, nil
+}
+
+// readManifestMember returns the bytes of the manifest archive's only member,
+// refusing an archive that carries anything but release-manifest.json.
+func (s stager) readManifestMember(ctx context.Context, manifestArchive string) ([]byte, error) {
+	archive, err := os.Open(manifestArchive)
+	if err != nil {
+		s.log.ErrorContext(ctx, "release: manifest open failed", "archive", manifestArchive, "err", err)
+		return nil, fmt.Errorf("release: open %s: %w", ManifestAsset, err)
+	}
+	defer func() { _ = archive.Close() }()
+	gzipReader, err := gzip.NewReader(archive)
+	if err != nil {
+		s.log.ErrorContext(ctx, "release: manifest gzip open failed", "archive", manifestArchive, "err", err)
+		return nil, fmt.Errorf("release: read %s: %w", ManifestAsset, err)
+	}
+	defer func() { _ = gzipReader.Close() }()
+	tarReader := tar.NewReader(gzipReader)
+	var content []byte
+	for {
+		header, err := tarReader.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			s.log.ErrorContext(ctx, "release: manifest member read failed", "archive", manifestArchive, "err", err)
+			return nil, fmt.Errorf("release: read %s member: %w", ManifestAsset, err)
+		}
+		if header.Name != manifestMemberName || content != nil {
+			err := fmt.Errorf("release: %s must hold exactly one member, %s, but carries %q", ManifestAsset, manifestMemberName, header.Name)
+			s.log.ErrorContext(ctx, "release: manifest member rejected", "member", header.Name, "err", err)
+			return nil, err
+		}
+		if header.Size <= 0 || header.Size > maxManifestBytes {
+			err := fmt.Errorf("release: %s size %d outside (0, %d]", manifestMemberName, header.Size, maxManifestBytes)
+			s.log.ErrorContext(ctx, "release: manifest size rejected", "size", header.Size, "err", err)
+			return nil, err
+		}
+		content, err = io.ReadAll(io.LimitReader(tarReader, header.Size))
+		if err != nil {
+			s.log.ErrorContext(ctx, "release: manifest member read failed", "archive", manifestArchive, "err", err)
+			return nil, fmt.Errorf("release: read %s: %w", manifestMemberName, err)
+		}
+	}
+	if content == nil {
+		err := fmt.Errorf("release: %s has no %s member", ManifestAsset, manifestMemberName)
+		s.log.ErrorContext(ctx, "release: manifest member missing", "archive", manifestArchive, "err", err)
+		return nil, err
+	}
+	return content, nil
+}
+
+// validateManifest refuses an entry the stage could not honor: an asset the
+// verifier never downloads, a name, directory, or variable that collides with
+// what the binaries use, or a value that could escape the stage. Two entries
+// sharing a name, an unpack directory, or a variable are refused as well, so
+// one asset can never overwrite another.
+func (s stager) validateManifest(ctx context.Context, entries []manifestEntry) error {
+	reserved := map[string]bool{"archives": true}
+	names := map[string]bool{ManifestAsset: true}
+	for _, platform := range s.source.Platforms {
+		reserved[platform] = true
+		names[s.source.Binary+"_"+platform+archiveSuffix] = true
+	}
+	unpacks := map[string]bool{}
+	vars := map[string]bool{}
+	for _, entry := range entries {
+		if err := validateManifestEntry(entry, names, reserved, unpacks, vars); err != nil {
+			s.log.ErrorContext(ctx, "release: manifest entry rejected", "tag", s.tag, "asset", entry.Name, "err", err)
+			return err
+		}
+		names[entry.Name] = true
+		unpacks[entry.Unpack] = true
+		vars[entry.Var] = true
+	}
+	return nil
+}
+
+// validateManifestEntry checks one entry against the names, directories, and
+// variables already taken.
+func validateManifestEntry(entry manifestEntry, names, reserved, unpacks, vars map[string]bool) error {
+	if !isPathSegment(entry.Name) || !strings.HasSuffix(entry.Name, archiveSuffix) {
+		return fmt.Errorf("release manifest asset %q is not a plain %s file name", entry.Name, archiveSuffix)
+	}
+	if names[entry.Name] {
+		return fmt.Errorf("release manifest lists asset %q twice, or it is an archive the stage already uses", entry.Name)
+	}
+	if !isPathSegment(entry.Unpack) {
+		return fmt.Errorf("release manifest asset %q has unpack %q, which is not a plain path segment", entry.Name, entry.Unpack)
+	}
+	if reserved[entry.Unpack] || unpacks[entry.Unpack] {
+		return fmt.Errorf("release manifest asset %q has unpack %q, which another asset or the binaries already use", entry.Name, entry.Unpack)
+	}
+	if !varPattern.MatchString(entry.Var) {
+		return fmt.Errorf("release manifest asset %q has var %q, which is not a variable name", entry.Name, entry.Var)
+	}
+	if vars[entry.Var] {
+		return fmt.Errorf("release manifest asset %q has var %q, which another asset already uses", entry.Name, entry.Var)
+	}
+	return nil
+}
+
+// extractAsset unpacks one manifest-listed archive under destDir. Every member
+// must be a regular file or directory at a plain relative path, so a member
+// can never land outside destDir, and the archive must carry at least one
+// file. A listed asset the release does not contain fails here by name.
+func (s stager) extractAsset(ctx context.Context, entry manifestEntry, archivePath, destDir string) error {
+	archive, err := os.Open(archivePath)
+	if errors.Is(err, fs.ErrNotExist) {
+		err := fmt.Errorf("release %s does not contain %s, which its manifest lists", s.tag, entry.Name)
+		s.log.ErrorContext(ctx, "release: manifest asset missing", "tag", s.tag, "asset", entry.Name, "err", err)
+		return err
+	}
+	if err != nil {
+		s.log.WarnContext(ctx, "release: asset open failed", "archive", archivePath, "err", err)
+		return fmt.Errorf("open asset %s: %w", entry.Name, err)
+	}
+	defer func() { _ = archive.Close() }()
+	gzipReader, err := gzip.NewReader(archive)
+	if err != nil {
+		s.log.WarnContext(ctx, "release: asset gzip open failed", "archive", archivePath, "err", err)
+		return fmt.Errorf("read asset %s: %w", entry.Name, err)
+	}
+	defer func() { _ = gzipReader.Close() }()
+	files, err := s.unpackAssetMembers(ctx, tar.NewReader(gzipReader), entry, destDir)
+	if err != nil {
+		return err
+	}
+	if files == 0 {
+		err := fmt.Errorf("asset %s has no file members", entry.Name)
+		s.log.WarnContext(ctx, "release: asset empty", "asset", entry.Name, "err", err)
+		return err
+	}
+	s.log.InfoContext(ctx, "release: asset staged", "asset", entry.Name, "dir", destDir, "files", files)
+	return nil
+}
+
+// unpackAssetMembers writes each file member under destDir and returns how
+// many it wrote. Directory members are created as their files are written.
+func (s stager) unpackAssetMembers(ctx context.Context, tarReader *tar.Reader, entry manifestEntry, destDir string) (int, error) {
+	files := 0
+	for {
+		header, err := tarReader.Next()
+		if errors.Is(err, io.EOF) {
+			return files, nil
+		}
+		if err != nil {
+			s.log.WarnContext(ctx, "release: asset member read failed", "asset", entry.Name, "err", err)
+			return 0, fmt.Errorf("read asset %s member: %w", entry.Name, err)
+		}
+		destPath, err := s.assetMemberPath(ctx, entry, header.Name, destDir)
+		if err != nil {
+			return 0, err
+		}
+		switch header.Typeflag {
+		case tar.TypeDir:
+			continue
+		case tar.TypeReg:
+			if err := s.writeMember(ctx, tarReader, header.Size, destPath); err != nil {
+				return 0, err
+			}
+			files++
+		default:
+			err := fmt.Errorf("asset %s member %q is neither a file nor a directory", entry.Name, header.Name)
+			s.log.WarnContext(ctx, "release: asset member rejected", "asset", entry.Name, "member", header.Name, "err", err)
+			return 0, err
+		}
+	}
+}
+
+// assetMemberPath maps one member name to its destination under destDir,
+// accepting only a relative path whose every segment is plain, so neither a
+// leading slash nor a dot-dot can reach outside the asset's directory.
+func (s stager) assetMemberPath(ctx context.Context, entry manifestEntry, member, destDir string) (string, error) {
+	clean := path.Clean(member)
+	segments := strings.Split(clean, "/")
+	valid := clean != "." && !path.IsAbs(clean)
+	for _, segment := range segments {
+		if !memberSegmentPattern.MatchString(segment) {
+			valid = false
+		}
+	}
+	if !valid {
+		err := fmt.Errorf("asset %s member %q is not a plain relative path", entry.Name, member)
+		s.log.WarnContext(ctx, "release: asset member rejected", "asset", entry.Name, "member", member, "err", err)
+		return "", err
+	}
+	return filepath.Join(destDir, filepath.FromSlash(clean)), nil
 }
 
 // extractBinary unpacks the single binary member of a release archive to
@@ -457,7 +787,7 @@ func (s stager) unpackStackMembers(ctx context.Context, tarReader *tar.Reader, a
 		if err != nil {
 			return "", err
 		}
-		if err := s.writeStackMember(ctx, tarReader, header.Size, destPath); err != nil {
+		if err := s.writeMember(ctx, tarReader, header.Size, destPath); err != nil {
 			return "", err
 		}
 		if header.Name == stackManifestName {
@@ -489,39 +819,40 @@ func (s stager) stackMemberPath(ctx context.Context, member, stackDir string) (s
 	return filepath.Join(stackDir, stackMemberPrefix, filepath.Base(base)), nil
 }
 
-// writeStackMember streams one member to destPath through a temporary file in
-// the same directory, so a partial write never sits at the final path.
-func (s stager) writeStackMember(ctx context.Context, reader io.Reader, size int64, destPath string) error {
-	if size <= 0 || size > maxStackMemberBytes {
-		err := fmt.Errorf("stack member size %d outside (0, %d]", size, maxStackMemberBytes)
-		s.log.WarnContext(ctx, "release: stack member size rejected", "dest", destPath, "size", size, "err", err)
+// writeMember streams one bundle or asset member to destPath through a
+// temporary file in the same directory, so a partial write never sits at the
+// final path.
+func (s stager) writeMember(ctx context.Context, reader io.Reader, size int64, destPath string) error {
+	if size <= 0 || size > maxMemberBytes {
+		err := fmt.Errorf("member size %d outside (0, %d]", size, maxMemberBytes)
+		s.log.WarnContext(ctx, "release: member size rejected", "dest", destPath, "size", size, "err", err)
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
-		s.log.WarnContext(ctx, "release: stack dir create failed", "dest", destPath, "err", err)
-		return fmt.Errorf("create stack dir: %w", err)
+		s.log.WarnContext(ctx, "release: member dir create failed", "dest", destPath, "err", err)
+		return fmt.Errorf("create member dir: %w", err)
 	}
 	temp, err := os.CreateTemp(filepath.Dir(destPath), filepath.Base(destPath)+".*.partial")
 	if err != nil {
-		s.log.WarnContext(ctx, "release: temp stack member create failed", "dest", destPath, "err", err)
-		return fmt.Errorf("create temp stack member: %w", err)
+		s.log.WarnContext(ctx, "release: temp member create failed", "dest", destPath, "err", err)
+		return fmt.Errorf("create temp member: %w", err)
 	}
 	tempPath := temp.Name()
 	if _, err := io.Copy(temp, io.LimitReader(reader, size)); err != nil {
 		_ = temp.Close()
 		_ = os.Remove(tempPath)
-		s.log.WarnContext(ctx, "release: stack member write failed", "dest", destPath, "err", err)
-		return fmt.Errorf("write stack member: %w", err)
+		s.log.WarnContext(ctx, "release: member write failed", "dest", destPath, "err", err)
+		return fmt.Errorf("write member: %w", err)
 	}
 	if err := temp.Close(); err != nil {
 		_ = os.Remove(tempPath)
-		s.log.WarnContext(ctx, "release: stack member close failed", "dest", destPath, "err", err)
-		return fmt.Errorf("close stack member: %w", err)
+		s.log.WarnContext(ctx, "release: member close failed", "dest", destPath, "err", err)
+		return fmt.Errorf("close member: %w", err)
 	}
 	if err := os.Rename(tempPath, destPath); err != nil {
 		_ = os.Remove(tempPath)
-		s.log.WarnContext(ctx, "release: stack member place failed", "dest", destPath, "err", err)
-		return fmt.Errorf("place stack member: %w", err)
+		s.log.WarnContext(ctx, "release: member place failed", "dest", destPath, "err", err)
+		return fmt.Errorf("place member: %w", err)
 	}
 	return nil
 }
