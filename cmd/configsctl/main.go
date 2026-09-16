@@ -272,11 +272,12 @@ func runDeployWith(env cmdEnv, args []string, fetch releaseFetcher, deploy deplo
 	if err != nil {
 		return err
 	}
+	taken := map[string]string{}
 	for _, pin := range deployReleasePins(opts) {
 		if pin.tag == "" {
 			continue
 		}
-		extraVar, err := stageRelease(context.Background(), pin, fetch)
+		extraVar, err := stageRelease(context.Background(), pin, fetch, taken)
 		if err != nil {
 			slog.Error("release stage failed", "source", pin.source.Name, "tag", pin.tag, "err", err)
 			return errors.New("release stage failed")
@@ -346,8 +347,10 @@ func opnsensectlReleaseVars(staged release.Staged) map[string]string {
 // extra var that tells the playbook where the staged binaries are and which
 // commit they must report. The playbooks read those variables bare, so a
 // deploy that installs a binary without its release flag fails at load rather
-// than shipping whatever was built last.
-func stageRelease(ctx context.Context, pin releasePin, fetch releaseFetcher) (string, error) {
+// than shipping whatever was built last. taken records every variable the
+// releases staged so far have claimed, by source, so two releases of one
+// deploy can never set the same variable.
+func stageRelease(ctx context.Context, pin releasePin, fetch releaseFetcher, taken map[string]string) (string, error) {
 	staged, err := fetch(ctx, release.FetchOptions{
 		Source:     pin.source,
 		Tag:        pin.tag,
@@ -361,7 +364,7 @@ func stageRelease(ctx context.Context, pin releasePin, fetch releaseFetcher) (st
 	if err != nil {
 		return "", fmt.Errorf("stage %s release %s: %w", pin.source.Name, pin.tag, err)
 	}
-	vars, err := releaseVars(pin, staged)
+	vars, err := releaseVars(pin, staged, taken)
 	if err != nil {
 		slog.ErrorContext(ctx, "release vars refused", "source", pin.source.Name, "tag", staged.Tag, "err", err)
 		return "", err
@@ -376,18 +379,42 @@ func stageRelease(ctx context.Context, pin releasePin, fetch releaseFetcher) (st
 }
 
 // releaseVars is every extra var a staged release hands the play: the fixed
-// variables its pin names plus one per manifest asset. A manifest variable
-// that would overwrite a fixed one is refused, so a manifest can never point
-// the play at another binary directory or commit.
-func releaseVars(pin releasePin, staged release.Staged) (map[string]string, error) {
+// variables its pin names plus one per manifest asset. A manifest variable is
+// refused when it would overwrite a fixed variable of any source, staged in
+// this deploy or not, or a variable an earlier release of this deploy already
+// set, so a manifest can never point a play at another release's directory or
+// commit. Every variable the release hands the play is then recorded in taken.
+func releaseVars(pin releasePin, staged release.Staged, taken map[string]string) (map[string]string, error) {
 	vars := pin.vars(staged)
+	fixed := fixedReleaseVarNames()
 	for name, dir := range staged.Assets {
-		if _, taken := vars[name]; taken {
+		_, own := vars[name]
+		if own || fixed[name] {
 			return nil, fmt.Errorf("%s release %s: manifest variable %q collides with a variable the deploy sets", pin.source.Name, staged.Tag, name)
+		}
+		if owner, claimed := taken[name]; claimed {
+			return nil, fmt.Errorf("%s release %s: manifest variable %q is already set by the %s release", pin.source.Name, staged.Tag, name, owner)
 		}
 		vars[name] = dir
 	}
+	for name := range vars {
+		taken[name] = pin.source.Name
+	}
 	return vars, nil
+}
+
+// fixedReleaseVarNames is every variable a release pin sets on its own for
+// the play, whichever releases a deploy stages. The stack variables are not
+// among them: a pin sets those only from a bundle, and a manifest names the
+// stack directory itself.
+func fixedReleaseVarNames() map[string]bool {
+	names := map[string]bool{}
+	for _, pin := range deployReleasePins(ansible.DeployOptions{}) {
+		for name := range pin.vars(release.Staged{}) {
+			names[name] = true
+		}
+	}
+	return names
 }
 
 // githubToken returns the token the GitHub API calls use: GITHUB_TOKEN when

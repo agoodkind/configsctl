@@ -254,18 +254,31 @@ func TestRunDeployHandsManifestAssetsToThePlay(t *testing.T) {
 }
 
 // TestRunDeployRefusesAManifestVariableThatCollides pins that a manifest
-// entry naming one of the fixed release variables stops the deploy before
-// the play, so a manifest can never redirect the binary directory.
+// entry naming a fixed release variable of any source, or a variable another
+// release of the same deploy already set, stops the deploy before the play,
+// so a manifest can never redirect a binary directory. The opnsensectl names
+// are refused even when only the gateway is staged, because a play that reads
+// them bare would otherwise read the manifest's value instead of failing.
 func TestRunDeployRefusesAManifestVariableThatCollides(t *testing.T) {
-	for _, name := range []string{"mwan_release_dir", "mwan_release_commit", "mwan_release_tag"} {
-		t.Run(name, func(t *testing.T) {
+	cases := map[string]struct {
+		args   []string
+		assets map[string]string
+	}{
+		"mwan_release_dir":              {args: []string{"deploy-mwan", "--release", "v1"}, assets: map[string]string{"mwan_release_dir": "/elsewhere"}},
+		"mwan_release_commit":           {args: []string{"deploy-mwan", "--release", "v1"}, assets: map[string]string{"mwan_release_commit": "/elsewhere"}},
+		"mwan_release_tag":              {args: []string{"deploy-mwan", "--release", "v1"}, assets: map[string]string{"mwan_release_tag": "/elsewhere"}},
+		"opnsensectl dir, gateway only": {args: []string{"deploy-opnsense", "--release", "v1"}, assets: map[string]string{"opnsensectl_release_dir": "/elsewhere"}},
+		"two manifests, one variable":   {args: []string{"deploy-opnsense", "--release", "v1", "--opnsensectl-release", "v2"}, assets: map[string]string{"shared_dir": "/elsewhere"}},
+	}
+	for label, tc := range cases {
+		t.Run(label, func(t *testing.T) {
 			deployCalled := false
 			deploy := func(_ ansible.DeployOptions) error {
 				deployCalled = true
 				return nil
 			}
 			privateTempDir(t)
-			err := runDeployWith(cmdEnv{}, []string{"deploy-mwan", "--release", "v1"}, manifestFetch(map[string]string{name: "/elsewhere"}), deploy)
+			err := runDeployWith(cmdEnv{}, tc.args, manifestFetch(tc.assets), deploy)
 			if err == nil {
 				t.Fatal("runDeployWith returned nil, want the collision refused")
 			}

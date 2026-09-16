@@ -886,18 +886,23 @@ func TestFetchRejectsForeignManifestAssetMember(t *testing.T) {
 		}
 		return buffer.Bytes()
 	}
-	cases := map[string][]byte{
-		"dot-dot":  tarGz(t, map[string][]byte{"../escape.yang": []byte("x")}, []string{"../escape.yang"}),
-		"absolute": tarGz(t, map[string][]byte{"/etc/escape.yang": []byte("x")}, []string{"/etc/escape.yang"}),
-		"symlink":  symlink(t),
-		"empty":    tarGz(t, map[string][]byte{}, nil),
+	// absent is where each case's member would land if the extractor wrote
+	// it, relative to the cache root; the empty archive must create nothing.
+	cases := map[string]struct {
+		archive []byte
+		absent  string
+	}{
+		"dot-dot":  {archive: tarGz(t, map[string][]byte{"../escape.yang": []byte("x")}, []string{"../escape.yang"}), absent: filepath.Join(Gateway.Name, "light", "escape.yang")},
+		"absolute": {archive: tarGz(t, map[string][]byte{"/etc/escape.yang": []byte("x")}, []string{"/etc/escape.yang"}), absent: filepath.Join("etc", "escape.yang")},
+		"symlink":  {archive: symlink(t), absent: filepath.Join(Gateway.Name, "light", "yang", "link.yang")},
+		"empty":    {archive: tarGz(t, map[string][]byte{}, nil), absent: filepath.Join(Gateway.Name, "light", "yang")},
 	}
-	for label, archive := range cases {
+	for label, tc := range cases {
 		t.Run(label, func(t *testing.T) {
 			t.Parallel()
 			server := tagAPI(t, Gateway)
 			assets := manifestRelease(t, Gateway, testManifestEntries)
-			assets[yangAsset] = archive
+			assets[yangAsset] = tc.archive
 			var seenTag, seenDir string
 			verify := writingVerifier(t, Gateway, assets, &seenTag, &seenDir)
 			root := t.TempDir()
@@ -908,11 +913,8 @@ func TestFetchRejectsForeignManifestAssetMember(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), yangAsset) {
 				t.Fatalf("Fetch error = %v, want the asset member rejected", err)
 			}
-			if _, statErr := os.Stat(filepath.Join(root, Gateway.Name, "light", "escape.yang")); statErr == nil {
-				t.Fatal("foreign member was written")
-			}
-			if _, statErr := os.Stat(filepath.Join(root, "etc", "escape.yang")); statErr == nil {
-				t.Fatal("foreign member was written")
+			if _, statErr := os.Lstat(filepath.Join(root, tc.absent)); statErr == nil {
+				t.Fatalf("%s was written from a rejected archive", tc.absent)
 			}
 		})
 	}
