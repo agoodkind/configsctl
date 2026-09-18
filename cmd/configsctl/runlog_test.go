@@ -52,7 +52,7 @@ func TestRunDeployLeavesNoLogInTheWorkingDirectory(t *testing.T) {
 		_, err := opts.Output.Write([]byte("ok: [mwan]\n"))
 		return err
 	}
-	if err := runDeployWith(cmdEnv{}, []string{"deploy-mwan"}, nil, deploy); err != nil {
+	if err := runDeployWith(cmdEnv{}, []string{"deploy-mwan"}, deploy); err != nil {
 		t.Fatalf("runDeployWith: %v", err)
 	}
 
@@ -266,7 +266,7 @@ func TestRunDeployWritesThePlayOutputToTheLogFile(t *testing.T) {
 		}
 		return nil
 	}
-	if err := runDeployWith(cmdEnv{}, []string{"deploy-mwan"}, nil, deploy); err != nil {
+	if err := runDeployWith(cmdEnv{}, []string{"deploy-mwan"}, deploy); err != nil {
 		t.Fatalf("runDeployWith: %v", err)
 	}
 
@@ -293,7 +293,7 @@ func TestRunDeployRedactsSecretsInTheLogFile(t *testing.T) {
 		_, err := opts.Output.Write([]byte("ok: [mwan] token=" + secret + "\n"))
 		return err
 	}
-	if err := runDeployWith(env, []string{"deploy-mwan"}, nil, deploy); err != nil {
+	if err := runDeployWith(env, []string{"deploy-mwan"}, deploy); err != nil {
 		t.Fatalf("runDeployWith: %v", err)
 	}
 
@@ -318,7 +318,7 @@ func TestRunDeployFlushesTheLogWhenThePlayFails(t *testing.T) {
 		}
 		return errors.New("ansible-playbook: exit status 4")
 	}
-	err := runDeployWith(cmdEnv{}, []string{"deploy-mwan"}, nil, deploy)
+	err := runDeployWith(cmdEnv{}, []string{"deploy-mwan"}, deploy)
 	if err == nil {
 		t.Fatal("runDeployWith returned nil for a failing play")
 	}

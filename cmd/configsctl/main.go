@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -20,7 +19,6 @@ import (
 	"goodkind.io/configsctl/internal/baseline"
 	"goodkind.io/configsctl/internal/lint"
 	"goodkind.io/configsctl/internal/redact"
-	"goodkind.io/configsctl/internal/release"
 	"goodkind.io/configsctl/internal/vault"
 	"goodkind.io/configsctl/internal/version"
 )
@@ -250,38 +248,20 @@ func runSetSecrets(_ cmdEnv, _ []string) error {
 	return nil
 }
 
-// releaseCacheRoot is where staged releases live, relative to the repository
-// root the binary runs from. It sits under the ignored .make tree.
-const releaseCacheRoot = ".make/releases"
-
-// releaseFetcher stages a release; release.Fetch in production, a fake in tests.
-type releaseFetcher func(ctx context.Context, opts release.FetchOptions) (release.Staged, error)
-
 // deployRunner runs the play; ansible.Deploy in production, a fake in tests.
 type deployRunner func(opts ansible.DeployOptions) error
 
 func runDeploy(env cmdEnv, args []string) error {
-	return runDeployWith(env, args, release.Fetch, ansible.Deploy)
+	return runDeployWith(env, args, ansible.Deploy)
 }
 
-// runDeployWith is runDeploy with its two process boundaries injectable, so the
-// staging contract (which extra vars reach the play, and that a failed stage
-// never reaches it) is testable without the network or ansible.
-func runDeployWith(env cmdEnv, args []string, fetch releaseFetcher, deploy deployRunner) error {
+// runDeployWith is runDeploy with the play boundary injectable, so the run log
+// contract (where the play's output lands and what the error names) is testable
+// without ansible.
+func runDeployWith(env cmdEnv, args []string, deploy deployRunner) error {
 	opts, err := parseDeploy(args)
 	if err != nil {
 		return err
-	}
-	for _, pin := range deployReleasePins(opts) {
-		if pin.tag == "" {
-			continue
-		}
-		extraVar, err := stageRelease(context.Background(), pin, fetch)
-		if err != nil {
-			slog.Error("release stage failed", "source", pin.source.Name, "tag", pin.tag, "err", err)
-			return errors.New("release stage failed")
-		}
-		opts.ExtraVars = append(opts.ExtraVars, extraVar)
 	}
 	log, err := openRunLog(opts.Playbook, env.secrets)
 	if err != nil {
@@ -297,88 +277,6 @@ func runDeployWith(env cmdEnv, args []string, fetch releaseFetcher, deploy deplo
 		return fmt.Errorf("deploy failed; the play output is in %s", log.Path())
 	}
 	return nil
-}
-
-// releasePin is one release flag of a deploy: the tag the operator named, the
-// source it stages from, and the extra vars a staged release hands the play.
-type releasePin struct {
-	tag    string
-	source release.Source
-	vars   func(staged release.Staged) map[string]string
-}
-
-// deployReleasePins lists every release a deploy can stage, in the order their
-// extra vars reach the play. --release stages the gateway.
-func deployReleasePins(opts ansible.DeployOptions) []releasePin {
-	return []releasePin{
-		{tag: opts.ReleaseTag, source: release.Gateway, vars: gatewayReleaseVars},
-		{tag: opts.OpnsensectlReleaseTag, source: release.Opnsensectl, vars: opnsensectlReleaseVars},
-	}
-}
-
-// gatewayReleaseVars names a staged gateway release for the play.
-func gatewayReleaseVars(staged release.Staged) map[string]string {
-	return map[string]string{
-		"mwan_release_tag":         staged.Tag,
-		"mwan_release_commit":      staged.Commit,
-		"mwan_release_dir":         staged.Dir,
-		"wanconfig_stack_dir":      staged.StackDir,
-		"wanconfig_stack_manifest": staged.StackManifest,
-	}
-}
-
-// opnsensectlReleaseVars names a staged opnsensectl release for the play.
-func opnsensectlReleaseVars(staged release.Staged) map[string]string {
-	return map[string]string{
-		"opnsensectl_release_tag":    staged.Tag,
-		"opnsensectl_release_commit": staged.Commit,
-		"opnsensectl_release_dir":    staged.Dir,
-	}
-}
-
-// stageRelease downloads and verifies the pinned release and returns the JSON
-// extra var that tells the playbook where the staged binaries are and which
-// commit they must report. The playbooks read those variables bare, so a
-// deploy that installs a binary without its release flag fails at load rather
-// than shipping whatever was built last.
-func stageRelease(ctx context.Context, pin releasePin, fetch releaseFetcher) (string, error) {
-	staged, err := fetch(ctx, release.FetchOptions{
-		Source:     pin.source,
-		Tag:        pin.tag,
-		CacheRoot:  releaseCacheRoot,
-		Token:      githubToken(ctx),
-		APIBaseURL: "",
-		Client:     nil,
-		Verify:     nil,
-		Log:        slog.Default(),
-	})
-	if err != nil {
-		return "", fmt.Errorf("stage %s release %s: %w", pin.source.Name, pin.tag, err)
-	}
-	encoded, err := json.Marshal(pin.vars(staged))
-	if err != nil {
-		slog.ErrorContext(ctx, "release vars encode failed", "source", pin.source.Name, "err", err)
-		return "", fmt.Errorf("encode %s release vars: %w", pin.source.Name, err)
-	}
-	slog.InfoContext(ctx, "release staged", "source", pin.source.Name, "tag", staged.Tag, "commit", staged.Commit, "dir", staged.Dir)
-	return string(encoded), nil
-}
-
-// githubToken returns the token the GitHub API calls use: GITHUB_TOKEN when
-// set, otherwise the gh CLI's stored login, otherwise empty. The releases are
-// public, so an empty token still works and only lowers the rate limit.
-func githubToken(ctx context.Context) string {
-	if token := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); token != "" {
-		slog.DebugContext(ctx, "github token from environment")
-		return token
-	}
-	out, err := exec.CommandContext(ctx, "gh", "auth", "token").Output()
-	if err != nil {
-		slog.WarnContext(ctx, "gh auth token unavailable, continuing anonymously", "err", err)
-		return ""
-	}
-	slog.DebugContext(ctx, "github token from gh")
-	return strings.TrimSpace(string(out))
 }
 
 // proxmoxAutomationPrincipal is the Proxmox API principal both hypervisors
@@ -588,16 +486,6 @@ func applyDeployArg(opts *ansible.DeployOptions, args []string, index int) (int,
 		return 2, nil
 	case strings.HasPrefix(arg, "--limit="):
 		opts.Limit = strings.TrimPrefix(arg, "--limit=")
-	case arg == "--release" && index+1 < len(args):
-		opts.ReleaseTag = args[index+1]
-		return 2, nil
-	case strings.HasPrefix(arg, "--release="):
-		opts.ReleaseTag = strings.TrimPrefix(arg, "--release=")
-	case arg == "--opnsensectl-release" && index+1 < len(args):
-		opts.OpnsensectlReleaseTag = args[index+1]
-		return 2, nil
-	case strings.HasPrefix(arg, "--opnsensectl-release="):
-		opts.OpnsensectlReleaseTag = strings.TrimPrefix(arg, "--opnsensectl-release=")
 	case arg == "--extra-var" && index+1 < len(args):
 		opts.ExtraVars = append(opts.ExtraVars, args[index+1])
 		return 2, nil
