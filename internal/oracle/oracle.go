@@ -1,5 +1,6 @@
-// Package oracle invokes an embedded Python script to check Jinja expressions
-// that the Go parser cannot parse.
+// Package oracle checks Ansible Jinja expressions that the Go parser cannot parse,
+// including parenthesized conditionals piped into filters. The embedded Python
+// parser returns a parse result and any violations for each expression.
 package oracle
 
 import (
@@ -83,8 +84,8 @@ func Route(forms []Form) ([]Result, error) {
 }
 
 // pythonWithJinja returns a command for the first Python that imports Jinja2 in
-// isolated mode.
-// Isolated mode excludes user packages and PYTHONPATH from module imports.
+// isolated mode. Isolated mode excludes the script directory, user packages,
+// and PYTHONPATH from imports, preventing a substituted module from loading.
 func pythonWithJinja(ctx context.Context, scriptPath string) (*exec.Cmd, error) {
 	if err := exec.CommandContext(ctx, "python3", "-I", "-c", "import jinja2").Run(); err == nil {
 		slog.Debug("oracle Python selected", "python", "python3")
@@ -105,7 +106,8 @@ func pythonWithJinja(ctx context.Context, scriptPath string) (*exec.Cmd, error) 
 	return nil, err
 }
 
-// writeScript stores the embedded parser in a private temporary directory.
+// writeScript stores the parser in a unique 0700 temporary directory.
+// Other users cannot replace the script before Python starts.
 func writeScript() (string, string, error) {
 	dir, err := os.MkdirTemp("", scriptDirPattern)
 	if err != nil {
