@@ -279,7 +279,6 @@ func runDeployWith(env cmdEnv, args []string, deploy deployRunner) error {
 	return nil
 }
 
-// Proxmox provider tokens require the "principal=secret" format.
 const proxmoxAutomationPrincipal = "ansible@pam!ansible-token"
 
 // runTofu starts OpenTofu with R2 and Proxmox credentials from the vault.
