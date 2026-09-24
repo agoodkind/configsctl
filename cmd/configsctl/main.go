@@ -285,7 +285,8 @@ func runDeployWith(env cmdEnv, args []string, deploy deployRunner) error {
 const proxmoxAutomationPrincipal = "ansible@pam!ansible-token"
 
 // runTofu execs tofu in opentofu/ with credentials injected from the vault:
-// the R2 state-backend keys and both Proxmox provider tokens. A run that streams
+// the R2 state-backend keys, both Proxmox provider tokens, and the suburban
+// root credential for privileged container features. A run that streams
 // progress for minutes writes to a run log; anything that stops for an answer
 // keeps the terminal. Either way the output is redacted, so secret values never
 // reach the operator or the file.
@@ -307,6 +308,7 @@ func runTofu(env cmdEnv, args []string) error {
 		{"AWS_SECRET_ACCESS_KEY", "vault_r2_tofu_secret_access_key", ""},
 		{"TF_VAR_proxmox_api_token", "vault_proxmox_token_secret", proxmoxAutomationPrincipal + "="},
 		{"TF_VAR_suburban_proxmox_api_token", "vault_suburban_testbed_pve_token_secret", proxmoxAutomationPrincipal + "="},
+		{"TF_VAR_suburban_proxmox_root_password", "vault_suburban_proxmox_root_password", ""},
 	} {
 		value, secretErr := vault.Secret(pair.vaultKey, defaultVaultFile, passwordFile)
 		if secretErr != nil {
