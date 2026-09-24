@@ -11,11 +11,13 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"time"
 )
 
@@ -75,11 +77,14 @@ func Route(forms []Form) ([]Result, error) {
 	defer removeScriptDir(scriptDir)
 	ctx, cancel := context.WithTimeout(context.Background(), routeTimeout)
 	defer cancel()
+	cmd, err := pythonWithJinja(ctx, scriptPath)
+	if err != nil {
+		return nil, err
+	}
 	// -I runs python3 in isolated mode: the script's directory, the user
 	// site-packages, and every PYTHON* environment variable stay off the import
 	// path, so a module another user plants in the temp directory or names in
 	// PYTHONPATH is never imported.
-	cmd := exec.CommandContext(ctx, "python3", "-I", scriptPath, "--route")
 	cmd.Stdin = bytes.NewReader(payload)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -94,6 +99,28 @@ func Route(forms []Form) ([]Result, error) {
 		return nil, fmt.Errorf("decode oracle response: %w", decodeErr)
 	}
 	return results, nil
+}
+
+// pythonWithJinja returns a command for a Python that imports jinja2 in isolated
+// mode. On macOS, it also checks the standard Homebrew Python locations.
+func pythonWithJinja(ctx context.Context, scriptPath string) (*exec.Cmd, error) {
+	if err := exec.CommandContext(ctx, "python3", "-I", "-c", "import jinja2").Run(); err == nil {
+		slog.Debug("oracle Python selected", "python", "python3")
+		return exec.CommandContext(ctx, "python3", "-I", scriptPath, "--route"), nil
+	}
+	if runtime.GOOS == "darwin" {
+		if err := exec.CommandContext(ctx, "/opt/homebrew/bin/python3", "-I", "-c", "import jinja2").Run(); err == nil {
+			slog.Debug("oracle Python selected", "python", "/opt/homebrew/bin/python3")
+			return exec.CommandContext(ctx, "/opt/homebrew/bin/python3", "-I", scriptPath, "--route"), nil
+		}
+		if err := exec.CommandContext(ctx, "/usr/local/bin/python3", "-I", "-c", "import jinja2").Run(); err == nil {
+			slog.Debug("oracle Python selected", "python", "/usr/local/bin/python3")
+			return exec.CommandContext(ctx, "/usr/local/bin/python3", "-I", scriptPath, "--route"), nil
+		}
+	}
+	err := errors.New("no supported python3 can import jinja2 in isolated mode")
+	slog.Error("oracle Python unavailable", "err", err)
+	return nil, err
 }
 
 // writeScript copies the embedded oracle into a new directory in the host temp
