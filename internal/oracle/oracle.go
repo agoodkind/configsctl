@@ -101,8 +101,8 @@ func Route(forms []Form) ([]Result, error) {
 	return results, nil
 }
 
-// pythonWithJinja uses the shell's python3 when it has jinja2. On macOS,
-// Homebrew Python can have jinja2 even when system Python precedes it on PATH.
+// pythonWithJinja returns a command for a Python that imports jinja2 in isolated
+// mode. On macOS, it also checks the standard Homebrew Python locations.
 func pythonWithJinja(ctx context.Context, scriptPath string) (*exec.Cmd, error) {
 	if err := exec.CommandContext(ctx, "python3", "-I", "-c", "import jinja2").Run(); err == nil {
 		slog.Debug("oracle Python selected", "python", "python3")
