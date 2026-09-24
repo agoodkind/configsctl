@@ -123,7 +123,8 @@ func writeScript() (string, string, error) {
 	return dir, path, nil
 }
 
-// removeScriptDir logs cleanup failures without changing the lint result.
+// removeScriptDir deletes the temporary directory and logs deletion failures.
+// Cleanup failures do not invalidate the completed lint result.
 func removeScriptDir(dir string) {
 	if err := os.RemoveAll(dir); err != nil {
 		slog.Warn("remove oracle script dir failed", "dir", dir, "err", err)
