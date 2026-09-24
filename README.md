@@ -17,7 +17,9 @@ The commands are `lint`, `baseline`, `keys`, `secret`, `set-secrets`, `deploy`, 
 ## Prerequisites
 
 - Go at the version in `go.mod`.
-- python3 with jinja2, which the lint gate needs for expressions its Go parser cannot read.
+- A `python3` that can import `jinja2` in isolated mode. On macOS, the lint gate
+  also checks the standard Homebrew Python locations when the shell's `python3`
+  lacks `jinja2`.
 - The Ansible command line tools for `deploy`, `syntax-check`, and `inventory-dump`, and OpenTofu for `tofu`.
 - The vault password at `~/.config/ansible/vault.pass` for every command that reads the vault.
 

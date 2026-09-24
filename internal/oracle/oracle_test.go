@@ -2,30 +2,16 @@ package oracle
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"testing"
 )
-
-// requireOracle fails when python3 cannot import jinja2 in isolated mode, which
-// is how Route runs the oracle. A skip would pass while the oracle path is broken.
-func requireOracle(t *testing.T) {
-	t.Helper()
-	if _, err := exec.LookPath("python3"); err != nil {
-		t.Fatalf("python3 is required: %v", err)
-	}
-	if err := exec.Command("python3", "-I", "-c", "import jinja2").Run(); err != nil {
-		t.Fatalf("jinja2 is required for python3 in isolated mode: %v", err)
-	}
-}
 
 // TestRouteClassifiesForms drives the embedded jinja2 oracle through Route and
 // checks each form's parse flag and violating construct kinds, covering the
 // banned default and presence idioms, the runtime and fact names that spare
 // them, and a form jinja2 cannot parse.
 func TestRouteClassifiesForms(t *testing.T) {
-	requireOracle(t)
 	t.Chdir(t.TempDir())
 
 	cases := []struct {
@@ -96,7 +82,6 @@ func TestRouteClassifiesForms(t *testing.T) {
 // another user can write to the temp directory, so the oracle must never import
 // a module from there or from the caller's Python environment variables.
 func TestRouteIgnoresModulesPlantedInTheTempDirectory(t *testing.T) {
-	requireOracle(t)
 	hostile, err := os.ReadFile(filepath.Join("testdata", "json.py"))
 	if err != nil {
 		t.Fatalf("read hostile module: %v", err)
