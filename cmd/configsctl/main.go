@@ -279,17 +279,10 @@ func runDeployWith(env cmdEnv, args []string, deploy deployRunner) error {
 	return nil
 }
 
-// proxmoxAutomationPrincipal is the Proxmox API principal both hypervisors
-// issue for automation. The tofu provider wants "principal=secret" in one
-// string; the secret half lives in the vault.
+// Proxmox provider tokens require the "principal=secret" format.
 const proxmoxAutomationPrincipal = "ansible@pam!ansible-token"
 
-// runTofu execs tofu in opentofu/ with credentials injected from the vault:
-// the R2 state-backend keys, both Proxmox provider tokens, and the suburban
-// root credential for privileged container features. A run that streams
-// progress for minutes writes to a run log; anything that stops for an answer
-// keeps the terminal. Either way the output is redacted, so secret values never
-// reach the operator or the file.
+// runTofu starts OpenTofu with R2 and Proxmox credentials from the vault.
 func runTofu(env cmdEnv, args []string) error {
 	if len(args) == 0 {
 		return errors.New("usage: configsctl tofu <tofu args...>")

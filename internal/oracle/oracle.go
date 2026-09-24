@@ -1,9 +1,5 @@
-// Package oracle routes the Jinja forms the Go engine cannot read to the jinja2
-// reference parser in lint_ansible_ast.py, which is embedded in this package. The
-// Go engine parses most expressions itself; a few Ansible-Jinja forms, such as a
-// parenthesized conditional piped into a filter, fail there and are routed here so
-// a violation the Go engine could not classify is still enforced. The parser runs
-// as a python3 subprocess because no Go Jinja parser reads these forms.
+// Package oracle invokes an embedded Python script to check Jinja expressions
+// that the Go parser cannot parse.
 package oracle
 
 import (
@@ -21,46 +17,35 @@ import (
 	"time"
 )
 
-// script is the jinja2 oracle. It ships inside the binary, so the linter does not
-// depend on any file in the working directory to classify a routed form.
-//
 //go:embed lint_ansible_ast.py
 var script []byte
 
-// scriptDirPattern names the private directory that holds the temporary copy.
 const scriptDirPattern = "configsctl-oracle-*"
 
-// scriptName is the file name of the copy python3 runs.
 const scriptName = "lint_ansible_ast.py"
 
-// routeTimeout bounds the subprocess, which parses a small batch of expressions.
 const routeTimeout = 30 * time.Second
 
-// Form is one expression to classify, with the runtime names (register, set_fact,
-// and loop values) that a defensive read is allowed to reference.
+// Form contains a Jinja expression and the runtime names it may reference.
 type Form struct {
 	Expr    string   `json:"expr"`
 	Runtime []string `json:"runtime"`
 }
 
-// Violation is one banned construct the oracle resolved to an input variable.
+// Violation identifies a banned construct and its input variable.
 type Violation struct {
 	Kind string `json:"kind"`
 	Root string `json:"root"`
 }
 
-// Result is the oracle verdict for one form, aligned to the input by index.
-// Parsed reports whether jinja2 read the form; Violations holds the enforced
-// constructs.
+// Result reports whether Jinja2 parsed a form and lists its violations.
 type Result struct {
 	Parsed     bool        `json:"parsed"`
 	Violations []Violation `json:"violations"`
 }
 
-// Route classifies the forms with the jinja2 oracle and returns one result per
-// form in input order. An empty input returns no results and no error. A missing
-// interpreter, an unwritable temporary script, or a malformed response is an
-// error the caller surfaces, since a routed form cannot be silently passed.
+// Route parses each form with Jinja2 and returns results in input order.
+// It returns an error if the parser cannot run or produces an invalid response.
 func Route(forms []Form) ([]Result, error) {
 	if len(forms) == 0 {
 		return nil, nil
@@ -81,10 +66,6 @@ func Route(forms []Form) ([]Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	// -I runs python3 in isolated mode: the script's directory, the user
-	// site-packages, and every PYTHON* environment variable stay off the import
-	// path, so a module another user plants in the temp directory or names in
-	// PYTHONPATH is never imported.
 	cmd.Stdin = bytes.NewReader(payload)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -101,8 +82,9 @@ func Route(forms []Form) ([]Result, error) {
 	return results, nil
 }
 
-// pythonWithJinja returns a command for a Python that imports jinja2 in isolated
-// mode. On macOS, it also checks the standard Homebrew Python locations.
+// pythonWithJinja returns a command for the first Python that imports Jinja2 in
+// isolated mode.
+// Isolated mode excludes user packages and PYTHONPATH from module imports.
 func pythonWithJinja(ctx context.Context, scriptPath string) (*exec.Cmd, error) {
 	if err := exec.CommandContext(ctx, "python3", "-I", "-c", "import jinja2").Run(); err == nil {
 		slog.Debug("oracle Python selected", "python", "python3")
@@ -123,10 +105,7 @@ func pythonWithJinja(ctx context.Context, scriptPath string) (*exec.Cmd, error) 
 	return nil, err
 }
 
-// writeScript copies the embedded oracle into a new directory in the host temp
-// directory and returns that directory and the script path. [os.MkdirTemp]
-// creates the directory at 0700 under a name no other run shares, so no other
-// user can place a file beside the script.
+// writeScript stores the embedded parser in a private temporary directory.
 func writeScript() (string, string, error) {
 	dir, err := os.MkdirTemp("", scriptDirPattern)
 	if err != nil {
@@ -142,9 +121,7 @@ func writeScript() (string, string, error) {
 	return dir, path, nil
 }
 
-// removeScriptDir deletes the private directory and the oracle copy inside it. A
-// failed removal leaves a small directory in the host temp directory, which is
-// logged rather than returned because the lint result it served is already valid.
+// removeScriptDir logs cleanup failures without changing the lint result.
 func removeScriptDir(dir string) {
 	if err := os.RemoveAll(dir); err != nil {
 		slog.Warn("remove oracle script dir failed", "dir", dir, "err", err)
