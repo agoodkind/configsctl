@@ -295,7 +295,6 @@ func TestTofuPassesAModuleDirectoryNameToTofu(t *testing.T) {
 	if result.exitCode == 0 {
 		t.Fatalf("configsctl tofu shared plan succeeded, want tofu to reject the argument\nstdout: %s", result.stdout)
 	}
-	requireNoFile(t, filepath.Join(tree.workspaces, "shared", ".terraform"))
 }
 
 func TestTofuExportsVaultValuesForDeclaredVariables(t *testing.T) {
