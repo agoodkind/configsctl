@@ -17,6 +17,7 @@ import (
 
 	"goodkind.io/configsctl/internal/ansible"
 	"goodkind.io/configsctl/internal/baseline"
+	"goodkind.io/configsctl/internal/clock"
 	"goodkind.io/configsctl/internal/lint"
 	"goodkind.io/configsctl/internal/redact"
 	"goodkind.io/configsctl/internal/vault"
@@ -294,7 +295,7 @@ func runTofu(env cmdEnv, args []string) error {
 	if err != nil {
 		return err
 	}
-	secretEnv, err := tofuSecretEnv(loaded.Tofu, defaultVaultFile, passwordFile)
+	secretEnv, err := tofuSecretEnv(loaded.Tofu, defaultVaultFile, passwordFile, clock.NowUTC())
 	if err != nil {
 		return err
 	}
