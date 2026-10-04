@@ -5,6 +5,7 @@ go 1.27.1
 require (
 	github.com/hashicorp/hcl/v2 v2.25.0
 	github.com/nikolalohinski/gonja/v2 v2.8.0
+	github.com/pquerna/otp v1.5.0
 	github.com/sosedoff/ansible-vault-go v0.2.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -13,6 +14,7 @@ require (
 	github.com/agext/levenshtein v1.2.1 // indirect
 	github.com/apparentlymart/go-textseg/v15 v15.0.0 // indirect
 	github.com/apparentlymart/go-textseg/v17 v17.0.1 // indirect
+	github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/google/pprof v0.0.0-20260402051712-545e8a4df936 // indirect
