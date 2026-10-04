@@ -1,19 +1,67 @@
 package main
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclparse"
+	"gopkg.in/yaml.v3"
 
 	"goodkind.io/configsctl/internal/vault"
 )
 
-// tofuVariablePrefix is the environment prefix OpenTofu reads variable values from.
+// settingsFile is the file in the configs repository root that configures
+// configsctl.
+const settingsFile = "configsctl.yml"
+
+// tofuVariablePrefix is the environment prefix OpenTofu itself defines for
+// variable values.
 const tofuVariablePrefix = "TF_VAR_"
+
+// settings is the content of settingsFile.
+type settings struct {
+	Tofu tofuSettings `yaml:"tofu"`
+}
+
+// tofuSettings configures how configsctl runs OpenTofu.
+type tofuSettings struct {
+	// ModuleDir is the OpenTofu root module, relative to the repository root.
+	ModuleDir string `yaml:"module_dir"`
+	// EnvKeyPrefix marks a vault key that OpenTofu reads as a plain environment
+	// variable. A vault key <EnvKeyPrefix><NAME> exports as <NAME>.
+	EnvKeyPrefix string `yaml:"env_key_prefix"`
+}
+
+// loadSettings reads and validates the settings file at path. An unknown key
+// or a missing value is an error.
+func loadSettings(path string) (settings, error) {
+	var loaded settings
+	data, err := os.ReadFile(path)
+	if err != nil {
+		slog.Error("settings file read failed", "path", path, "err", err)
+		return loaded, fmt.Errorf("read %s: %w", path, err)
+	}
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&loaded); err != nil {
+		slog.Error("settings file parse failed", "path", path, "err", err)
+		return loaded, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if loaded.Tofu.ModuleDir == "" {
+		return loaded, errors.New(path + ": tofu.module_dir is empty")
+	}
+	if loaded.Tofu.EnvKeyPrefix == "" {
+		return loaded, errors.New(path + ": tofu.env_key_prefix is empty")
+	}
+	return loaded, nil
+}
 
 // tofuVariableSchema selects the variable blocks of a module file and ignores
 // every other block.
@@ -50,11 +98,12 @@ func tofuVariableNames(dir string) ([]string, error) {
 	return names, nil
 }
 
-// tofuSecretEnv returns one TF_VAR assignment per vault key that the module in
-// dir declares as a variable of the same name. A vault key without a matching
-// variable is not exported.
-func tofuSecretEnv(dir, vaultFile, passwordFile string) ([]string, error) {
-	names, err := tofuVariableNames(dir)
+// tofuSecretEnv returns the environment assignments OpenTofu gets from the
+// vault. A vault key with the same name as a variable declared in the module
+// exports as TF_VAR_<key>. A vault key <EnvKeyPrefix><NAME> exports as <NAME>.
+// Every other vault key is not exported.
+func tofuSecretEnv(tofu tofuSettings, vaultFile, passwordFile string) ([]string, error) {
+	names, err := tofuVariableNames(tofu.ModuleDir)
 	if err != nil {
 		return nil, err
 	}
@@ -70,6 +119,16 @@ func tofuSecretEnv(dir, vaultFile, passwordFile string) ([]string, error) {
 			continue
 		}
 		assignments = append(assignments, tofuVariablePrefix+name+"="+value)
+	}
+	var envKeys []string
+	for key := range values {
+		if name, ok := strings.CutPrefix(key, tofu.EnvKeyPrefix); ok && name != "" {
+			envKeys = append(envKeys, key)
+		}
+	}
+	sort.Strings(envKeys)
+	for _, key := range envKeys {
+		assignments = append(assignments, strings.TrimPrefix(key, tofu.EnvKeyPrefix)+"="+values[key])
 	}
 	return assignments, nil
 }

@@ -52,6 +52,7 @@ var handlers = map[string]func(cmdEnv, []string) error{
 	"keys":           runKeys,
 	"secret":         runSecret,
 	"set-secrets":    runSetSecrets,
+	"rename-secret":  runRenameSecret,
 	"deploy":         runDeploy,
 	"tofu":           runTofu,
 	"syntax-check":   runSyntaxCheck,
@@ -279,11 +280,8 @@ func runDeployWith(env cmdEnv, args []string, deploy deployRunner) error {
 	return nil
 }
 
-// tofuDir is the OpenTofu root module, relative to the repository root.
-const tofuDir = "opentofu"
-
-// runTofu starts OpenTofu with each vault secret that the root module declares
-// as a variable of the same name.
+// runTofu starts OpenTofu with the vault secrets that the rules in the
+// settings file select.
 func runTofu(env cmdEnv, args []string) error {
 	if len(args) == 0 {
 		return errors.New("usage: configsctl tofu <tofu args...>")
@@ -292,7 +290,11 @@ func runTofu(env cmdEnv, args []string) error {
 	if err != nil {
 		return err
 	}
-	secretEnv, err := tofuSecretEnv(tofuDir, defaultVaultFile, passwordFile)
+	loaded, err := loadSettings(settingsFile)
+	if err != nil {
+		return err
+	}
+	secretEnv, err := tofuSecretEnv(loaded.Tofu, defaultVaultFile, passwordFile)
 	if err != nil {
 		return err
 	}
@@ -303,7 +305,7 @@ func runTofu(env cmdEnv, args []string) error {
 	}
 	slog.Info("tofu run", "args", strings.Join(safeArgs, " "))
 	cmd := exec.CommandContext(context.Background(), "tofu", safeArgs...)
-	cmd.Dir = tofuDir
+	cmd.Dir = loaded.Tofu.ModuleDir
 	cmd.Env = childEnv
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -418,6 +420,22 @@ func sanitizeTofuArgs(args []string) ([]string, error) {
 		safe = append(safe, match)
 	}
 	return safe, nil
+}
+
+func runRenameSecret(_ cmdEnv, args []string) error {
+	if len(args) != 2 {
+		return errors.New("usage: configsctl rename-secret <old-key> <new-key>")
+	}
+	passwordFile, err := vaultPassPath()
+	if err != nil {
+		return err
+	}
+	if err := vault.RenameSecret(args[0], args[1], defaultVaultFile, passwordFile); err != nil {
+		slog.Error("vault secret rename failed", "old", args[0], "new", args[1], "err", err)
+		return fmt.Errorf("rename vault secret %q to %q: %w", args[0], args[1], err)
+	}
+	fmt.Printf("renamed: %s -> %s\n", args[0], args[1])
+	return nil
 }
 
 func runSyntaxCheck(_ cmdEnv, args []string) error {

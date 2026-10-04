@@ -10,10 +10,11 @@ import (
 )
 
 // TestTofuSecretEnv pins the export rule: tofuSecretEnv exports a vault entry
-// only when a module file declares a variable of the same name.
+// only when a module file declares a variable of the same name or the entry
+// name starts with the prefix from the settings file.
 func TestTofuSecretEnv(t *testing.T) {
 	dir := t.TempDir()
-	moduleDir := filepath.Join(dir, "opentofu")
+	moduleDir := filepath.Join(dir, "module")
 	if err := os.Mkdir(moduleDir, 0o700); err != nil {
 		t.Fatalf("mkdir module: %v", err)
 	}
@@ -38,22 +39,49 @@ resource "terraform_data" "unused" {}
 	writeTestFile(t, filepath.Join(moduleDir, "variables.tf"), variables)
 	writeTestFile(t, filepath.Join(moduleDir, "providers.tf"), providers)
 
+	settingsPath := filepath.Join(dir, "configsctl.yml")
+	writeTestFile(t, settingsPath, "tofu:\n  module_dir: "+moduleDir+"\n  env_key_prefix: fixture_env_\n")
+	loaded, err := loadSettings(settingsPath)
+	if err != nil {
+		t.Fatalf("loadSettings: %v", err)
+	}
+
 	const vaultPhrase = "fixture-phrase"
 	passwordFile := filepath.Join(dir, "vault.pass")
 	writeTestFile(t, passwordFile, vaultPhrase+"\n")
 	vaultFile := filepath.Join(dir, "vault.yml")
-	vaultContent := "vault_alpha: one\nvault_beta: two\nvault_gamma: three\n"
+	vaultContent := "vault_alpha: one\nvault_beta: two\nvault_gamma: three\n" +
+		"fixture_env_FIXTURE_NAME: four\n"
 	if err := ansiblevault.EncryptFile(vaultFile, vaultContent, vaultPhrase); err != nil {
 		t.Fatalf("encrypt vault: %v", err)
 	}
 
-	got, err := tofuSecretEnv(moduleDir, vaultFile, passwordFile)
+	got, err := tofuSecretEnv(loaded.Tofu, vaultFile, passwordFile)
 	if err != nil {
 		t.Fatalf("tofuSecretEnv: %v", err)
 	}
-	want := []string{"TF_VAR_vault_alpha=one", "TF_VAR_vault_beta=two"}
+	want := []string{"TF_VAR_vault_alpha=one", "TF_VAR_vault_beta=two", "FIXTURE_NAME=four"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("tofuSecretEnv = %v, want %v", got, want)
+	}
+}
+
+// TestLoadSettingsRejectsIncompleteFile pins that a settings file with an
+// unknown key or a missing value stops the command.
+func TestLoadSettingsRejectsIncompleteFile(t *testing.T) {
+	cases := map[string]string{
+		"missing prefix": "tofu:\n  module_dir: opentofu\n",
+		"missing module": "tofu:\n  env_key_prefix: fixture_env_\n",
+		"unknown key":    "tofu:\n  module_dir: opentofu\n  env_key_prefix: fixture_env_\n  extra: 1\n",
+	}
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "configsctl.yml")
+			writeTestFile(t, path, content)
+			if _, err := loadSettings(path); err == nil {
+				t.Fatalf("loadSettings accepted %q", content)
+			}
+		})
 	}
 }
 

@@ -136,6 +136,29 @@ func SetSecrets(stdin, vaultPath, passwordFile string) ([]string, []string, erro
 	return added, updated, nil
 }
 
+// RenameSecret moves the value of oldKey to newKey and deletes oldKey. It
+// fails when oldKey is absent or newKey already exists.
+func RenameSecret(oldKey, newKey, vaultPath, passwordFile string) error {
+	password, err := readPassword(passwordFile)
+	if err != nil {
+		return err
+	}
+	mapping, err := decryptMapping(vaultPath, passwordFile)
+	if err != nil {
+		return err
+	}
+	value, ok := mapping[oldKey]
+	if !ok {
+		return fmt.Errorf("vault key not found: %s", oldKey)
+	}
+	if _, exists := mapping[newKey]; exists {
+		return fmt.Errorf("vault key already exists: %s", newKey)
+	}
+	delete(mapping, oldKey)
+	mapping[newKey] = value
+	return encryptMapping(vaultPath, password, mapping)
+}
+
 func decryptMapping(vaultPath, passwordFile string) (map[string]string, error) {
 	password, err := readPassword(passwordFile)
 	if err != nil {

@@ -12,7 +12,7 @@ To run a deploy from the root of a configs checkout:
 go run goodkind.io/configsctl/cmd/configsctl@latest deploy <playbook>
 ```
 
-The commands are `lint`, `baseline`, `keys`, `secret`, `set-secrets`, `deploy`, `tofu`, `syntax-check`, `inventory-dump`, and `version`. `version` prints the commit the binary was built from, whether that tree was dirty, and a hash of the binary. A deploy lints the files its playbook reads and refuses to run on a new finding. The playbooks pin and pull the releases they install; configsctl stages nothing.
+The commands are `lint`, `baseline`, `keys`, `secret`, `set-secrets`, `rename-secret`, `deploy`, `tofu`, `syntax-check`, `inventory-dump`, and `version`. `version` prints the commit the binary was built from, whether that tree was dirty, and a hash of the binary. A deploy lints the files its playbook reads and refuses to run on a new finding. The playbooks pin and pull the releases they install; configsctl stages nothing.
 
 ## Prerequisites
 
