@@ -128,8 +128,7 @@ func tofuSecretEnv(tofu tofuSettings, vaultFile, passwordFile string) ([]string,
 	}
 	var envKeys []string
 	for key := range values {
-		// A vault key exported as TF_VAR_<key> is not exported a second time
-		// under the prefix rule.
+		// The loop above already exported this vault key as TF_VAR_<key>.
 		if exportedAsVariable[key] {
 			continue
 		}
