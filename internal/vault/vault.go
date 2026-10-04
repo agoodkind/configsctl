@@ -159,6 +159,28 @@ func RenameSecret(oldKey, newKey, vaultPath, passwordFile string) error {
 	return encryptMapping(vaultPath, password, mapping)
 }
 
+// DeleteSecrets removes the given keys from the vault. It fails when a key is
+// absent and then changes nothing.
+func DeleteSecrets(keys []string, vaultPath, passwordFile string) error {
+	password, err := readPassword(passwordFile)
+	if err != nil {
+		return err
+	}
+	mapping, err := decryptMappingWithPassword(vaultPath, password)
+	if err != nil {
+		return err
+	}
+	for _, key := range keys {
+		if _, ok := mapping[key]; !ok {
+			return fmt.Errorf("vault key not found: %s", key)
+		}
+	}
+	for _, key := range keys {
+		delete(mapping, key)
+	}
+	return encryptMapping(vaultPath, password, mapping)
+}
+
 func decryptMapping(vaultPath, passwordFile string) (map[string]string, error) {
 	password, err := readPassword(passwordFile)
 	if err != nil {

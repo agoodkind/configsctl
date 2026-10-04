@@ -17,7 +17,6 @@ import (
 
 	"goodkind.io/configsctl/internal/ansible"
 	"goodkind.io/configsctl/internal/baseline"
-	"goodkind.io/configsctl/internal/clock"
 	"goodkind.io/configsctl/internal/lint"
 	"goodkind.io/configsctl/internal/redact"
 	"goodkind.io/configsctl/internal/vault"
@@ -54,6 +53,7 @@ var handlers = map[string]func(cmdEnv, []string) error{
 	"secret":         runSecret,
 	"set-secrets":    runSetSecrets,
 	"rename-secret":  runRenameSecret,
+	"delete-secrets": runDeleteSecrets,
 	"deploy":         runDeploy,
 	"tofu":           runTofu,
 	"syntax-check":   runSyntaxCheck,
@@ -295,7 +295,7 @@ func runTofu(env cmdEnv, args []string) error {
 	if err != nil {
 		return err
 	}
-	secretEnv, err := tofuSecretEnv(loaded.Tofu, defaultVaultFile, passwordFile, clock.NowUTC())
+	secretEnv, err := tofuSecretEnv(loaded.Tofu, defaultVaultFile, passwordFile)
 	if err != nil {
 		return err
 	}
@@ -436,6 +436,22 @@ func runRenameSecret(_ cmdEnv, args []string) error {
 		return fmt.Errorf("rename vault secret %q to %q: %w", args[0], args[1], err)
 	}
 	fmt.Printf("renamed: %s -> %s\n", args[0], args[1])
+	return nil
+}
+
+func runDeleteSecrets(_ cmdEnv, args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: configsctl delete-secrets <key> [<key>]")
+	}
+	passwordFile, err := vaultPassPath()
+	if err != nil {
+		return err
+	}
+	if err := vault.DeleteSecrets(args, defaultVaultFile, passwordFile); err != nil {
+		slog.Error("vault secret delete failed", "keys", strings.Join(args, " "), "err", err)
+		return fmt.Errorf("delete vault secrets: %w", err)
+	}
+	fmt.Printf("deleted: %s\n", strings.Join(args, ", "))
 	return nil
 }
 

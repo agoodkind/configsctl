@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclparse"
@@ -38,10 +37,6 @@ type tofuSettings struct {
 	// EnvKeyPrefix marks a vault key that OpenTofu reads as a plain environment
 	// variable. A vault key <EnvKeyPrefix><NAME> exports as <NAME>.
 	EnvKeyPrefix string `yaml:"env_key_prefix"`
-	// TOTPKeyPrefix marks a vault key with a TOTP seed. A vault key
-	// <TOTPKeyPrefix><name> exports the current code as the OpenTofu variable
-	// <name> when the module declares that variable. Empty turns the rule off.
-	TOTPKeyPrefix string `yaml:"totp_key_prefix"`
 }
 
 // loadSettings reads and validates the settings file at path. An unknown key
@@ -64,11 +59,6 @@ func loadSettings(path string) (settings, error) {
 	}
 	if loaded.Tofu.EnvKeyPrefix == "" {
 		return loaded, errors.New(path + ": tofu.env_key_prefix is empty")
-	}
-	// A seed key that also matched the environment prefix would export the seed.
-	totpPrefix, envPrefix := loaded.Tofu.TOTPKeyPrefix, loaded.Tofu.EnvKeyPrefix
-	if totpPrefix != "" && (strings.HasPrefix(totpPrefix, envPrefix) || strings.HasPrefix(envPrefix, totpPrefix)) {
-		return loaded, errors.New(path + ": tofu.totp_key_prefix and tofu.env_key_prefix overlap")
 	}
 	return loaded, nil
 }
@@ -128,10 +118,9 @@ func tofuVariableNames(dir string) ([]string, error) {
 
 // tofuSecretEnv returns the environment assignments OpenTofu gets from the
 // vault. A vault key with the same name as a variable declared in the module
-// exports as TF_VAR_<key>. A vault key <TOTPKeyPrefix><name> exports the TOTP
-// code for now as TF_VAR_<name> when the module declares <name>. A vault key
-// <EnvKeyPrefix><NAME> exports as <NAME>. Every other vault key is not exported.
-func tofuSecretEnv(tofu tofuSettings, vaultFile, passwordFile string, now time.Time) ([]string, error) {
+// exports as TF_VAR_<key>. A vault key <EnvKeyPrefix><NAME> exports as <NAME>.
+// Every other vault key is not exported.
+func tofuSecretEnv(tofu tofuSettings, vaultFile, passwordFile string) ([]string, error) {
 	names, err := tofuVariableNames(tofu.ModuleDir)
 	if err != nil {
 		return nil, err
@@ -144,23 +133,12 @@ func tofuSecretEnv(tofu tofuSettings, vaultFile, passwordFile string, now time.T
 	var assignments []string
 	exportedAsVariable := make(map[string]bool, len(names))
 	for _, name := range names {
-		if value, ok := values[name]; ok {
-			assignments = append(assignments, tofuVariablePrefix+name+"="+value)
-			exportedAsVariable[name] = true
-			continue
-		}
-		if tofu.TOTPKeyPrefix == "" {
-			continue
-		}
-		seed, ok := values[tofu.TOTPKeyPrefix+name]
+		value, ok := values[name]
 		if !ok {
 			continue
 		}
-		code, codeErr := totpCode(seed, now)
-		if codeErr != nil {
-			return nil, fmt.Errorf("vault key %s%s: %w", tofu.TOTPKeyPrefix, name, codeErr)
-		}
-		assignments = append(assignments, tofuVariablePrefix+name+"="+code)
+		assignments = append(assignments, tofuVariablePrefix+name+"="+value)
+		exportedAsVariable[name] = true
 	}
 	var envKeys []string
 	for key := range values {

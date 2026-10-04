@@ -48,3 +48,32 @@ func TestRenameSecret(t *testing.T) {
 		t.Fatal("RenameSecret(missing, delta) succeeded, want an error for a missing name")
 	}
 }
+
+// TestDeleteSecrets pins that a delete removes exactly the named entries and
+// that a missing name leaves the vault unchanged.
+func TestDeleteSecrets(t *testing.T) {
+	dir := t.TempDir()
+	const vaultPhrase = "fixture-phrase"
+	passwordFile := filepath.Join(dir, "vault.pass")
+	if err := os.WriteFile(passwordFile, []byte(vaultPhrase+"\n"), 0o600); err != nil {
+		t.Fatalf("write password file: %v", err)
+	}
+	vaultFile := filepath.Join(dir, "vault.yml")
+	if err := ansiblevault.EncryptFile(vaultFile, "alpha: one\nbeta: two\ngamma: three\n", vaultPhrase); err != nil {
+		t.Fatalf("encrypt vault: %v", err)
+	}
+
+	if err := DeleteSecrets([]string{"alpha", "missing"}, vaultFile, passwordFile); err == nil {
+		t.Fatal("DeleteSecrets(alpha, missing) succeeded, want an error for a missing name")
+	}
+	if err := DeleteSecrets([]string{"alpha", "gamma"}, vaultFile, passwordFile); err != nil {
+		t.Fatalf("DeleteSecrets(alpha, gamma): %v", err)
+	}
+	names, err := Keys(vaultFile, passwordFile)
+	if err != nil {
+		t.Fatalf("Keys: %v", err)
+	}
+	if want := []string{"beta"}; !slices.Equal(names, want) {
+		t.Fatalf("Keys = %v, want %v", names, want)
+	}
+}
