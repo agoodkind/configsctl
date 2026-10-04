@@ -26,8 +26,8 @@ type settings struct {
 }
 
 type tofuSettings struct {
-	// ModuleDir is a path relative to the repository root.
-	ModuleDir string `yaml:"module_dir"`
+	// WorkspacesDir is a path relative to the repository root.
+	WorkspacesDir string `yaml:"workspaces_dir"`
 	// tofuSecretEnv exports a vault key <EnvKeyPrefix><NAME> as the
 	// environment variable <NAME>.
 	EnvKeyPrefix string `yaml:"env_key_prefix"`
@@ -46,8 +46,8 @@ func loadSettings(path string) (settings, error) {
 		slog.Error("settings file parse failed", "path", path, "err", err)
 		return loaded, fmt.Errorf("parse %s: %w", path, err)
 	}
-	if loaded.Tofu.ModuleDir == "" {
-		return loaded, errors.New(path + ": tofu.module_dir is empty")
+	if loaded.Tofu.WorkspacesDir == "" {
+		return loaded, errors.New(path + ": tofu.workspaces_dir is empty")
 	}
 	if loaded.Tofu.EnvKeyPrefix == "" {
 		return loaded, errors.New(path + ": tofu.env_key_prefix is empty")
@@ -57,6 +57,14 @@ func loadSettings(path string) (settings, error) {
 
 var tofuVariableSchema = &hcl.BodySchema{
 	Blocks: []hcl.BlockHeaderSchema{{Type: "variable", LabelNames: []string{"name"}}},
+}
+
+var tofuTerraformSchema = &hcl.BodySchema{
+	Blocks: []hcl.BlockHeaderSchema{{Type: "terraform"}},
+}
+
+var tofuBackendSchema = &hcl.BodySchema{
+	Blocks: []hcl.BlockHeaderSchema{{Type: "backend", LabelNames: []string{"type"}}},
 }
 
 func tofuModuleFiles(dir string) (native, jsonFiles []string, err error) {
@@ -73,13 +81,15 @@ func tofuModuleFiles(dir string) (native, jsonFiles []string, err error) {
 	return native, jsonFiles, nil
 }
 
-func tofuVariableNames(dir string) ([]string, error) {
+// tofuModuleBlocks returns the top-level blocks that match schema in the *.tf
+// and *.tf.json files of dir. It does not read subdirectories.
+func tofuModuleBlocks(dir string, schema *hcl.BodySchema) (hcl.Blocks, error) {
 	native, jsonFiles, err := tofuModuleFiles(dir)
 	if err != nil {
 		return nil, err
 	}
 	parser := hclparse.NewParser()
-	var names []string
+	var blocks hcl.Blocks
 	for index, path := range append(native, jsonFiles...) {
 		parse := parser.ParseHCLFile
 		if index >= len(native) {
@@ -90,24 +100,115 @@ func tofuVariableNames(dir string) ([]string, error) {
 			slog.Error("tofu module parse failed", "path", path, "err", diags.Error())
 			return nil, fmt.Errorf("parse %s: %w", path, diags)
 		}
-		content, _, diags := file.Body.PartialContent(tofuVariableSchema)
+		content, _, diags := file.Body.PartialContent(schema)
 		if diags.HasErrors() {
-			slog.Error("tofu variable read failed", "path", path, "err", diags.Error())
-			return nil, fmt.Errorf("read variables in %s: %w", path, diags)
+			slog.Error("tofu block read failed", "path", path, "err", diags.Error())
+			return nil, fmt.Errorf("read blocks in %s: %w", path, diags)
 		}
-		for _, block := range content.Blocks {
-			names = append(names, block.Labels[0])
+		blocks = append(blocks, content.Blocks...)
+	}
+	return blocks, nil
+}
+
+func tofuVariableNames(dir string) ([]string, error) {
+	blocks, err := tofuModuleBlocks(dir, tofuVariableSchema)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(blocks))
+	for _, block := range blocks {
+		names = append(names, block.Labels[0])
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// tofuHasBackend reports whether dir is a workspace. A workspace has a backend
+// block inside a terraform block in one of its files.
+func tofuHasBackend(dir string) (bool, error) {
+	blocks, err := tofuModuleBlocks(dir, tofuTerraformSchema)
+	if err != nil {
+		return false, err
+	}
+	for _, block := range blocks {
+		content, _, diags := block.Body.PartialContent(tofuBackendSchema)
+		if diags.HasErrors() {
+			slog.Error("tofu backend read failed", "dir", dir, "err", diags.Error())
+			return false, fmt.Errorf("read terraform block in %s: %w", dir, diags)
+		}
+		if len(content.Blocks) > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// tofuChildWorkspaces returns the sorted names of the direct child directories
+// of workspacesDir that have a backend block.
+func tofuChildWorkspaces(workspacesDir string) ([]string, error) {
+	entries, err := os.ReadDir(workspacesDir)
+	if err != nil {
+		slog.Error("tofu workspaces directory read failed", "dir", workspacesDir, "err", err)
+		return nil, fmt.Errorf("read %s: %w", workspacesDir, err)
+	}
+	var names []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		hasBackend, err := tofuHasBackend(filepath.Join(workspacesDir, entry.Name()))
+		if err != nil {
+			return nil, err
+		}
+		if hasBackend {
+			names = append(names, entry.Name())
 		}
 	}
 	sort.Strings(names)
 	return names, nil
 }
 
+// selectTofuWorkspace returns the directory OpenTofu runs in and the arguments
+// OpenTofu receives. A first argument equal to a child workspace name selects
+// that child and is removed from the arguments. Any other first argument
+// selects workspacesDir itself, which must have a backend block.
+func selectTofuWorkspace(workspacesDir string, args []string) (string, []string, error) {
+	names, err := tofuChildWorkspaces(workspacesDir)
+	if err != nil {
+		return "", nil, err
+	}
+	if len(args) > 0 {
+		for _, name := range names {
+			if name == args[0] {
+				// The path uses the name os.ReadDir returned, not the argument.
+				return filepath.Join(workspacesDir, name), args[1:], nil
+			}
+		}
+	}
+	hasBackend, err := tofuHasBackend(workspacesDir)
+	if err != nil {
+		return "", nil, err
+	}
+	if hasBackend {
+		return workspacesDir, args, nil
+	}
+	if len(names) == 0 {
+		return "", nil, fmt.Errorf(
+			"no workspace found: %s and its child directories have no backend block",
+			workspacesDir,
+		)
+	}
+	return "", nil, fmt.Errorf(
+		"%s has no backend block; pass one of these workspaces as the first argument: %s",
+		workspacesDir, strings.Join(names, ", "),
+	)
+}
+
 // tofuSecretEnv exports a vault key under two rules. A vault key with the
-// name of a variable declared in the module exports as TF_VAR_<key>. A vault
+// name of a variable declared in workspaceDir exports as TF_VAR_<key>. A vault
 // key <EnvKeyPrefix><NAME> exports as <NAME>.
-func tofuSecretEnv(tofu tofuSettings, vaultFile, passwordFile string) ([]string, error) {
-	names, err := tofuVariableNames(tofu.ModuleDir)
+func tofuSecretEnv(tofu tofuSettings, workspaceDir, vaultFile, passwordFile string) ([]string, error) {
+	names, err := tofuVariableNames(workspaceDir)
 	if err != nil {
 		return nil, err
 	}

@@ -281,9 +281,11 @@ func runDeployWith(env cmdEnv, args []string, deploy deployRunner) error {
 	return nil
 }
 
+const tofuUsage = "usage: configsctl tofu [<workspace>] <tofu args...>"
+
 func runTofu(env cmdEnv, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: configsctl tofu <tofu args...>")
+		return errors.New(tofuUsage)
 	}
 	passwordFile, err := vaultPassPath()
 	if err != nil {
@@ -293,18 +295,25 @@ func runTofu(env cmdEnv, args []string) error {
 	if err != nil {
 		return err
 	}
-	secretEnv, err := tofuSecretEnv(loaded.Tofu, defaultVaultFile, passwordFile)
+	workspaceDir, tofuArgs, err := selectTofuWorkspace(loaded.Tofu.WorkspacesDir, args)
+	if err != nil {
+		return err
+	}
+	if len(tofuArgs) == 0 {
+		return errors.New(tofuUsage)
+	}
+	secretEnv, err := tofuSecretEnv(loaded.Tofu, workspaceDir, defaultVaultFile, passwordFile)
 	if err != nil {
 		return err
 	}
 	childEnv := append(os.Environ(), secretEnv...)
-	safeArgs, err := sanitizeTofuArgs(args)
+	safeArgs, err := sanitizeTofuArgs(tofuArgs)
 	if err != nil {
 		return err
 	}
-	slog.Info("tofu run", "args", strings.Join(safeArgs, " "))
+	slog.Info("tofu run", "dir", workspaceDir, "args", strings.Join(safeArgs, " "))
 	cmd := exec.CommandContext(context.Background(), "tofu", safeArgs...)
-	cmd.Dir = loaded.Tofu.ModuleDir
+	cmd.Dir = workspaceDir
 	cmd.Env = childEnv
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
