@@ -136,8 +136,8 @@ func SetSecrets(stdin, vaultPath, passwordFile string) ([]string, []string, erro
 	return added, updated, nil
 }
 
-// RenameSecret moves the value of oldKey to newKey and deletes oldKey. It
-// fails when oldKey is absent or newKey already exists.
+// RenameSecret writes the value of oldKey under newKey and deletes oldKey. It
+// returns an error when oldKey is absent or newKey exists.
 func RenameSecret(oldKey, newKey, vaultPath, passwordFile string) error {
 	password, err := readPassword(passwordFile)
 	if err != nil {
@@ -159,8 +159,8 @@ func RenameSecret(oldKey, newKey, vaultPath, passwordFile string) error {
 	return encryptMapping(vaultPath, password, mapping)
 }
 
-// DeleteSecrets removes the given keys from the vault. It fails when a key is
-// absent and then changes nothing.
+// DeleteSecrets deletes keys from the vault. When one key is absent it
+// returns an error and writes nothing.
 func DeleteSecrets(keys []string, vaultPath, passwordFile string) error {
 	password, err := readPassword(passwordFile)
 	if err != nil {

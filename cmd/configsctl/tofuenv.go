@@ -17,30 +17,22 @@ import (
 	"goodkind.io/configsctl/internal/vault"
 )
 
-// settingsFile is the file in the configs repository root that configures
-// configsctl.
 const settingsFile = "configsctl.yml"
 
-// tofuVariablePrefix is the environment prefix OpenTofu itself defines for
-// variable values.
 const tofuVariablePrefix = "TF_VAR_"
 
-// settings is the content of settingsFile.
 type settings struct {
 	Tofu tofuSettings `yaml:"tofu"`
 }
 
-// tofuSettings configures how configsctl runs OpenTofu.
 type tofuSettings struct {
-	// ModuleDir is the OpenTofu root module, relative to the repository root.
+	// ModuleDir is a path relative to the repository root.
 	ModuleDir string `yaml:"module_dir"`
-	// EnvKeyPrefix marks a vault key that OpenTofu reads as a plain environment
-	// variable. A vault key <EnvKeyPrefix><NAME> exports as <NAME>.
+	// tofuSecretEnv exports a vault key <EnvKeyPrefix><NAME> as the
+	// environment variable <NAME>.
 	EnvKeyPrefix string `yaml:"env_key_prefix"`
 }
 
-// loadSettings reads and validates the settings file at path. An unknown key
-// or a missing value is an error.
 func loadSettings(path string) (settings, error) {
 	var loaded settings
 	data, err := os.ReadFile(path)
@@ -63,13 +55,10 @@ func loadSettings(path string) (settings, error) {
 	return loaded, nil
 }
 
-// tofuVariableSchema selects the variable blocks of a module file and ignores
-// every other block.
 var tofuVariableSchema = &hcl.BodySchema{
 	Blocks: []hcl.BlockHeaderSchema{{Type: "variable", LabelNames: []string{"name"}}},
 }
 
-// tofuModuleFiles returns the native and JSON module files in dir.
 func tofuModuleFiles(dir string) (native, jsonFiles []string, err error) {
 	native, err = filepath.Glob(filepath.Join(dir, "*.tf"))
 	if err != nil {
@@ -84,8 +73,6 @@ func tofuModuleFiles(dir string) (native, jsonFiles []string, err error) {
 	return native, jsonFiles, nil
 }
 
-// tofuVariableNames returns the sorted label of every variable block in the
-// module in dir.
 func tofuVariableNames(dir string) ([]string, error) {
 	native, jsonFiles, err := tofuModuleFiles(dir)
 	if err != nil {
@@ -116,10 +103,9 @@ func tofuVariableNames(dir string) ([]string, error) {
 	return names, nil
 }
 
-// tofuSecretEnv returns the environment assignments OpenTofu gets from the
-// vault. A vault key with the same name as a variable declared in the module
-// exports as TF_VAR_<key>. A vault key <EnvKeyPrefix><NAME> exports as <NAME>.
-// Every other vault key is not exported.
+// tofuSecretEnv exports a vault key under two rules. A vault key with the
+// name of a variable declared in the module exports as TF_VAR_<key>. A vault
+// key <EnvKeyPrefix><NAME> exports as <NAME>.
 func tofuSecretEnv(tofu tofuSettings, vaultFile, passwordFile string) ([]string, error) {
 	names, err := tofuVariableNames(tofu.ModuleDir)
 	if err != nil {
@@ -142,7 +128,7 @@ func tofuSecretEnv(tofu tofuSettings, vaultFile, passwordFile string) ([]string,
 	}
 	var envKeys []string
 	for key := range values {
-		// A key that a variable already claimed exports once, as that variable.
+		// The loop above already exported this vault key as TF_VAR_<key>.
 		if exportedAsVariable[key] {
 			continue
 		}

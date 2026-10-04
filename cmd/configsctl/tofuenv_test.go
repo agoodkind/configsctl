@@ -9,9 +9,6 @@ import (
 	ansiblevault "github.com/sosedoff/ansible-vault-go"
 )
 
-// TestTofuSecretEnv pins the export rule: tofuSecretEnv exports a vault entry
-// only when a module file declares a variable of the same name or the entry
-// name starts with the prefix from the settings file.
 func TestTofuSecretEnv(t *testing.T) {
 	dir := t.TempDir()
 	moduleDir := filepath.Join(dir, "module")
@@ -74,8 +71,6 @@ resource "terraform_data" "unused" {}
 	}
 }
 
-// TestLoadSettingsRejectsIncompleteFile pins that a settings file with an
-// unknown key or a missing value stops the command.
 func TestLoadSettingsRejectsIncompleteFile(t *testing.T) {
 	cases := map[string]string{
 		"missing prefix": "tofu:\n  module_dir: opentofu\n",
