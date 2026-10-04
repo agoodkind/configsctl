@@ -279,9 +279,11 @@ func runDeployWith(env cmdEnv, args []string, deploy deployRunner) error {
 	return nil
 }
 
-const proxmoxAutomationPrincipal = "ansible@pam!ansible-token"
+// tofuDir is the OpenTofu root module, relative to the repository root.
+const tofuDir = "opentofu"
 
-// runTofu starts OpenTofu with R2 and Proxmox credentials from the vault.
+// runTofu starts OpenTofu with each vault secret that the root module declares
+// as a variable of the same name.
 func runTofu(env cmdEnv, args []string) error {
 	if len(args) == 0 {
 		return errors.New("usage: configsctl tofu <tofu args...>")
@@ -290,31 +292,18 @@ func runTofu(env cmdEnv, args []string) error {
 	if err != nil {
 		return err
 	}
-	childEnv := os.Environ()
-	for _, pair := range []struct {
-		envName  string
-		vaultKey string
-		prefix   string
-	}{
-		{"AWS_ACCESS_KEY_ID", "vault_r2_tofu_access_key_id", ""},
-		{"AWS_SECRET_ACCESS_KEY", "vault_r2_tofu_secret_access_key", ""},
-		{"TF_VAR_proxmox_api_token", "vault_proxmox_token_secret", proxmoxAutomationPrincipal + "="},
-		{"TF_VAR_suburban_proxmox_api_token", "vault_suburban_testbed_pve_token_secret", proxmoxAutomationPrincipal + "="},
-		{"TF_VAR_suburban_proxmox_root_password", "vault_suburban_proxmox_root_password", ""},
-	} {
-		value, secretErr := vault.Secret(pair.vaultKey, defaultVaultFile, passwordFile)
-		if secretErr != nil {
-			return fmt.Errorf("read vault secret %q", pair.vaultKey)
-		}
-		childEnv = append(childEnv, pair.envName+"="+pair.prefix+value)
+	secretEnv, err := tofuSecretEnv(tofuDir, defaultVaultFile, passwordFile)
+	if err != nil {
+		return err
 	}
+	childEnv := append(os.Environ(), secretEnv...)
 	safeArgs, err := sanitizeTofuArgs(args)
 	if err != nil {
 		return err
 	}
 	slog.Info("tofu run", "args", strings.Join(safeArgs, " "))
 	cmd := exec.CommandContext(context.Background(), "tofu", safeArgs...)
-	cmd.Dir = "opentofu"
+	cmd.Dir = tofuDir
 	cmd.Env = childEnv
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
