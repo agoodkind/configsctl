@@ -281,8 +281,6 @@ func runDeployWith(env cmdEnv, args []string, deploy deployRunner) error {
 	return nil
 }
 
-// runTofu starts OpenTofu with the vault secrets that the rules in the
-// settings file select.
 func runTofu(env cmdEnv, args []string) error {
 	if len(args) == 0 {
 		return errors.New("usage: configsctl tofu <tofu args...>")

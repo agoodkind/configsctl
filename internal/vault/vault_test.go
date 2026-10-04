@@ -9,8 +9,6 @@ import (
 	ansiblevault "github.com/sosedoff/ansible-vault-go"
 )
 
-// TestRenameSecret pins that a rename moves the value to the new name, deletes
-// the old name, and refuses to overwrite an existing name.
 func TestRenameSecret(t *testing.T) {
 	dir := t.TempDir()
 	const vaultPhrase = "fixture-phrase"
@@ -49,8 +47,6 @@ func TestRenameSecret(t *testing.T) {
 	}
 }
 
-// TestDeleteSecrets pins that a delete removes exactly the named entries and
-// that a missing name leaves the vault unchanged.
 func TestDeleteSecrets(t *testing.T) {
 	dir := t.TempDir()
 	const vaultPhrase = "fixture-phrase"
