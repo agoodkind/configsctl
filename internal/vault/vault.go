@@ -143,7 +143,7 @@ func RenameSecret(oldKey, newKey, vaultPath, passwordFile string) error {
 	if err != nil {
 		return err
 	}
-	mapping, err := decryptMapping(vaultPath, passwordFile)
+	mapping, err := decryptMappingWithPassword(vaultPath, password)
 	if err != nil {
 		return err
 	}
@@ -164,6 +164,10 @@ func decryptMapping(vaultPath, passwordFile string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	return decryptMappingWithPassword(vaultPath, password)
+}
+
+func decryptMappingWithPassword(vaultPath, password string) (map[string]string, error) {
 	plain, err := ansiblevault.DecryptFile(vaultPath, password)
 	if err != nil {
 		slog.Error("vault decrypt failed", "path", vaultPath, "err", err)

@@ -38,6 +38,8 @@ resource "terraform_data" "unused" {}
 `
 	writeTestFile(t, filepath.Join(moduleDir, "variables.tf"), variables)
 	writeTestFile(t, filepath.Join(moduleDir, "providers.tf"), providers)
+	jsonVariables := `{"variable": {"vault_delta": {"type": "string"}, "fixture_env_BOTH": {"type": "string"}}}`
+	writeTestFile(t, filepath.Join(moduleDir, "extra.tf.json"), jsonVariables)
 
 	settingsPath := filepath.Join(dir, "configsctl.yml")
 	writeTestFile(t, settingsPath, "tofu:\n  module_dir: "+moduleDir+"\n  env_key_prefix: fixture_env_\n")
@@ -51,7 +53,7 @@ resource "terraform_data" "unused" {}
 	writeTestFile(t, passwordFile, vaultPhrase+"\n")
 	vaultFile := filepath.Join(dir, "vault.yml")
 	vaultContent := "vault_alpha: one\nvault_beta: two\nvault_gamma: three\n" +
-		"fixture_env_FIXTURE_NAME: four\n"
+		"fixture_env_FIXTURE_NAME: four\nvault_delta: five\nfixture_env_BOTH: six\n"
 	if err := ansiblevault.EncryptFile(vaultFile, vaultContent, vaultPhrase); err != nil {
 		t.Fatalf("encrypt vault: %v", err)
 	}
@@ -60,7 +62,13 @@ resource "terraform_data" "unused" {}
 	if err != nil {
 		t.Fatalf("tofuSecretEnv: %v", err)
 	}
-	want := []string{"TF_VAR_vault_alpha=one", "TF_VAR_vault_beta=two", "FIXTURE_NAME=four"}
+	want := []string{
+		"TF_VAR_fixture_env_BOTH=six",
+		"TF_VAR_vault_alpha=one",
+		"TF_VAR_vault_beta=two",
+		"TF_VAR_vault_delta=five",
+		"FIXTURE_NAME=four",
+	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("tofuSecretEnv = %v, want %v", got, want)
 	}
