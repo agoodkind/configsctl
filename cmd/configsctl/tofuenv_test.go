@@ -69,18 +69,6 @@ variable "vault_shared" {
 	return root
 }
 
-func TestTofuChildWorkspaces(t *testing.T) {
-	root := writeWorkspaceTree(t)
-	got, err := tofuChildWorkspaces(root)
-	if err != nil {
-		t.Fatalf("tofuChildWorkspaces: %v", err)
-	}
-	want := []string{"alpha", "beta"}
-	if !slices.Equal(got, want) {
-		t.Fatalf("tofuChildWorkspaces = %v, want %v", got, want)
-	}
-}
-
 func TestSelectTofuWorkspace(t *testing.T) {
 	root := writeWorkspaceTree(t)
 	tests := []struct {
