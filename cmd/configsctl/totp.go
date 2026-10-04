@@ -10,8 +10,8 @@ import (
 	"github.com/pquerna/otp/totp"
 )
 
-// totpOptions are the RFC 6238 defaults, which Proxmox uses for a TOTP entry
-// created without explicit parameters.
+// totpOptions are the RFC 6238 defaults: SHA-1, a 30-second period, and six
+// digits.
 var totpOptions = totp.ValidateOpts{
 	Period:    30,
 	Skew:      0,

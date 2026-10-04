@@ -65,6 +65,11 @@ func loadSettings(path string) (settings, error) {
 	if loaded.Tofu.EnvKeyPrefix == "" {
 		return loaded, errors.New(path + ": tofu.env_key_prefix is empty")
 	}
+	// A seed key that also matched the environment prefix would export the seed.
+	totpPrefix, envPrefix := loaded.Tofu.TOTPKeyPrefix, loaded.Tofu.EnvKeyPrefix
+	if totpPrefix != "" && (strings.HasPrefix(totpPrefix, envPrefix) || strings.HasPrefix(envPrefix, totpPrefix)) {
+		return loaded, errors.New(path + ": tofu.totp_key_prefix and tofu.env_key_prefix overlap")
+	}
 	return loaded, nil
 }
 

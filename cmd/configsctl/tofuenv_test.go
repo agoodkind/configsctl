@@ -85,7 +85,9 @@ func TestLoadSettingsRejectsIncompleteFile(t *testing.T) {
 	cases := map[string]string{
 		"missing prefix": "tofu:\n  module_dir: opentofu\n",
 		"missing module": "tofu:\n  env_key_prefix: fixture_env_\n",
-		"unknown key":    "tofu:\n  module_dir: opentofu\n  env_key_prefix: fixture_env_\n  extra: 1\n",
+		"overlapping prefixes": "tofu:\n  module_dir: opentofu\n  env_key_prefix: fixture_\n" +
+			"  totp_key_prefix: fixture_totp_\n",
+		"unknown key": "tofu:\n  module_dir: opentofu\n  env_key_prefix: fixture_env_\n  extra: 1\n",
 	}
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
