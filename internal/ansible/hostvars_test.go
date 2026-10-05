@@ -1,52 +1,48 @@
-package ansible
+package ansible_test
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+
+	"goodkind.io/configsctl/internal/ansible"
 )
 
-// inventoryOutput follows the ansible-core 2.19 inventory encoder. The encoder
-// writes an untrusted host variable, such as the ansible_host that the Proxmox
-// inventory plugin composes, as an __ansible_unsafe object.
-const inventoryOutput = `{
-    "_meta": {
-        "hostvars": {
-            "adguard.home.goodkind.io": {
-                "ansible_host": {"__ansible_unsafe": "3d06:bad:b01::53"},
-                "ansible_proxmox_vmid": 112
-            },
-            "localhost": {"ansible_connection": "local"},
-            "vault": {"ansible_host": "3d06:bad:b01::254", "ansible_user": "root"}
-        }
+// hostVarsOutput follows the ansible-core 2.19 inventory encoder for
+// _meta.hostvars. The encoder writes an untrusted host variable, such as the
+// ansible_host that the Proxmox inventory plugin composes, as an
+// __ansible_unsafe object.
+const hostVarsOutput = `{
+    "adguard.home.goodkind.io": {
+        "ansible_host": {"__ansible_unsafe": "3d06:bad:b01::53"},
+        "ansible_proxmox_vmid": 112
     },
-    "proxmox_servers": {"children": ["vault_servers"]},
-    "vault_servers": {"hosts": ["vault"]}
+    "localhost": {"ansible_connection": "local"},
+    "vault": {"ansible_host": "3d06:bad:b01::254", "ansible_user": "root"}
 }`
 
-func TestDecodeInventoryReadsUntrustedConnectionVariables(t *testing.T) {
-	inv, err := decodeInventory([]byte(inventoryOutput))
-	if err != nil {
-		t.Fatalf("decodeInventory: %v", err)
+func TestHostVarsReadsUntrustedConnectionVariables(t *testing.T) {
+	var hosts map[string]ansible.HostVars
+	if err := json.Unmarshal([]byte(hostVarsOutput), &hosts); err != nil {
+		t.Fatalf("decode hostvars: %v", err)
 	}
-	want := map[string]HostVars{
+	want := map[string]ansible.HostVars{
 		"adguard.home.goodkind.io": {AnsibleHost: "3d06:bad:b01::53", AnsibleUser: "", AnsibleConnection: ""},
 		"localhost":                {AnsibleHost: "", AnsibleUser: "", AnsibleConnection: "local"},
 		"vault":                    {AnsibleHost: "3d06:bad:b01::254", AnsibleUser: "root", AnsibleConnection: ""},
 	}
 	for host, vars := range want {
-		if inv.Hosts[host] != vars {
-			t.Fatalf("Hosts[%s] = %+v, want %+v", host, inv.Hosts[host], vars)
+		if hosts[host] != vars {
+			t.Fatalf("hostvars[%s] = %+v, want %+v", host, hosts[host], vars)
 		}
-	}
-	if got := inv.GroupHosts("proxmox_servers"); len(got) != 1 || got[0] != "vault" {
-		t.Fatalf("GroupHosts(proxmox_servers) = %v, want [vault]", got)
 	}
 }
 
-func TestDecodeInventoryRefusesAnEncryptedConnectionVariable(t *testing.T) {
-	out := `{"_meta": {"hostvars": {"vault": {"ansible_user": {"__ansible_vault": "$ANSIBLE_VAULT;1.1;AES256"}}}}}`
-	_, err := decodeInventory([]byte(out))
+func TestHostVarsRefusesAnEncryptedConnectionVariable(t *testing.T) {
+	out := `{"vault": {"ansible_user": {"__ansible_vault": "$ANSIBLE_VAULT;1.1;AES256"}}}`
+	var hosts map[string]ansible.HostVars
+	err := json.Unmarshal([]byte(out), &hosts)
 	if err == nil || !strings.Contains(err.Error(), "ansible_user") {
-		t.Fatalf("decodeInventory: err = %v, want a refusal that names ansible_user", err)
+		t.Fatalf("decode hostvars: err = %v, want a refusal that includes ansible_user", err)
 	}
 }
