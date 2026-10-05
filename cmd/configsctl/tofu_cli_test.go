@@ -15,7 +15,6 @@ import (
 	ansiblevault "github.com/sosedoff/ansible-vault-go"
 )
 
-// configsctlBinary is the command built once by TestMain.
 var configsctlBinary string
 
 func TestMain(m *testing.M) {
@@ -40,9 +39,8 @@ func runWithBuiltBinary(m *testing.M) int {
 	return m.Run()
 }
 
-// Every vault value has at least 16 characters, the redaction minimum. Every
-// value has a distinct length. A test reads the length of a variable to identify
-// its value.
+// Each vault variable has at least 16 characters.
+// Tests identify exported values by their distinct lengths.
 const (
 	vaultUnlockText    = "fixture-phrase"
 	vaultAlphaValue    = "alpha-secret-value-001"
@@ -114,8 +112,6 @@ variable "vault_shared" {
 
 const settingsContent = "tofu:\n  workspaces_dir: workspaces\n  env_key_prefix: fixture_env_\n"
 
-// configsTree is a temporary configs repository with a separate home directory
-// for the vault password file.
 type configsTree struct {
 	root       string
 	home       string
@@ -138,9 +134,7 @@ func writeFixtureFile(t *testing.T, path, content string) {
 	}
 }
 
-// newConfigsTree writes a workspaces directory with a root backend, the child
-// workspaces alpha (native syntax) and beta (JSON syntax), and the module
-// directory shared, which has no backend block.
+// The shared module has no backend block.
 func newConfigsTree(t *testing.T) configsTree {
 	t.Helper()
 	base := t.TempDir()
@@ -176,8 +170,6 @@ func newConfigsTree(t *testing.T) configsTree {
 	return tree
 }
 
-// runConfigsctl runs the built command from the tree root. TMPDIR is a directory
-// inside the tree for the run logs.
 func runConfigsctl(t *testing.T, tree configsTree, args ...string) commandResult {
 	t.Helper()
 	tempDir := filepath.Join(tree.root, "tmp")
@@ -223,8 +215,7 @@ func requireSuccess(t *testing.T, result commandResult, args ...string) {
 	}
 }
 
-// tofuArgs builds the arguments of one configsctl tofu call. The workspace is
-// empty to select the workspaces directory.
+// An empty workspace selects the workspaces directory.
 func tofuArgs(workspace string, tofuCommand ...string) []string {
 	args := []string{"tofu"}
 	if workspace != "" {
@@ -233,7 +224,6 @@ func tofuArgs(workspace string, tofuCommand ...string) []string {
 	return append(args, tofuCommand...)
 }
 
-// applyWorkspace runs init and apply in the workspace.
 func applyWorkspace(t *testing.T, tree configsTree, workspace string) {
 	t.Helper()
 	initArgs := tofuArgs(workspace, "init", "-input=false")
