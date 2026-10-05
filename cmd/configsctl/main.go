@@ -59,6 +59,8 @@ var handlers = map[string]func(cmdEnv, []string) error{
 	"syntax-check":   runSyntaxCheck,
 	"inventory-dump": runInventoryDump,
 	"version":        runVersion,
+	"gate":           runGate,
+	"gate-finish":    runGateFinish,
 }
 
 // runVersion prints the link-time build identity and the hash of the running
@@ -254,7 +256,7 @@ func runSetSecrets(_ cmdEnv, _ []string) error {
 type deployRunner func(opts ansible.DeployOptions) error
 
 func runDeploy(env cmdEnv, args []string) error {
-	return runDeployWith(env, args, ansible.Deploy)
+	return runDeployWith(env, args, lockedDeploy)
 }
 
 // runDeployWith is runDeploy with the play boundary injectable, so the run log
@@ -328,6 +330,14 @@ func runTofu(env cmdEnv, args []string) error {
 		cmd.Stdout = log
 		cmd.Stderr = log
 		log.Announce("Tofu")
+	}
+
+	if tofuSubcommand(safeArgs) == tofuApply || tofuSubcommand(safeArgs) == tofuDestroy {
+		release, lockErr := lockHypervisors(context.Background())
+		if lockErr != nil {
+			return lockErr
+		}
+		defer release()
 	}
 
 	runErr := cmd.Run()
