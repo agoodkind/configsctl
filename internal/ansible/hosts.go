@@ -45,6 +45,11 @@ func LoadInventory(ctx context.Context, repoRoot string) (Inventory, error) {
 	if err != nil {
 		return Inventory{}, err
 	}
+	return decodeInventory(out)
+}
+
+// decodeInventory decodes the JSON output of ansible-inventory --list.
+func decodeInventory(out []byte) (Inventory, error) {
 	var list inventoryList
 	if err := json.Unmarshal(out, &list); err != nil {
 		slog.Error("ansible.inventory.decode_failed", "err", err)
