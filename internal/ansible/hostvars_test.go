@@ -38,11 +38,16 @@ func TestHostVarsReadsUntrustedConnectionVariables(t *testing.T) {
 	}
 }
 
-func TestHostVarsRefusesAnEncryptedConnectionVariable(t *testing.T) {
-	out := `{"vault": {"ansible_user": {"__ansible_vault": "$ANSIBLE_VAULT;1.1;AES256"}}}`
-	var hosts map[string]ansible.HostVars
-	err := json.Unmarshal([]byte(out), &hosts)
-	if err == nil || !strings.Contains(err.Error(), "ansible_user") {
-		t.Fatalf("decode hostvars: err = %v, want a refusal that includes ansible_user", err)
+func TestHostVarsRefusesAnEncryptedOrNullWrappedConnectionVariable(t *testing.T) {
+	outputs := []string{
+		`{"vault": {"ansible_user": {"__ansible_vault": "$ANSIBLE_VAULT;1.1;AES256"}}}`,
+		`{"vault": {"ansible_user": {"__ansible_unsafe": null}}}`,
+	}
+	for _, out := range outputs {
+		var hosts map[string]ansible.HostVars
+		err := json.Unmarshal([]byte(out), &hosts)
+		if err == nil || !strings.Contains(err.Error(), "ansible_user") {
+			t.Fatalf("decode %s: err = %v, want a refusal that includes ansible_user", out, err)
+		}
 	}
 }

@@ -52,13 +52,13 @@ func inventoryString(raw json.RawMessage) (string, bool) {
 	if err := json.Unmarshal(raw, &plain); err == nil {
 		return plain, true
 	}
-	var wrapped map[string]string
+	var wrapped map[string]*string
 	if err := json.Unmarshal(raw, &wrapped); err != nil {
 		return "", false
 	}
 	value, ok := wrapped[unsafeKey]
-	if !ok || len(wrapped) != 1 {
+	if !ok || value == nil || len(wrapped) != 1 {
 		return "", false
 	}
-	return value, true
+	return *value, true
 }
