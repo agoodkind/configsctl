@@ -12,8 +12,8 @@ import (
 const unsafeKey = "__ansible_unsafe"
 
 // UnmarshalJSON decodes each connection variable from a JSON string or from
-// an untrusted-string wrapper object. Any other JSON type, and any other
-// object, is an error.
+// an untrusted-string wrapper object. An absent or null variable decodes to
+// the empty string. Any other JSON type, and any other object, is an error.
 func (v *HostVars) UnmarshalJSON(data []byte) error {
 	var raw struct {
 		AnsibleHost       json.RawMessage `json:"ansible_host"`
