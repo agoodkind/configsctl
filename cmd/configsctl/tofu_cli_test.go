@@ -39,7 +39,7 @@ func runWithBuiltBinary(m *testing.M) int {
 	return m.Run()
 }
 
-// Each vault variable has at least 16 characters.
+// Each vault value has at least 16 characters.
 // Tests identify exported values by their distinct lengths.
 const (
 	vaultUnlockText    = "fixture-phrase"
