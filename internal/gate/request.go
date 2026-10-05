@@ -67,8 +67,6 @@ var (
 	reasonPattern    = regexp.MustCompile(`^[\x20-\x7E]{1,500}$`)
 )
 
-var errUnusedField = errors.New("request sets a field that its kind does not use")
-
 // DecodeRequest reads one request from r. It refuses an unknown field, a
 // second JSON value, and a body larger than maxRequestBytes.
 func DecodeRequest(r io.Reader) (Request, error) {
@@ -160,7 +158,7 @@ func (r Request) validateRunLookup() error {
 		return fmt.Errorf("run %q is not a run id", r.Run)
 	}
 	if r.Kind == KindStatus && r.Follow {
-		return fmt.Errorf("%w: follow", errUnusedField)
+		return errors.New("a status request does not use follow")
 	}
 	return nil
 }
@@ -212,7 +210,7 @@ func (r Request) requireOnly(allowed ...string) error {
 	}
 	for name, present := range set {
 		if present {
-			return fmt.Errorf("%w: %s", errUnusedField, name)
+			return fmt.Errorf("a %s request does not use the field %s", r.Kind, name)
 		}
 	}
 	return nil

@@ -177,6 +177,7 @@ func (s Server) fail(rec Record, cause error) error {
 	rec.Ended = clock.Stamp()
 	rec.Error = cause.Error()
 	if err := s.Runs.Write(rec); err != nil {
+		slog.Error("gate.run.failure_record_failed", "run", rec.Run, "err", err)
 		return errors.Join(cause, err)
 	}
 	return cause
