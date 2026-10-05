@@ -123,8 +123,6 @@ func tofuVariableNames(dir string) ([]string, error) {
 	return names, nil
 }
 
-// tofuHasBackend reports whether dir is a workspace. A workspace has a backend
-// block inside a terraform block in one of its files.
 func tofuHasBackend(dir string) (bool, error) {
 	blocks, err := tofuModuleBlocks(dir, tofuTerraformSchema)
 	if err != nil {
@@ -143,8 +141,6 @@ func tofuHasBackend(dir string) (bool, error) {
 	return false, nil
 }
 
-// tofuChildWorkspaces returns the sorted names of the direct child directories
-// of workspacesDir that have a backend block.
 func tofuChildWorkspaces(workspacesDir string) ([]string, error) {
 	entries, err := os.ReadDir(workspacesDir)
 	if err != nil {
