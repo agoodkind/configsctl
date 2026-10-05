@@ -39,7 +39,7 @@ func lockPlayHosts(ctx context.Context, opts ansible.DeployOptions) (release fun
 		slog.Error("deploy.lock.inventory_failed", "err", err)
 		return nil, fmt.Errorf("load the inventory for host locks: %w", err)
 	}
-	names, err := ansible.PlayHosts(ctx, opts.Playbook, opts.Limit)
+	names, err := ansible.PlayHosts(ctx, opts)
 	if err != nil {
 		slog.Error("deploy.lock.hosts_failed", "playbook", opts.Playbook, "err", err)
 		return nil, fmt.Errorf("list the hosts of %s: %w", opts.Playbook, err)

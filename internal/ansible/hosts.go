@@ -91,12 +91,16 @@ func (inv Inventory) GroupHosts(group string) []string {
 
 var listHostsHeader = regexp.MustCompile(`^(\s*)hosts \(\d+\):$`)
 
-// PlayHosts returns the hosts that a playbook run with limit targets, from
-// ansible-playbook --list-hosts.
-func PlayHosts(ctx context.Context, playbook, limit string) ([]string, error) {
-	args := []string{"--list-hosts", "--vault-password-file", vaultPassPath(), playbookArg(playbook)}
-	if limit != "" {
-		args = append(args, "--limit", limit)
+// PlayHosts returns the hosts that `opts` targets, from `ansible-playbook
+// --list-hosts`. A static import path can use an extra var. The listing
+// receives the extra vars of the deploy.
+func PlayHosts(ctx context.Context, opts DeployOptions) ([]string, error) {
+	args := []string{"--list-hosts", "--vault-password-file", vaultPassPath(), playbookArg(opts.Playbook)}
+	if opts.Limit != "" {
+		args = append(args, "--limit", opts.Limit)
+	}
+	for _, extra := range opts.ExtraVars {
+		args = append(args, "--extra-vars", extra)
 	}
 	out, err := captureAnsible(ctx, "", "ansible-playbook", args...)
 	if err != nil {
