@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -37,9 +38,10 @@ type inventoryList struct {
 	} `json:"_meta"`
 }
 
-// LoadInventory runs ansible-inventory --list and decodes the result.
-func LoadInventory(ctx context.Context) (Inventory, error) {
-	out, err := captureAnsible(ctx, "ansible-inventory", "--list", "--vault-password-file", vaultPassPath())
+// LoadInventory runs ansible-inventory --list in the ansible directory of
+// repoRoot and decodes the result. An empty repoRoot is the working directory.
+func LoadInventory(ctx context.Context, repoRoot string) (Inventory, error) {
+	out, err := captureAnsible(ctx, repoRoot, "ansible-inventory", "--list", "--vault-password-file", vaultPassPath())
 	if err != nil {
 		return Inventory{}, err
 	}
@@ -96,7 +98,7 @@ func PlayHosts(ctx context.Context, playbook, limit string) ([]string, error) {
 	if limit != "" {
 		args = append(args, "--limit", limit)
 	}
-	out, err := captureAnsible(ctx, "ansible-playbook", args...)
+	out, err := captureAnsible(ctx, "", "ansible-playbook", args...)
 	if err != nil {
 		return nil, err
 	}
@@ -128,9 +130,9 @@ func parseListHosts(out []byte) []string {
 	return sortedKeys(found)
 }
 
-func captureAnsible(ctx context.Context, name string, args ...string) ([]byte, error) {
+func captureAnsible(ctx context.Context, repoRoot, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Dir = ansibleDir
+	cmd.Dir = filepath.Join(repoRoot, ansibleDir)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

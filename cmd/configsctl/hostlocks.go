@@ -34,7 +34,7 @@ func lockedDeploy(opts ansible.DeployOptions) error {
 }
 
 func lockPlayHosts(ctx context.Context, opts ansible.DeployOptions) (release func(), err error) {
-	inv, err := ansible.LoadInventory(ctx)
+	inv, err := ansible.LoadInventory(ctx, "")
 	if err != nil {
 		slog.Error("deploy.lock.inventory_failed", "err", err)
 		return nil, fmt.Errorf("load the inventory for host locks: %w", err)
@@ -48,7 +48,7 @@ func lockPlayHosts(ctx context.Context, opts ansible.DeployOptions) (release fun
 }
 
 func lockHypervisors(ctx context.Context) (release func(), err error) {
-	inv, err := ansible.LoadInventory(ctx)
+	inv, err := ansible.LoadInventory(ctx, "")
 	if err != nil {
 		slog.Error("tofu.lock.inventory_failed", "err", err)
 		return nil, fmt.Errorf("load the inventory for hypervisor locks: %w", err)

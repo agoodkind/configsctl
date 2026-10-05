@@ -209,11 +209,7 @@ func unitState(ctx context.Context, run string) string {
 }
 
 func (s Server) unlock(ctx context.Context, req Request) error {
-	if err := os.Chdir(s.Repo.Dir); err != nil {
-		slog.Error("gate.unlock.chdir_failed", "dir", s.Repo.Dir, "err", err)
-		return fmt.Errorf("enter the Configs clone: %w", err)
-	}
-	inv, err := ansible.LoadInventory(ctx)
+	inv, err := ansible.LoadInventory(ctx, s.Repo.Dir)
 	if err != nil {
 		slog.Error("gate.unlock.inventory_failed", "err", err)
 		return fmt.Errorf("load the inventory for unlock: %w", err)
