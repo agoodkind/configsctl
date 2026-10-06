@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"goodkind.io/configsctl/internal/hostlock"
 )
@@ -14,6 +15,8 @@ const (
 	firstRun  = "20261005T050000Z-aaaaaaaa"
 	secondRun = "20261005T050100Z-bbbbbbbb"
 )
+
+const staleGuardWait = 5 * time.Second
 
 func localHost(t *testing.T) hostlock.Host {
 	t.Helper()
@@ -60,6 +63,31 @@ func TestExpiredLockIsFree(t *testing.T) {
 	body, err := os.ReadFile(filepath.Join(host.Dir, "deploy.lock"))
 	if err != nil || !strings.HasPrefix(string(body), secondRun+" controller-b ") {
 		t.Fatalf("lock file = %q, err = %v; want the second run", body, err)
+	}
+}
+
+func TestAcquireIgnoresAndRemovesGuardsFromAnEarlierBoot(t *testing.T) {
+	host := localHost(t)
+	stale := []string{
+		filepath.Join(host.Dir, "deploy.lock.guard"),
+		filepath.Join(host.Dir, "deploy.lock.guard.earlier-boot"),
+	}
+	for _, guard := range stale {
+		if err := os.Mkdir(guard, 0o700); err != nil {
+			t.Fatalf("create the guard of an earlier boot: %v", err)
+		}
+	}
+	started := time.Now()
+	if err := hostlock.Do(t.Context(), host, hostlock.Acquire, firstRun, "controller-a"); err != nil {
+		t.Fatalf("acquire with guards of an earlier boot: %v", err)
+	}
+	if waited := time.Since(started); waited > staleGuardWait {
+		t.Fatalf("acquire waited %s for a guard of an earlier boot, want under %s", waited, staleGuardWait)
+	}
+	for _, guard := range stale {
+		if _, err := os.Stat(guard); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("guard %s remains after the acquire: %v", guard, err)
+		}
 	}
 }
 
