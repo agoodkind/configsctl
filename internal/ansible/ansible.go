@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"goodkind.io/configsctl/internal/lint"
+	"goodkind.io/configsctl/internal/procgroup"
 )
 
 // ansibleDir is the ansible working tree, relative to the repository root that
@@ -48,9 +49,10 @@ var (
 	templateRE = regexp.MustCompile(`([^\s"'{}]*\.j2)`)
 )
 
-// Deploy lints the playbook's reachable files, then runs ansible-playbook. A
-// blocking lint finding refuses the deploy.
-func Deploy(opts DeployOptions) error {
+// Deploy refuses playbooks with blocking lint findings.
+// Context cancellation stops the local ansible-playbook command. Modules
+// already running on remote hosts may continue.
+func Deploy(ctx context.Context, opts DeployOptions) error {
 	gatePaths := ScopeFiles(opts.Playbook)
 	if opts.FullLint {
 		gatePaths = lint.Discover(".")
@@ -69,7 +71,7 @@ func Deploy(opts DeployOptions) error {
 		}
 		return fmt.Errorf("deploy blocked: %d input-default violation(s)", len(result.NewFindings))
 	}
-	return runPlaybook(opts)
+	return runPlaybook(ctx, opts)
 }
 
 // SyntaxCheck validates a playbook's structure without connecting to a host.
@@ -77,7 +79,7 @@ func SyntaxCheck(playbook string) error {
 	args := []string{
 		"--syntax-check", "--vault-password-file", vaultPassPath(), playbookArg(playbook),
 	}
-	return runStreaming("ansible-playbook", args, nil)
+	return runStreaming(context.Background(), "ansible-playbook", args, nil)
 }
 
 // InventoryDump prints the resolved inventory as YAML. Secret values in the
@@ -95,8 +97,8 @@ func InventoryDump() error {
 	return nil
 }
 
-func runPlaybook(opts DeployOptions) error {
-	return runStreaming("ansible-playbook", playbookArgs(opts), opts.Output)
+func runPlaybook(ctx context.Context, opts DeployOptions) error {
+	return runStreaming(ctx, "ansible-playbook", playbookArgs(opts), opts.Output)
 }
 
 // playbookArgs builds the ansible-playbook argument list for a deploy. It is
@@ -128,8 +130,8 @@ func playbookArgs(opts DeployOptions) []string {
 // nil out sends stdout and stderr to the process streams; a non-nil out receives
 // both, merged in the order the child wrote them, because os/exec gives one
 // descriptor to both fields when they hold the same writer.
-func runStreaming(name string, args []string, out io.Writer) error {
-	cmd := exec.CommandContext(context.Background(), name, args...)
+func runStreaming(ctx context.Context, name string, args []string, out io.Writer) error {
+	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = ansibleDir
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -145,7 +147,7 @@ func runStreaming(name string, args []string, out io.Writer) error {
 	// makes each write reach the destination, which is what streaming means
 	// here.
 	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
-	if err := cmd.Run(); err != nil {
+	if err := procgroup.Run(cmd); err != nil {
 		slog.Error("ansible command failed", "command", name, "err", err)
 		return fmt.Errorf("%s: %w", name, err)
 	}
