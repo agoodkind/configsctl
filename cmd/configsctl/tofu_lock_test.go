@@ -100,7 +100,7 @@ func TestTofuApplyOfSavedPlanLocksTheDeclaredHost(t *testing.T) {
 			args := append([]string{"tofu", "locked", "apply"}, applyArgs...)
 			result := runConfigsctl(t, tree, args...)
 			if result.exitCode == 0 {
-				t.Fatalf("apply succeeded, want a refusal for hv_alpha without an ssh lock target\nstderr: %s", result.stderr)
+				t.Fatalf("Apply succeeded. The test expected a refusal for hv_alpha without an ssh lock target.\nstderr: %s", result.stderr)
 			}
 			if !strings.Contains(result.stderr, "tofu.lock.plan_hosts") || !strings.Contains(result.stderr, "hosts=[hv_alpha]") {
 				t.Fatalf("stderr = %q, want the plan lock set [hv_alpha]", result.stderr)
@@ -135,7 +135,7 @@ func TestTofuApplyOfMissingSavedPlanIsRefusedBeforeLocking(t *testing.T) {
 
 	result := runConfigsctl(t, tree, tofuArgs("locked", "apply", "-auto-approve", "missing.plan")...)
 	if result.exitCode == 0 {
-		t.Fatalf("apply succeeded, want a refusal for the missing saved plan\nstderr: %s", result.stderr)
+		t.Fatalf("Apply succeeded. The test expected a refusal for the missing saved plan.\nstderr: %s", result.stderr)
 	}
 	missingPath := filepath.Join("workspaces", "locked", "missing.plan")
 	if !strings.Contains(result.stderr, "read the saved plan "+missingPath) ||
