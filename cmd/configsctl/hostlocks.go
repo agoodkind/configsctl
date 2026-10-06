@@ -136,13 +136,13 @@ func selectTofuLockHosts(ctx context.Context, inv ansible.Inventory, request tof
 	if !declared {
 		return everyHost, nil
 	}
-	planFile, err := savedPlanFile(request.workspaceDir, request.args)
-	if err != nil {
-		return tofuHostSelection{}, err
-	}
+	planFile := savedPlanCandidate(request.args)
 	if planFile == "" {
 		slog.Info("tofu.lock.all_hypervisors", "workspace", workspace, "reason", "the apply has no saved plan")
 		return everyHost, nil
+	}
+	if err := requireRegularPlan(workspacePath(request.workspaceDir, planFile)); err != nil {
+		return tofuHostSelection{}, err
 	}
 	copyDir, copyPath, err := copySavedPlan(request.workspaceDir, planFile)
 	if err != nil {
@@ -179,6 +179,20 @@ func planDecision(
 	}
 	slog.Info("tofu.lock.plan_hosts", "workspace", workspace, "plan", planPath, "hosts", decision.Hosts)
 	return decision, requireLockTargets(inv, decision.Hosts)
+}
+
+func requireRegularPlan(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		slog.Error("tofu.lock.plan_stat_failed", "plan", path, "err", err)
+		return fmt.Errorf("read the saved plan %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		err := fmt.Errorf("the saved plan %s is not a regular file", path)
+		slog.Error("tofu.lock.plan_not_regular", "plan", path, "err", err)
+		return err
+	}
+	return nil
 }
 
 func copySavedPlan(workspaceDir, planFile string) (string, string, error) {

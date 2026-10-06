@@ -1,9 +1,6 @@
 package main
 
 import (
-	"fmt"
-	"log/slog"
-	"os"
 	"path/filepath"
 	"strings"
 )
@@ -28,26 +25,15 @@ var tofuBooleanFlags = map[string]bool{
 	"suppress-forget-errors": true,
 }
 
-func savedPlanFile(workspaceDir string, args []string) (string, error) {
+func savedPlanCandidate(args []string) string {
 	if len(args) < 2 || tofuSubcommand(args[:len(args)-1]) != tofuApply {
-		return "", nil
+		return ""
 	}
 	candidate := args[len(args)-1]
 	if strings.HasPrefix(candidate, "-") || consumesTofuValue(args[len(args)-2]) {
-		return "", nil
+		return ""
 	}
-	path := workspacePath(workspaceDir, candidate)
-	info, err := os.Stat(path)
-	if err != nil {
-		slog.Error("tofu.lock.plan_stat_failed", "plan", path, "err", err)
-		return "", fmt.Errorf("read the saved plan %s: %w", path, err)
-	}
-	if !info.Mode().IsRegular() {
-		err := fmt.Errorf("the saved plan %s is not a regular file", path)
-		slog.Error("tofu.lock.plan_not_regular", "plan", path, "err", err)
-		return "", err
-	}
-	return candidate, nil
+	return candidate
 }
 
 func consumesTofuValue(arg string) bool {
