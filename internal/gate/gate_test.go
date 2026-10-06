@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	ansiblevault "github.com/sosedoff/ansible-vault-go"
+
 	"goodkind.io/configsctl/internal/gate"
 )
 
@@ -25,7 +27,34 @@ func controllerClone(t *testing.T) (clone, onMain, offMain string) {
 	onMain = strings.TrimSpace(git(t, clone, "rev-parse", "HEAD"))
 	commitFile(t, clone, "ansible/playbooks/local-only.yml")
 	offMain = strings.TrimSpace(git(t, clone, "rev-parse", "HEAD"))
+	writeVault(t, clone)
 	return clone, onMain, offMain
+}
+
+const (
+	vaultUnlockText = "fixture-phrase"
+	deployToken     = "deploy-token-0123456789abcdef"
+)
+
+func vaultPasswordFile(clone string) string {
+	return filepath.Join(filepath.Dir(clone), "vault.pass")
+}
+
+func vaultPath(clone string) string {
+	return filepath.Join(clone, "ansible", "inventory", "group_vars", "all", "vault.yml")
+}
+
+func writeVault(t *testing.T, clone string) {
+	t.Helper()
+	if err := os.WriteFile(vaultPasswordFile(clone), []byte(vaultUnlockText+"\n"), 0o600); err != nil {
+		t.Fatalf("write vault password file: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(vaultPath(clone)), 0o700); err != nil {
+		t.Fatalf("create vault directory: %v", err)
+	}
+	if err := ansiblevault.EncryptFile(vaultPath(clone), "vault_deploy_token: "+deployToken+"\n", vaultUnlockText); err != nil {
+		t.Fatalf("encrypt vault: %v", err)
+	}
 }
 
 func commitFile(t *testing.T, repo, path string) {
@@ -57,12 +86,13 @@ func serve(t *testing.T, clone, sshCommand, request string) (string, error) {
 	t.Helper()
 	var out bytes.Buffer
 	server := gate.Server{
-		Repo:       gate.Repo{Dir: clone},
-		Runs:       gate.Runs{Dir: filepath.Join(t.TempDir(), "runs")},
-		Requester:  "claude",
-		Controller: "controller-test",
-		Self:       "/usr/local/bin/configsctl",
-		Out:        &out,
+		Repo:              gate.Repo{Dir: clone},
+		Runs:              gate.Runs{Dir: filepath.Join(t.TempDir(), "runs")},
+		Requester:         "claude",
+		Controller:        "controller-test",
+		Self:              "/usr/local/bin/configsctl",
+		Out:               &out,
+		VaultPasswordFile: vaultPasswordFile(clone),
 	}
 	err := server.Serve(t.Context(), sshCommand, strings.NewReader(request))
 	return out.String(), err

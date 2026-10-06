@@ -35,65 +35,107 @@ type Server struct {
 	Requester  string
 	Controller string
 	// Self is the path of the configsctl binary that runs gate-finish.
-	Self string
-	Out  io.Writer
+	Self              string
+	Out               io.Writer
+	VaultPasswordFile string
+}
+
+type outcome struct {
+	stored Request
+	run    string
+	err    error
 }
 
 // Serve reads the request on in and writes the answer to s.Out.
+// Serve can return a journal error after starting a unit and writing its answer.
 func (s Server) Serve(ctx context.Context, sshCommand string, in io.Reader) error {
-	if !requesterPattern.MatchString(s.Requester) {
-		return fmt.Errorf("requester %q is not a requester name", s.Requester)
-	}
-	if strings.TrimSpace(sshCommand) != requestCommand {
-		return fmt.Errorf("this key runs only %q with a JSON request on stdin", requestCommand)
-	}
-	req, err := DecodeRequest(in)
+	requests, err := s.Runs.openJournal()
 	if err != nil {
 		return err
 	}
+	result := s.handle(ctx, sshCommand, in)
+	if err := requests.record(s.journalEntry(result)); err != nil {
+		slog.Error("gate.request.journal_failed", "requester", s.Requester, "run", result.run, "err", err)
+		return fmt.Errorf("journal the request: %w", errors.Join(result.err, err))
+	}
+	return result.err
+}
+
+func refused(err error) outcome {
+	var unread Request
+	return outcome{stored: unread, run: "", err: err}
+}
+
+func (s Server) handle(ctx context.Context, sshCommand string, in io.Reader) outcome {
+	if !requesterPattern.MatchString(s.Requester) {
+		return refused(fmt.Errorf("requester %q is not a requester name", s.Requester))
+	}
+	if strings.TrimSpace(sshCommand) != requestCommand {
+		return refused(fmt.Errorf("this key runs only %q with a JSON request on stdin", requestCommand))
+	}
+	req, err := DecodeRequest(in)
+	if err != nil {
+		return refused(err)
+	}
+	secrets, err := s.secretPatterns()
+	if err != nil {
+		return s.withheld(req, err)
+	}
+	stored, err := maskedRequest(req, secrets)
+	if err != nil {
+		return refused(err)
+	}
 	if err := req.Validate(); err != nil {
-		return err
+		return outcome{stored: stored, run: "", err: err}
 	}
 	slog.Info("gate.request.accepted", "requester", s.Requester, "kind", string(req.Kind), "session", req.Session)
+	return s.answer(ctx, req, stored, secrets)
+}
+
+func (s Server) dispatch(ctx context.Context, req, stored Request) (string, error) {
 	switch req.Kind {
 	case KindDeploy, KindTofu:
-		return s.start(ctx, req)
+		return s.start(ctx, req, stored)
 	case KindStatus:
-		return s.status(ctx, req.Run)
+		return req.Run, s.status(ctx, req.Run)
 	case KindLogs:
-		return s.logs(ctx, req.Run, req.Follow)
+		return req.Run, s.logs(ctx, req.Run, req.Follow)
 	case KindUnlock:
-		return s.unlock(ctx, req)
+		return req.Run, s.unlock(ctx, req)
 	case KindRuns:
-		return s.list()
+		return "", s.list()
 	default:
-		return fmt.Errorf("unknown request kind %q", req.Kind)
+		return "", fmt.Errorf("unknown request kind %q", req.Kind)
 	}
 }
 
-func (s Server) start(ctx context.Context, req Request) error {
+func (s Server) start(ctx context.Context, req, stored Request) (string, error) {
 	if err := s.Repo.Fetch(ctx); err != nil {
-		return err
+		return "", err
 	}
 	if err := s.Repo.RequireOnMain(ctx, req.Commit); err != nil {
-		return err
+		return "", err
 	}
 	run, err := runid.New()
 	if err != nil {
 		slog.Error("gate.run.id_failed", "err", err)
-		return fmt.Errorf("create run id: %w", err)
+		return "", fmt.Errorf("create run id: %w", err)
 	}
 	if err := s.Runs.Create(run); err != nil {
-		return err
+		return run, err
 	}
 	rec := Record{
-		Run: run, Controller: s.Controller, Requester: s.Requester, Request: req, Started: clock.Stamp(),
+		Run: run, Controller: s.Controller, Requester: s.Requester, Request: stored, Started: clock.Stamp(),
 		Ended: "", ExitStatus: nil, ServiceResult: "", Error: "",
 	}
 	if err := s.Runs.Write(rec); err != nil {
-		return err
+		return run, err
 	}
-	worktree := s.Runs.worktree(run)
+	return run, s.launch(ctx, rec, req)
+}
+
+func (s Server) launch(ctx context.Context, rec Record, req Request) error {
+	worktree := s.Runs.worktree(rec.Run)
 	if err := s.Repo.AddWorktree(ctx, worktree, req.Commit); err != nil {
 		return s.fail(rec, err)
 	}
@@ -103,10 +145,10 @@ func (s Server) start(ctx context.Context, req Request) error {
 			return s.fail(rec, fmt.Errorf("playbook %s does not exist at commit %s", req.Playbook, req.Commit))
 		}
 	}
-	if err := s.startUnit(ctx, run, worktree, runCommand(worktree, req)); err != nil {
+	if err := s.startUnit(ctx, rec.Run, worktree, runCommand(worktree, req)); err != nil {
 		return s.fail(rec, err)
 	}
-	return writeJSON(s.Out, startAnswer{Run: run, Controller: s.Controller})
+	return writeJSON(s.Out, startAnswer{Run: rec.Run, Controller: s.Controller})
 }
 
 type startAnswer struct {

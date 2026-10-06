@@ -30,13 +30,19 @@ func runGate(_ cmdEnv, args []string) error {
 		slog.Error("gate.hostname_unavailable", "err", err)
 		return fmt.Errorf("read the controller host name: %w", err)
 	}
+	passwordFile, err := vaultPassPath()
+	if err != nil {
+		slog.Error("gate.vault_password_path_unavailable", "err", err)
+		return fmt.Errorf("resolve the vault password file: %w", err)
+	}
 	server := gate.Server{
-		Repo:       gate.Repo{Dir: controllerConfigsDir},
-		Runs:       gate.Runs{Dir: controllerRunsDir},
-		Requester:  args[1],
-		Controller: controller,
-		Self:       self,
-		Out:        os.Stdout,
+		Repo:              gate.Repo{Dir: controllerConfigsDir},
+		Runs:              gate.Runs{Dir: controllerRunsDir},
+		Requester:         args[1],
+		Controller:        controller,
+		Self:              self,
+		Out:               os.Stdout,
+		VaultPasswordFile: passwordFile,
 	}
 	if err := server.Serve(context.Background(), os.Getenv("SSH_ORIGINAL_COMMAND"), os.Stdin); err != nil {
 		slog.Error("gate.request.refused", "requester", args[1], "err", err)
