@@ -26,7 +26,7 @@ import (
 
 // defaultVaultFile is the vault path relative to the repository root, which is
 // the working directory the binary runs from.
-const defaultVaultFile = "ansible/inventory/group_vars/all/vault.yml"
+const defaultVaultFile = vault.File
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -574,43 +574,35 @@ func (e *shortSecretError) Error() string {
 	return fmt.Sprintf("vault key %q value shorter than %d chars", e.key, redact.MinLen)
 }
 
-// vaultInputs returns the vault and password-file paths and whether both are
-// present. When the home dir cannot be resolved or either file is absent,
-// available is false and the caller runs without redaction patterns, because
-// nothing decrypts anywhere in that case.
-func vaultInputs() (vaultPath, passwordFile string, available bool) {
+// vaultInputs returns the password-file path and whether it and the vault are
+// both present. When the home dir cannot be resolved or either file is absent,
+// available is false and the caller runs without redaction patterns.
+func vaultInputs() (passwordFile string, available bool) {
 	passwordFile, err := vaultPassPath()
 	if err != nil {
-		return "", "", false
+		return "", false
 	}
 	if _, statErr := os.Stat(defaultVaultFile); statErr != nil {
-		return "", "", false
+		return "", false
 	}
 	if _, statErr := os.Stat(passwordFile); statErr != nil {
-		return "", "", false
+		return "", false
 	}
-	return defaultVaultFile, passwordFile, true
+	return passwordFile, true
 }
 
 // loadSecretPatterns reads the vault and builds redaction patterns. An absent
-// vault or password file yields no patterns and no error, because nothing
-// decrypts anywhere in that case. A too-short secret returns *shortSecretError.
+// vault or password file yields no patterns and no error. A too-short secret
+// returns *shortSecretError.
 func loadSecretPatterns() ([]redact.Pattern, error) {
-	vaultPath, passwordFile, available := vaultInputs()
+	passwordFile, available := vaultInputs()
 	if !available {
 		return nil, nil
 	}
-	values, err := vault.Values(vaultPath, passwordFile)
+	patterns, err := vault.Patterns(".", passwordFile)
 	if err != nil {
 		slog.Error("vault values load failed", "err", err)
 		return nil, fmt.Errorf("load vault values: %w", err)
-	}
-	patterns := make([]redact.Pattern, 0, len(values))
-	for name, value := range values {
-		if value == "" {
-			continue
-		}
-		patterns = append(patterns, redact.Pattern{Value: []byte(value), Label: name})
 	}
 	if badKey, ok := redact.Validate(patterns); !ok {
 		return nil, &shortSecretError{key: badKey}
