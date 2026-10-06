@@ -20,7 +20,6 @@ type Decision struct {
 	Hosts    []string
 }
 
-// Decide selects declared hosts for planned resource changes.
 // Decide skips no-op and read changes and resource types in LockFreeTypes.
 // Decide selects every hypervisor when plan decoding, format validation, or
 // host selection fails.
