@@ -195,22 +195,27 @@ func newLockOnlyTree(t *testing.T) configsTree {
 	return tree
 }
 
-func TestTofuApplyWithoutSavedPlanLocksTheLockOnlyGroup(t *testing.T) {
+func TestTofuApplyWithoutSavedPlanRefusesAnUntargetedLockOnlyHost(t *testing.T) {
 	requireTofu(t)
 	tree := newLockOnlyTree(t)
 
-	args := tofuArgs("locked", "apply", "-auto-approve", "-input=false")
-	result := runConfigsctl(t, tree, args...)
-	requireSuccess(t, result, args...)
-	if !strings.Contains(result.stderr, "the apply has no saved plan") {
-		t.Fatalf("stderr = %q, want the fallback for an apply without a saved plan", result.stderr)
+	result := runConfigsctl(t, tree, tofuArgs("locked", "apply", "-auto-approve", "-input=false")...)
+	if result.exitCode == 0 {
+		t.Fatalf("Apply succeeded. The test expected a refusal for lock_only without an ssh lock target.\nstderr: %s", result.stderr)
 	}
 	if !strings.Contains(result.stderr, `hostlock.targets_skipped hosts="[hv_alpha lock_only]"`) {
 		t.Fatalf("stderr = %q, want the lock set [hv_alpha lock_only]", result.stderr)
 	}
+	if !strings.Contains(result.stderr, "host lock_only from inventory group tofu_lock_hosts has no ssh lock target") {
+		t.Fatalf("stderr = %q, want the refusal for lock_only from tofu_lock_hosts", result.stderr)
+	}
+	if strings.Contains(result.stderr, "hostlock.acquired") {
+		t.Fatalf("stderr = %q, want no lock before the refusal", result.stderr)
+	}
+	requireNoFile(t, filepath.Join(tree.workspaces, "locked", "locked.tfstate"))
 }
 
-func TestTofuApplyOfSavedPlanAcceptsALockOnlyTarget(t *testing.T) {
+func TestTofuApplyOfSavedPlanSelectsALockOnlyTarget(t *testing.T) {
 	requireTofu(t)
 	tree := newLockOnlyTree(t)
 	planTarget(t, tree, "module.alpha", "alpha.tfplan")
