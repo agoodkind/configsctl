@@ -58,8 +58,7 @@ func lockPlayHosts(ctx context.Context, opts ansible.DeployOptions) (context.Con
 	variables := loaded.Deploy.LockHostVariables[ansible.PlaybookName(opts.Playbook)]
 	hosts, err := deployLockTargets(inv, names, variables)
 	if err != nil {
-		slog.Error("deploy.lock.variable_hosts_failed", "playbook", opts.Playbook, "err", err)
-		return nil, nil, fmt.Errorf("find the lock hosts of %s: %w", opts.Playbook, err)
+		return nil, nil, err
 	}
 	return takeLocks(ctx, hosts)
 }
@@ -68,7 +67,7 @@ func deployLockTargets(inv ansible.Inventory, playHosts, variables []string) ([]
 	extraHosts, err := inv.VariableHosts(playHosts, variables)
 	if err != nil {
 		slog.Error("deploy.lock.variable_read_failed", "variables", variables, "err", err)
-		return nil, fmt.Errorf("read the lock host variables: %w", err)
+		return nil, fmt.Errorf("read the lock host variables %v: %w", variables, err)
 	}
 	targeted := map[string]bool{}
 	for _, target := range hostlock.Targets(inv, extraHosts) {

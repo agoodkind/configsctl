@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"slices"
 )
 
@@ -63,20 +62,14 @@ func (inv Inventory) VariableHosts(hosts, variables []string) ([]string, error) 
 func (inv Inventory) variableHost(host, variable string) (string, error) {
 	raw, ok := inv.variables[host][variable]
 	if !ok {
-		err := fmt.Errorf("host %s has no inventory variable %s", host, variable)
-		slog.Error("ansible.inventory.variable_missing", "host", host, "variable", variable, "err", err)
-		return "", err
+		return "", fmt.Errorf("host %s has no inventory variable %s", host, variable)
 	}
 	value, ok := inventoryString(raw)
 	if !ok || value == "" {
-		err := fmt.Errorf("inventory variable %s of host %s is not a host name string", variable, host)
-		slog.Error("ansible.inventory.variable_not_string", "host", host, "variable", variable, "err", err)
-		return "", err
+		return "", fmt.Errorf("inventory variable %s of host %s is not a host name string", variable, host)
 	}
 	if !inv.hasHost(value) {
-		err := fmt.Errorf("inventory variable %s of host %s is %s, which is not an inventory host", variable, host, value)
-		slog.Error("ansible.inventory.variable_host_unknown", "host", host, "variable", variable, "err", err)
-		return "", err
+		return "", fmt.Errorf("inventory variable %s of host %s is %s, which is not an inventory host", variable, host, value)
 	}
 	return value, nil
 }
