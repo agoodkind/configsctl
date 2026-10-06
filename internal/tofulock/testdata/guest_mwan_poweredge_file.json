@@ -1,0 +1,37 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.6",
+  "planned_values": {"root_module": {}},
+  "resource_changes": [
+    {
+      "address": "mwan_network_config.example",
+      "mode": "managed",
+      "type": "mwan_network_config",
+      "name": "example",
+      "provider_name": "registry.opentofu.org/agoodkind/mwan",
+      "change": {
+        "actions": ["update"],
+        "before": {"id": "example", "uplinks": ["wan0"]},
+        "after": {"id": "example", "uplinks": ["wan0", "wan1"]},
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "pveguest_file.mwan_config",
+      "mode": "managed",
+      "type": "pveguest_file",
+      "name": "mwan_config",
+      "provider_name": "registry.opentofu.org/agoodkind/pveguest",
+      "change": {
+        "actions": ["update"],
+        "before": {"node": "poweredge", "vmid": 301, "path": "/etc/mwan/config.yml", "content": "old"},
+        "after": {"node": "poweredge", "vmid": 301, "path": "/etc/mwan/config.yml", "content": "new"},
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    }
+  ]
+}

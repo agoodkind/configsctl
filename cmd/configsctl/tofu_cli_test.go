@@ -355,6 +355,8 @@ const lockTargetsSettingsForm = `  lock_targets:
         vault: vault
       guest_hosts:
         suburban/224: clyde_suburban
+      lock_free_types:
+        - mwan_network_config
 `
 
 func TestTofuAcceptsLockTargets(t *testing.T) {
@@ -401,6 +403,21 @@ func TestTofuRejectsInvalidSettingsFile(t *testing.T) {
 			name:     "empty lock host variable name",
 			content:  settingsContent + "deploy:\n  lock_host_variables:\n    deploy-mwan: [\"\"]\n",
 			fragment: "empty variable name",
+		},
+		{
+			name:     "empty lock-free type list",
+			content:  settingsContent + "  lock_targets:\n    workspaces:\n      node_hosts:\n        suburban: suburban\n      lock_free_types: []\n",
+			fragment: "lock_free_types is empty",
+		},
+		{
+			name:     "empty lock-free type name",
+			content:  settingsContent + "  lock_targets:\n    workspaces:\n      node_hosts:\n        suburban: suburban\n      lock_free_types: [\"\"]\n",
+			fragment: "lock_free_types has an empty type name",
+		},
+		{
+			name:     "only lock-free types",
+			content:  settingsContent + "  lock_targets:\n    workspaces:\n      lock_free_types: [mwan_network_config]\n",
+			fragment: "declares no mappings",
 		},
 		{
 			name:     "unknown deploy key",

@@ -20,8 +20,9 @@ type Decision struct {
 	Hosts    []string
 }
 
-// Decide selects declared hosts for changes other than no-op and read.
-// Decide requires every hypervisor when plan decoding, format validation, or
+// Decide selects declared hosts for planned resource changes.
+// Decide skips no-op and read changes and resource types in LockFreeTypes.
+// Decide selects every hypervisor when plan decoding, format validation, or
 // host selection fails.
 func Decide(plan []byte, targets Targets) Decision {
 	var document planDocument
@@ -33,7 +34,7 @@ func Decide(plan []byte, targets Targets) Decision {
 	}
 	found := map[string]struct{}{}
 	for _, resource := range document.ResourceChanges {
-		if resource.Change.inert() {
+		if resource.Change.inert() || slices.Contains(targets.LockFreeTypes, resource.Type) {
 			continue
 		}
 		hosts, reason := targets.changeHosts(resource)
@@ -56,19 +57,24 @@ func (t Targets) changeHosts(resource resourceChange) ([]string, string) {
 	if resource.Change.deletes() && states.nodeUnknown() {
 		return nil, resource.Address + " deletes a resource with an unknown node"
 	}
-	hosts, reason := t.moduleHosts(resource.Address)
-	if reason != "" {
-		return nil, reason
-	}
+	var nodeHosts []string
 	if t.NodeHosts != nil && strings.HasPrefix(resource.Type, guestTypePrefix) {
-		nodeHosts, nodeReason := t.nodeHosts(resource.Address, states)
-		if nodeReason != "" {
-			return nil, nodeReason
+		var reason string
+		nodeHosts, reason = t.nodeHosts(resource.Address, states)
+		if reason != "" {
+			return nil, reason
 		}
-		hosts = append(hosts, nodeHosts...)
 	}
-	if len(hosts) == 0 {
-		return nil, resource.Address + " matches no lock target"
+	hosts := nodeHosts
+	for _, address := range resource.addresses() {
+		addressHosts, reason := t.moduleHosts(address)
+		if reason != "" {
+			return nil, reason
+		}
+		if len(addressHosts) == 0 && len(nodeHosts) == 0 {
+			return nil, address + " matches no lock target"
+		}
+		hosts = append(hosts, addressHosts...)
 	}
 	return hosts, ""
 }
@@ -115,6 +121,9 @@ func (t Targets) nodeHosts(address string, states changeStates) ([]string, strin
 	if len(present) == 0 {
 		return nil, address + " has no node"
 	}
+	guestVmid := t.GuestHosts != nil && slices.ContainsFunc(present, func(state *resourceState) bool {
+		return state.declares(vmidAttribute)
+	})
 	var hosts []string
 	for _, state := range present {
 		node, known := state.text(nodeAttribute)
@@ -126,10 +135,15 @@ func (t Targets) nodeHosts(address string, states changeStates) ([]string, strin
 			return nil, fmt.Sprintf("%s is on node %s, which has no lock target", address, node)
 		}
 		hosts = append(hosts, host)
-		if vmid, vmidKnown := state.text(vmidAttribute); vmidKnown {
-			if guest, guestDeclared := t.GuestHosts[node+"/"+vmid]; guestDeclared {
-				hosts = append(hosts, guest)
-			}
+		if !guestVmid {
+			continue
+		}
+		vmid, vmidKnown := state.text(vmidAttribute)
+		if !vmidKnown {
+			return nil, address + " has an unknown or null vmid"
+		}
+		if guest, guestDeclared := t.GuestHosts[node+"/"+vmid]; guestDeclared {
+			hosts = append(hosts, guest)
 		}
 	}
 	return hosts, ""

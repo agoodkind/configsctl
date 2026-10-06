@@ -1,0 +1,37 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.6",
+  "planned_values": {"root_module": {}},
+  "resource_changes": [
+    {
+      "address": "mwan_network_config.example",
+      "mode": "managed",
+      "type": "mwan_network_config",
+      "name": "example",
+      "provider_name": "registry.opentofu.org/agoodkind/mwan",
+      "change": {
+        "actions": ["update"],
+        "before": {"id": "example", "uplinks": ["wan0"]},
+        "after": {"id": "example", "uplinks": ["wan0", "wan1"]},
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "pveguest_container.clyde",
+      "mode": "managed",
+      "type": "pveguest_container",
+      "name": "clyde",
+      "provider_name": "registry.opentofu.org/agoodkind/pveguest",
+      "change": {
+        "actions": ["update"],
+        "before": {"node": "suburban", "vmid": 224, "memory": 4096},
+        "after": {"node": "suburban", "vmid": 224, "memory": 8192},
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    }
+  ]
+}

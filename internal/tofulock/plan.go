@@ -26,9 +26,17 @@ type planDocument struct {
 }
 
 type resourceChange struct {
-	Address string       `json:"address"`
-	Type    string       `json:"type"`
-	Change  changeValues `json:"change"`
+	Address         string       `json:"address"`
+	PreviousAddress string       `json:"previous_address"`
+	Type            string       `json:"type"`
+	Change          changeValues `json:"change"`
+}
+
+func (r resourceChange) addresses() []string {
+	if r.PreviousAddress == "" || r.PreviousAddress == r.Address {
+		return []string{r.Address}
+	}
+	return []string{r.PreviousAddress, r.Address}
 }
 
 type changeValues struct {
@@ -105,6 +113,11 @@ func unknownAttributes(raw json.RawMessage) (map[string]bool, bool) {
 		unknown[name] = bytes.Equal(bytes.TrimSpace(value), jsonTrue)
 	}
 	return unknown, false
+}
+
+func (s *resourceState) declares(name string) bool {
+	_, present := s.attributes[name]
+	return present || s.isUnknown(name)
 }
 
 func (s *resourceState) isUnknown(name string) bool {

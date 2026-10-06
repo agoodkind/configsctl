@@ -15,10 +15,13 @@ type Targets struct {
 	ModuleKeyHosts map[string]map[string]string `yaml:"module_key_hosts"`
 	NodeHosts      map[string]string            `yaml:"node_hosts"`
 	GuestHosts     map[string]string            `yaml:"guest_hosts"`
+	LockFreeTypes  []string                     `yaml:"lock_free_types"`
 }
 
-// Validate rejects missing mappings, empty maps, empty keys, empty host names,
-// and guest keys without the <node>/<vmid> form.
+// Validate requires at least one host mapping.
+// Validate rejects empty declared maps, keys, and host names.
+// Validate requires guest keys in <node>/<vmid> form.
+// Validate rejects a declared LockFreeTypes list with no types or an empty name.
 func (t Targets) Validate() error {
 	if t.ModuleHosts == nil && t.ModuleKeyHosts == nil && t.NodeHosts == nil && t.GuestHosts == nil {
 		return errors.New("declares no mappings")
@@ -34,6 +37,12 @@ func (t Targets) Validate() error {
 	}
 	if err := validateGuestKeys(t.GuestHosts); err != nil {
 		return err
+	}
+	if t.LockFreeTypes != nil && len(t.LockFreeTypes) == 0 {
+		return errors.New("lock_free_types is empty")
+	}
+	if slices.Contains(t.LockFreeTypes, "") {
+		return errors.New("lock_free_types has an empty type name")
 	}
 	if t.ModuleKeyHosts != nil && len(t.ModuleKeyHosts) == 0 {
 		return errors.New("module_key_hosts is empty")
