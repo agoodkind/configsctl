@@ -18,9 +18,16 @@ import (
 	"goodkind.io/configsctl/internal/tofulock"
 )
 
-// Destroy locks every host in hypervisorGroup even when tofu.lock_targets
-// declares hosts for the workspace.
-const hypervisorGroup = "proxmox_servers"
+const (
+	hypervisorGroup   = "proxmox_servers"
+	tofuLockOnlyGroup = "tofu_lock_hosts"
+)
+
+func allTofuLockHosts(inv ansible.Inventory) []string {
+	names := slices.Concat(inv.GroupHosts(hypervisorGroup), inv.GroupHosts(tofuLockOnlyGroup))
+	slices.Sort(names)
+	return slices.Compact(names)
+}
 
 // Check-mode deployments do not acquire host locks.
 // Lock loss cancels the local command before lock release. Remote Ansible
@@ -115,7 +122,12 @@ func lockTofuHosts(
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	lockedCtx, releaseLocks, err := takeLocks(ctx, hostlock.Targets(inv, selection.names))
+	targets := hostlock.Targets(inv, selection.names)
+	if err := requireLockOnlyTargets(inv, selection.names, targets); err != nil {
+		selection.cleanup()
+		return nil, nil, nil, err
+	}
+	lockedCtx, releaseLocks, err := takeLocks(ctx, targets)
 	if err != nil {
 		selection.cleanup()
 		return nil, nil, nil, err
@@ -126,8 +138,24 @@ func lockTofuHosts(
 	}, nil
 }
 
+func requireLockOnlyTargets(inv ansible.Inventory, names []string, targets []hostlock.Host) error {
+	targeted := map[string]bool{}
+	for _, target := range targets {
+		targeted[target.Name] = true
+	}
+	lockOnlyHosts := inv.GroupHosts(tofuLockOnlyGroup)
+	for _, name := range names {
+		if slices.Contains(lockOnlyHosts, name) && !targeted[name] {
+			err := fmt.Errorf("host %s from inventory group %s has no ssh lock target", name, tofuLockOnlyGroup)
+			slog.Error("tofu.lock.lock_only_host_untargeted", "host", name, "group", tofuLockOnlyGroup, "err", err)
+			return err
+		}
+	}
+	return nil
+}
+
 func selectTofuLockHosts(ctx context.Context, inv ansible.Inventory, request tofuLockRequest) (tofuHostSelection, error) {
-	everyHost := tofuHostSelection{names: inv.GroupHosts(hypervisorGroup), args: request.args, cleanup: func() {}}
+	everyHost := tofuHostSelection{names: allTofuLockHosts(inv), args: request.args, cleanup: func() {}}
 	if tofuSubcommand(request.args) != tofuApply {
 		return everyHost, nil
 	}
