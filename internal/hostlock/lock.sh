@@ -10,8 +10,31 @@ CONTROLLER=$3
 TTL=$4
 LOCK_DIR=$5
 LOCK_FILE="$LOCK_DIR/deploy.lock"
-GUARD_DIR="$LOCK_DIR/deploy.lock.guard"
+GUARD_PREFIX="$LOCK_DIR/deploy.lock.guard"
 GUARD_WAIT_SECONDS=30
+
+boot_id() {
+    local boot_time
+    if [[ -r /proc/sys/kernel/random/boot_id ]]; then
+        cat /proc/sys/kernel/random/boot_id
+        return
+    fi
+    boot_time=$(sysctl -n kern.boottime)
+    boot_time=${boot_time#*sec = }
+    echo "${boot_time%%,*}"
+}
+
+# A reboot skips the EXIT trap that removes the guard directory.
+GUARD_DIR="$GUARD_PREFIX.$(boot_id)"
+
+remove_stale_guards() {
+    local guard
+    for guard in "$GUARD_PREFIX" "$GUARD_PREFIX".*; do
+        if [[ -d "$guard" && "$guard" != "$GUARD_DIR" ]]; then
+            rm -rf "$guard"
+        fi
+    done
+}
 
 take_guard() {
     local waited=0
@@ -25,6 +48,7 @@ take_guard() {
         waited=$((waited + 1))
     done
     trap 'rmdir "$GUARD_DIR"' EXIT
+    remove_stale_guards
 }
 
 write_lock() {
