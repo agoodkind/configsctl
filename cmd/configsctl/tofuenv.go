@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -22,7 +24,12 @@ const settingsFile = "configsctl.yml"
 const tofuVariablePrefix = "TF_VAR_"
 
 type settings struct {
-	Tofu tofuSettings `yaml:"tofu"`
+	Tofu   tofuSettings   `yaml:"tofu"`
+	Deploy deploySettings `yaml:"deploy"`
+}
+
+type deploySettings struct {
+	LockHostVariables map[string][]string `yaml:"lock_host_variables"`
 }
 
 type tofuSettings struct {
@@ -52,7 +59,23 @@ func loadSettings(path string) (settings, error) {
 	if loaded.Tofu.EnvKeyPrefix == "" {
 		return loaded, errors.New(path + ": tofu.env_key_prefix is empty")
 	}
-	return loaded, nil
+	return loaded, validateDeploySettings(path, loaded.Deploy)
+}
+
+func validateDeploySettings(path string, deploy deploySettings) error {
+	for _, playbook := range slices.Sorted(maps.Keys(deploy.LockHostVariables)) {
+		variables := deploy.LockHostVariables[playbook]
+		if playbook == "" {
+			return errors.New(path + ": deploy.lock_host_variables has an empty playbook name")
+		}
+		if len(variables) == 0 {
+			return fmt.Errorf("%s: deploy.lock_host_variables.%s is empty", path, playbook)
+		}
+		if slices.Contains(variables, "") {
+			return fmt.Errorf("%s: deploy.lock_host_variables.%s has an empty variable name", path, playbook)
+		}
+	}
+	return nil
 }
 
 var tofuVariableSchema = &hcl.BodySchema{

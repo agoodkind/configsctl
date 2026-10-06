@@ -328,6 +328,16 @@ func TestTofuWithoutRootBackendListsChildWorkspaces(t *testing.T) {
 	}
 }
 
+func TestTofuAcceptsDeployLockHostVariables(t *testing.T) {
+	requireTofu(t)
+	tree := newConfigsTree(t)
+	content := settingsContent + "deploy:\n  lock_host_variables:\n    deploy-mwan: [mwan_proxmox_delegate]\n"
+	writeFixtureFile(t, filepath.Join(tree.root, "configsctl.yml"), content)
+
+	args := tofuArgs("alpha", "version")
+	requireSuccess(t, runConfigsctl(t, tree, args...), args...)
+}
+
 func TestTofuRejectsInvalidSettingsFile(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -353,6 +363,21 @@ func TestTofuRejectsInvalidSettingsFile(t *testing.T) {
 			name:     "removed module key",
 			content:  "tofu:\n  module_dir: workspaces\n  env_key_prefix: fixture_env_\n",
 			fragment: "module_dir",
+		},
+		{
+			name:     "empty lock host variable list",
+			content:  settingsContent + "deploy:\n  lock_host_variables:\n    deploy-mwan: []\n",
+			fragment: "deploy.lock_host_variables.deploy-mwan is empty",
+		},
+		{
+			name:     "empty lock host variable name",
+			content:  settingsContent + "deploy:\n  lock_host_variables:\n    deploy-mwan: [\"\"]\n",
+			fragment: "empty variable name",
+		},
+		{
+			name:     "unknown deploy key",
+			content:  settingsContent + "deploy:\n  lock_hosts:\n    deploy-mwan: [mwan_proxmox_delegate]\n",
+			fragment: "lock_hosts",
 		},
 	}
 	for _, testCase := range cases {

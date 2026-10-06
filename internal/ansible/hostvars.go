@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"slices"
 )
 
 // unsafeKey is the wrapper key of an untrusted string in ansible-inventory
@@ -40,6 +42,55 @@ func (v *HostVars) UnmarshalJSON(data []byte) error {
 		*field.value = value
 	}
 	return nil
+}
+
+// VariableHosts returns sorted, unique inventory host names from the requested
+// variables on every supplied host.
+func (inv Inventory) VariableHosts(hosts, variables []string) ([]string, error) {
+	found := map[string]struct{}{}
+	for _, host := range hosts {
+		for _, variable := range variables {
+			target, err := inv.variableHost(host, variable)
+			if err != nil {
+				return nil, err
+			}
+			found[target] = struct{}{}
+		}
+	}
+	return sortedKeys(found), nil
+}
+
+func (inv Inventory) variableHost(host, variable string) (string, error) {
+	raw, ok := inv.variables[host][variable]
+	if !ok {
+		err := fmt.Errorf("host %s has no inventory variable %s", host, variable)
+		slog.Error("ansible.inventory.variable_missing", "host", host, "variable", variable, "err", err)
+		return "", err
+	}
+	value, ok := inventoryString(raw)
+	if !ok || value == "" {
+		err := fmt.Errorf("inventory variable %s of host %s is not a host name string", variable, host)
+		slog.Error("ansible.inventory.variable_not_string", "host", host, "variable", variable, "err", err)
+		return "", err
+	}
+	if !inv.hasHost(value) {
+		err := fmt.Errorf("inventory variable %s of host %s is %s, which is not an inventory host", variable, host, value)
+		slog.Error("ansible.inventory.variable_host_unknown", "host", host, "variable", variable, "err", err)
+		return "", err
+	}
+	return value, nil
+}
+
+func (inv Inventory) hasHost(name string) bool {
+	if _, ok := inv.Hosts[name]; ok {
+		return true
+	}
+	for _, group := range inv.groups {
+		if slices.Contains(group.Hosts, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // inventoryString returns the string in raw. An absent or null value is the
