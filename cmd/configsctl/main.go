@@ -18,6 +18,7 @@ import (
 	"goodkind.io/configsctl/internal/ansible"
 	"goodkind.io/configsctl/internal/baseline"
 	"goodkind.io/configsctl/internal/lint"
+	"goodkind.io/configsctl/internal/procgroup"
 	"goodkind.io/configsctl/internal/redact"
 	"goodkind.io/configsctl/internal/vault"
 	"goodkind.io/configsctl/internal/version"
@@ -314,7 +315,16 @@ func runTofu(env cmdEnv, args []string) error {
 		return err
 	}
 	slog.Info("tofu run", "dir", workspaceDir, "args", strings.Join(safeArgs, " "))
-	cmd := exec.CommandContext(context.Background(), "tofu", safeArgs...)
+	ctx := context.Background()
+	if tofuSubcommand(safeArgs) == tofuApply || tofuSubcommand(safeArgs) == tofuDestroy {
+		lockedCtx, release, lockErr := lockHypervisors(ctx)
+		if lockErr != nil {
+			return lockErr
+		}
+		defer release()
+		ctx = lockedCtx
+	}
+	cmd := exec.CommandContext(ctx, "tofu", safeArgs...)
 	cmd.Dir = workspaceDir
 	cmd.Env = childEnv
 	cmd.Stdin = os.Stdin
@@ -332,15 +342,7 @@ func runTofu(env cmdEnv, args []string) error {
 		log.Announce("Tofu")
 	}
 
-	if tofuSubcommand(safeArgs) == tofuApply || tofuSubcommand(safeArgs) == tofuDestroy {
-		release, lockErr := lockHypervisors(context.Background())
-		if lockErr != nil {
-			return lockErr
-		}
-		defer release()
-	}
-
-	runErr := cmd.Run()
+	runErr := procgroup.Run(cmd)
 	if log != nil {
 		if closeErr := log.Close(); closeErr != nil {
 			return closeErr
@@ -350,6 +352,9 @@ func runTofu(env cmdEnv, args []string) error {
 		slog.Error("tofu command failed", "err", runErr)
 		if log != nil {
 			fmt.Fprintf(os.Stderr, "The tofu output is in %s\n", log.Path())
+		}
+		if cause := context.Cause(ctx); cause != nil {
+			return fmt.Errorf("tofu stopped: %w", cause)
 		}
 		var exitErr *exec.ExitError
 		if errors.As(runErr, &exitErr) {

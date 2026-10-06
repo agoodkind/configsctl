@@ -27,7 +27,7 @@ func TestRunStreamingWritesChildOutputToTheGivenWriter(t *testing.T) {
 	chdirWithAnsibleDir(t)
 	var got bytes.Buffer
 	script := `echo first; echo second >&2; echo third`
-	if err := runStreaming("sh", []string{"-c", script}, &got); err != nil {
+	if err := runStreaming(t.Context(), "sh", []string{"-c", script}, &got); err != nil {
 		t.Fatalf("runStreaming: %v", err)
 	}
 	want := "first\nsecond\nthird\n"
@@ -43,7 +43,7 @@ func TestRunStreamingWritesChildOutputToTheGivenWriter(t *testing.T) {
 func TestRunStreamingUnbuffersThePythonChild(t *testing.T) {
 	chdirWithAnsibleDir(t)
 	var got bytes.Buffer
-	if err := runStreaming("sh", []string{"-c", `printf %s "$PYTHONUNBUFFERED"`}, &got); err != nil {
+	if err := runStreaming(t.Context(), "sh", []string{"-c", `printf %s "$PYTHONUNBUFFERED"`}, &got); err != nil {
 		t.Fatalf("runStreaming: %v", err)
 	}
 	if got.String() != "1" {
@@ -58,7 +58,7 @@ func TestRunStreamingKeepsTheParentEnvironment(t *testing.T) {
 	chdirWithAnsibleDir(t)
 	t.Setenv("CONFIGS_STREAMING_PROBE", "inherited")
 	var got bytes.Buffer
-	if err := runStreaming("sh", []string{"-c", `printf %s "$CONFIGS_STREAMING_PROBE"`}, &got); err != nil {
+	if err := runStreaming(t.Context(), "sh", []string{"-c", `printf %s "$CONFIGS_STREAMING_PROBE"`}, &got); err != nil {
 		t.Fatalf("runStreaming: %v", err)
 	}
 	if got.String() != "inherited" {
@@ -72,7 +72,7 @@ func TestRunStreamingKeepsTheParentEnvironment(t *testing.T) {
 func TestRunStreamingReportsAFailingChild(t *testing.T) {
 	chdirWithAnsibleDir(t)
 	var got bytes.Buffer
-	err := runStreaming("sh", []string{"-c", `echo partial; exit 3`}, &got)
+	err := runStreaming(t.Context(), "sh", []string{"-c", `echo partial; exit 3`}, &got)
 	if err == nil {
 		t.Fatal("runStreaming returned nil for a child that exited 3")
 	}

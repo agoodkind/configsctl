@@ -97,3 +97,40 @@ func TestAcquireAllReleasesTakenLocksWhenOneHostIsHeld(t *testing.T) {
 		t.Fatalf("the free host kept a lock after the refusal: %v", err)
 	}
 }
+
+func TestAcquireAllRefusesTheRunWhenALockCommandFails(t *testing.T) {
+	free := localHost(t)
+	broken := localHost(t)
+	broken.Name = "broken"
+	blocker := filepath.Join(broken.Dir, "not-a-directory")
+	if err := os.WriteFile(blocker, []byte("file\n"), 0o600); err != nil {
+		t.Fatalf("write the blocking file: %v", err)
+	}
+	broken.Dir = blocker
+	_, err := hostlock.AcquireAll(t.Context(), []hostlock.Host{free, broken}, secondRun, "controller-b")
+	if err == nil {
+		t.Fatal("AcquireAll: err = nil, want a refusal for the broken host")
+	}
+	if _, err := os.Stat(filepath.Join(free.Dir, "deploy.lock")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the free host kept a lock after the refusal: %v", err)
+	}
+}
+
+func TestRenewAllReportsALockThatAnotherRunTook(t *testing.T) {
+	host := localHost(t)
+	ctx := t.Context()
+	set, err := hostlock.AcquireAll(ctx, []hostlock.Host{host}, firstRun, "controller-a")
+	if err != nil {
+		t.Fatalf("AcquireAll: %v", err)
+	}
+	if err := set.RenewAll(ctx); err != nil {
+		t.Fatalf("RenewAll while the run owns the lock: %v", err)
+	}
+	taken := secondRun + " controller-b 9999999999\n"
+	if err := os.WriteFile(filepath.Join(host.Dir, "deploy.lock"), []byte(taken), 0o600); err != nil {
+		t.Fatalf("write the lock of the second run: %v", err)
+	}
+	if err := set.RenewAll(ctx); !errors.Is(err, hostlock.ErrLost) {
+		t.Fatalf("RenewAll after another run took the lock: err = %v, want ErrLost", err)
+	}
+}
