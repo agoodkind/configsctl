@@ -18,9 +18,16 @@ import (
 	"goodkind.io/configsctl/internal/tofulock"
 )
 
-// Destroy locks every host in hypervisorGroup even when tofu.lock_targets
-// declares hosts for the workspace.
-const hypervisorGroup = "proxmox_servers"
+const (
+	hypervisorGroup   = "proxmox_servers"
+	tofuLockOnlyGroup = "tofu_lock_hosts"
+)
+
+func allTofuLockHosts(inv ansible.Inventory) []string {
+	names := slices.Concat(inv.GroupHosts(hypervisorGroup), inv.GroupHosts(tofuLockOnlyGroup))
+	slices.Sort(names)
+	return slices.Compact(names)
+}
 
 // Check-mode deployments do not acquire host locks.
 // Lock loss cancels the local command before lock release. Remote Ansible
@@ -127,7 +134,7 @@ func lockTofuHosts(
 }
 
 func selectTofuLockHosts(ctx context.Context, inv ansible.Inventory, request tofuLockRequest) (tofuHostSelection, error) {
-	everyHost := tofuHostSelection{names: inv.GroupHosts(hypervisorGroup), args: request.args, cleanup: func() {}}
+	everyHost := tofuHostSelection{names: allTofuLockHosts(inv), args: request.args, cleanup: func() {}}
 	if tofuSubcommand(request.args) != tofuApply {
 		return everyHost, nil
 	}

@@ -163,5 +163,67 @@ func TestTofuApplyWithVarFileValueLocksEveryHypervisor(t *testing.T) {
 	if strings.Contains(result.stderr, "tofu.lock.plan_copied") || strings.Contains(result.stderr, "tofu.lock.show_failed") {
 		t.Fatalf("stderr = %q, want no tofu show of extra.tfvars", result.stderr)
 	}
+	if !strings.Contains(result.stderr, `hostlock.targets_skipped hosts="[hv_alpha hv_beta]"`) {
+		t.Fatalf("stderr = %q, want the lock set [hv_alpha hv_beta]", result.stderr)
+	}
 	requireFile(t, filepath.Join(tree.workspaces, "locked", "locked.tfstate"))
+}
+
+const lockOnlyInventory = `all:
+  children:
+    proxmox_servers:
+      hosts:
+        hv_alpha:
+          ansible_connection: local
+    tofu_lock_hosts:
+      hosts:
+        lock_only:
+          ansible_connection: local
+`
+
+const lockOnlyTargetsSettings = `  lock_targets:
+    workspaces/locked:
+      module_hosts:
+        module.alpha: lock_only
+`
+
+func newLockOnlyTree(t *testing.T) configsTree {
+	t.Helper()
+	tree := newLockedTree(t)
+	writeFixtureFile(t, filepath.Join(tree.root, "configsctl.yml"), settingsContent+lockOnlyTargetsSettings)
+	writeFixtureFile(t, filepath.Join(tree.root, "ansible", "inventory", "hosts.yml"), lockOnlyInventory)
+	return tree
+}
+
+func TestTofuApplyWithoutSavedPlanLocksTheLockOnlyGroup(t *testing.T) {
+	requireTofu(t)
+	tree := newLockOnlyTree(t)
+
+	args := tofuArgs("locked", "apply", "-auto-approve", "-input=false")
+	result := runConfigsctl(t, tree, args...)
+	requireSuccess(t, result, args...)
+	if !strings.Contains(result.stderr, "the apply has no saved plan") {
+		t.Fatalf("stderr = %q, want the fallback for an apply without a saved plan", result.stderr)
+	}
+	if !strings.Contains(result.stderr, `hostlock.targets_skipped hosts="[hv_alpha lock_only]"`) {
+		t.Fatalf("stderr = %q, want the lock set [hv_alpha lock_only]", result.stderr)
+	}
+}
+
+func TestTofuApplyOfSavedPlanAcceptsALockOnlyTarget(t *testing.T) {
+	requireTofu(t)
+	tree := newLockOnlyTree(t)
+	planTarget(t, tree, "module.alpha", "alpha.tfplan")
+
+	result := runConfigsctl(t, tree, tofuArgs("locked", "apply", "-input=false", "alpha.tfplan")...)
+	if result.exitCode == 0 {
+		t.Fatalf("Apply succeeded. The test expected a refusal for lock_only without an ssh lock target.\nstderr: %s", result.stderr)
+	}
+	if !strings.Contains(result.stderr, "tofu.lock.plan_hosts") || !strings.Contains(result.stderr, "hosts=[lock_only]") {
+		t.Fatalf("stderr = %q, want the plan lock set [lock_only]", result.stderr)
+	}
+	if !strings.Contains(result.stderr, "host lock_only from tofu.lock_targets has no ssh lock target") {
+		t.Fatalf("stderr = %q, want the refusal for lock_only", result.stderr)
+	}
+	requireNoFile(t, filepath.Join(tree.workspaces, "locked", "locked.tfstate"))
 }
