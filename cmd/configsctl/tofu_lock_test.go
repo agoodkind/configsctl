@@ -3,7 +3,6 @@ package main_test
 import (
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 )
@@ -76,19 +75,15 @@ func planTarget(t *testing.T, tree configsTree, module, planFile string) {
 	requireSuccess(t, runConfigsctl(t, tree, args...), args...)
 }
 
-var planCopyPattern = regexp.MustCompile(`tofu\.lock\.plan_copied .*copy=(\S+)`)
-
-func requireRemovedPlanCopy(t *testing.T, tree configsTree, stderr string) {
+func requireNoPlanCopies(t *testing.T, tree configsTree) {
 	t.Helper()
-	match := planCopyPattern.FindStringSubmatch(stderr)
-	if match == nil {
-		t.Fatalf("stderr = %q, want a tofu.lock.plan_copied line", stderr)
+	leftovers, err := filepath.Glob(filepath.Join(tree.root, "tmp", "configsctl-plan-*"))
+	if err != nil {
+		t.Fatalf("list plan copies in TMPDIR: %v", err)
 	}
-	copyPath := match[1]
-	if !strings.HasPrefix(copyPath, filepath.Join(tree.root, "tmp")+string(filepath.Separator)) {
-		t.Fatalf("plan copy %s is outside TMPDIR", copyPath)
+	if len(leftovers) != 0 {
+		t.Fatalf("TMPDIR has plan copies after configsctl exited: %v", leftovers)
 	}
-	requireNoFile(t, filepath.Dir(copyPath))
 }
 
 func TestTofuApplyOfSavedPlanLocksTheDeclaredHost(t *testing.T) {
@@ -113,7 +108,7 @@ func TestTofuApplyOfSavedPlanLocksTheDeclaredHost(t *testing.T) {
 			if !strings.Contains(result.stderr, "host hv_alpha from tofu.lock_targets has no ssh lock target") {
 				t.Fatalf("stderr = %q, want the refusal for hv_alpha", result.stderr)
 			}
-			requireRemovedPlanCopy(t, tree, result.stderr)
+			requireNoPlanCopies(t, tree)
 			requireNoFile(t, filepath.Join(tree.workspaces, "locked", "locked.tfstate"))
 		})
 	}
@@ -130,7 +125,7 @@ func TestTofuApplyOfUnmatchedPlanLocksEveryHypervisor(t *testing.T) {
 	if !strings.Contains(result.stderr, "tofu.lock.all_hypervisors") || !strings.Contains(result.stderr, "matches no lock target") {
 		t.Fatalf("stderr = %q, want the fallback to every hypervisor", result.stderr)
 	}
-	requireRemovedPlanCopy(t, tree, result.stderr)
+	requireNoPlanCopies(t, tree)
 	requireFile(t, filepath.Join(tree.workspaces, "locked", "locked.tfstate"))
 }
 
