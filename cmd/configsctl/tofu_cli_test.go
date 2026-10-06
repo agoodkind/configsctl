@@ -338,6 +338,34 @@ func TestTofuAcceptsDeployLockHostVariables(t *testing.T) {
 	requireSuccess(t, runConfigsctl(t, tree, args...), args...)
 }
 
+const lockTargetsSettingsForm = `  lock_targets:
+    workspaces:
+      module_hosts:
+        module.vault: vault
+        module.suburban: suburban
+      module_key_hosts:
+        module.overlay:
+          poweredge: poweredge
+          suburban: suburban
+          vault: vault
+    workspaces/alpha:
+      node_hosts:
+        suburban: suburban
+        poweredge: poweredge
+        vault: vault
+      guest_hosts:
+        suburban/224: clyde_suburban
+`
+
+func TestTofuAcceptsLockTargets(t *testing.T) {
+	requireTofu(t)
+	tree := newConfigsTree(t)
+	writeFixtureFile(t, filepath.Join(tree.root, "configsctl.yml"), settingsContent+lockTargetsSettingsForm)
+
+	args := tofuArgs("alpha", "version")
+	requireSuccess(t, runConfigsctl(t, tree, args...), args...)
+}
+
 func TestTofuRejectsInvalidSettingsFile(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -378,6 +406,36 @@ func TestTofuRejectsInvalidSettingsFile(t *testing.T) {
 			name:     "unknown deploy key",
 			content:  settingsContent + "deploy:\n  lock_hosts:\n    deploy-mwan: [mwan_proxmox_delegate]\n",
 			fragment: "lock_hosts",
+		},
+		{
+			name:     "empty lock targets",
+			content:  settingsContent + "  lock_targets: {}\n",
+			fragment: "tofu.lock_targets is empty",
+		},
+		{
+			name:     "empty lock target map",
+			content:  settingsContent + "  lock_targets:\n    workspaces:\n      node_hosts: {}\n",
+			fragment: "tofu.lock_targets.workspaces: node_hosts is empty",
+		},
+		{
+			name:     "empty lock target module key map",
+			content:  settingsContent + "  lock_targets:\n    workspaces:\n      module_key_hosts:\n        module.overlay: {}\n",
+			fragment: "module_key_hosts.module.overlay is empty",
+		},
+		{
+			name:     "empty lock target key",
+			content:  settingsContent + "  lock_targets:\n    workspaces:\n      module_hosts:\n        \"\": vault\n",
+			fragment: "module_hosts has an empty key",
+		},
+		{
+			name:     "empty lock target host",
+			content:  settingsContent + "  lock_targets:\n    workspaces:\n      module_hosts:\n        module.vault: \"\"\n",
+			fragment: "module_hosts.module.vault has an empty host name",
+		},
+		{
+			name:     "unknown lock target key",
+			content:  settingsContent + "  lock_targets:\n    workspaces:\n      host_map:\n        a: b\n",
+			fragment: "host_map",
 		},
 	}
 	for _, testCase := range cases {

@@ -16,6 +16,7 @@ import (
 	"github.com/hashicorp/hcl/v2/hclparse"
 	"gopkg.in/yaml.v3"
 
+	"goodkind.io/configsctl/internal/tofulock"
 	"goodkind.io/configsctl/internal/vault"
 )
 
@@ -37,7 +38,8 @@ type tofuSettings struct {
 	WorkspacesDir string `yaml:"workspaces_dir"`
 	// tofuSecretEnv exports a vault key <EnvKeyPrefix><NAME> as the
 	// environment variable <NAME>.
-	EnvKeyPrefix string `yaml:"env_key_prefix"`
+	EnvKeyPrefix string                      `yaml:"env_key_prefix"`
+	LockTargets  map[string]tofulock.Targets `yaml:"lock_targets"`
 }
 
 func loadSettings(path string) (settings, error) {
@@ -59,7 +61,29 @@ func loadSettings(path string) (settings, error) {
 	if loaded.Tofu.EnvKeyPrefix == "" {
 		return loaded, errors.New(path + ": tofu.env_key_prefix is empty")
 	}
+	if err := validateLockTargets(path, loaded.Tofu.LockTargets); err != nil {
+		return loaded, err
+	}
 	return loaded, validateDeploySettings(path, loaded.Deploy)
+}
+
+func validateLockTargets(path string, lockTargets map[string]tofulock.Targets) error {
+	if lockTargets != nil && len(lockTargets) == 0 {
+		return errors.New(path + ": tofu.lock_targets is empty")
+	}
+	for _, workspace := range slices.Sorted(maps.Keys(lockTargets)) {
+		if workspace == "" {
+			return errors.New(path + ": tofu.lock_targets has an empty workspace path")
+		}
+		if tofuWorkspaceKey(workspace) != workspace {
+			return fmt.Errorf("%s: tofu.lock_targets.%s is not a clean slash-separated path", path, workspace)
+		}
+		if err := lockTargets[workspace].Validate(); err != nil {
+			slog.Error("settings lock targets invalid", "path", path, "workspace", workspace, "err", err)
+			return fmt.Errorf("%s: tofu.lock_targets.%s: %w", path, workspace, err)
+		}
+	}
+	return nil
 }
 
 func validateDeploySettings(path string, deploy deploySettings) error {
@@ -76,6 +100,10 @@ func validateDeploySettings(path string, deploy deploySettings) error {
 		}
 	}
 	return nil
+}
+
+func tofuWorkspaceKey(workspaceDir string) string {
+	return filepath.ToSlash(filepath.Clean(workspaceDir))
 }
 
 var tofuVariableSchema = &hcl.BodySchema{

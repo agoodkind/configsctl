@@ -1,0 +1,55 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.6",
+  "planned_values": {"root_module": {}},
+  "resource_changes": [
+    {
+      "address": "module.overlay[\"poweredge\"].proxmox_virtual_environment_file.snippet",
+      "module_address": "module.overlay[\"poweredge\"]",
+      "mode": "managed",
+      "type": "proxmox_virtual_environment_file",
+      "name": "snippet",
+      "provider_name": "registry.opentofu.org/bpg/proxmox",
+      "change": {
+        "actions": ["update"],
+        "before": {"node_name": "poweredge", "content_type": "snippets", "datastore_id": "local"},
+        "after": {"node_name": "poweredge", "content_type": "snippets", "datastore_id": "local"},
+        "after_unknown": {"id": true},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "module.overlay[\"vault\"].proxmox_virtual_environment_file.snippet",
+      "module_address": "module.overlay[\"vault\"]",
+      "mode": "managed",
+      "type": "proxmox_virtual_environment_file",
+      "name": "snippet",
+      "provider_name": "registry.opentofu.org/bpg/proxmox",
+      "change": {
+        "actions": ["no-op"],
+        "before": {"node_name": "vault", "content_type": "snippets", "datastore_id": "local"},
+        "after": {"node_name": "vault", "content_type": "snippets", "datastore_id": "local"},
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "module.suburban.data.proxmox_virtual_environment_nodes.all",
+      "module_address": "module.suburban",
+      "mode": "data",
+      "type": "proxmox_virtual_environment_nodes",
+      "name": "all",
+      "provider_name": "registry.opentofu.org/bpg/proxmox",
+      "change": {
+        "actions": ["read"],
+        "before": null,
+        "after": {},
+        "after_unknown": {"names": true},
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    }
+  ]
+}

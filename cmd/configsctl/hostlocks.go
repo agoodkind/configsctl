@@ -1,20 +1,25 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
+	"strings"
 
 	"goodkind.io/configsctl/internal/ansible"
 	"goodkind.io/configsctl/internal/gate"
 	"goodkind.io/configsctl/internal/hostlock"
 	"goodkind.io/configsctl/internal/runid"
+	"goodkind.io/configsctl/internal/tofulock"
 )
 
-// hypervisorGroup is the inventory group of every Proxmox hypervisor. An
-// OpenTofu apply locks each host in it.
+// Destroy locks every host in hypervisorGroup even when tofu.lock_targets
+// declares hosts for the workspace.
 const hypervisorGroup = "proxmox_servers"
 
 // Check-mode deployments do not acquire host locks.
@@ -85,13 +90,112 @@ func deployLockTargets(inv ansible.Inventory, playHosts, variables []string) ([]
 	return hostlock.Targets(inv, slices.Compact(names)), nil
 }
 
-func lockHypervisors(ctx context.Context) (context.Context, func(), error) {
+type tofuLockRequest struct {
+	workspaceDir string
+	env          []string
+	args         []string
+	lockTargets  map[string]tofulock.Targets
+}
+
+func lockTofuHosts(ctx context.Context, request tofuLockRequest) (context.Context, func(), error) {
 	inv, err := ansible.LoadInventory(ctx, "")
 	if err != nil {
 		slog.Error("tofu.lock.inventory_failed", "err", err)
 		return nil, nil, fmt.Errorf("load the inventory for hypervisor locks: %w", err)
 	}
-	return takeLocks(ctx, hostlock.Targets(inv, inv.GroupHosts(hypervisorGroup)))
+	names, err := tofuLockHostNames(ctx, inv, request)
+	if err != nil {
+		return nil, nil, err
+	}
+	return takeLocks(ctx, hostlock.Targets(inv, names))
+}
+
+func tofuLockHostNames(ctx context.Context, inv ansible.Inventory, request tofuLockRequest) ([]string, error) {
+	hypervisors := inv.GroupHosts(hypervisorGroup)
+	if tofuSubcommand(request.args) != tofuApply {
+		return hypervisors, nil
+	}
+	workspace := tofuWorkspaceKey(request.workspaceDir)
+	targets, declared := request.lockTargets[workspace]
+	if !declared {
+		return hypervisors, nil
+	}
+	planFile := savedPlanFile(request.workspaceDir, request.args)
+	if planFile == "" {
+		slog.Info("tofu.lock.all_hypervisors", "workspace", workspace, "reason", "the apply has no saved plan")
+		return hypervisors, nil
+	}
+	plan, err := showTofuPlan(ctx, request, planFile)
+	if err != nil {
+		return nil, err
+	}
+	decision := tofulock.Decide(plan, targets)
+	if decision.AllHosts {
+		slog.Info("tofu.lock.all_hypervisors", "workspace", workspace, "reason", decision.Reason)
+		return hypervisors, nil
+	}
+	slog.Info("tofu.lock.plan_hosts", "workspace", workspace, "plan", planFile, "hosts", decision.Hosts)
+	return decision.Hosts, requireLockTargets(inv, decision.Hosts)
+}
+
+func savedPlanFile(workspaceDir string, args []string) string {
+	if len(args) == 0 || tofuSubcommand(args[:len(args)-1]) != tofuApply {
+		return ""
+	}
+	candidate := args[len(args)-1]
+	if strings.HasPrefix(candidate, "-") {
+		return ""
+	}
+	path := candidate
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(workspaceDir, path)
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return ""
+	}
+	return candidate
+}
+
+func showTofuPlan(ctx context.Context, request tofuLockRequest, planFile string) ([]byte, error) {
+	args, err := sanitizeTofuArgs([]string{"show", "-json", "-plan=" + planFile})
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(ctx, "tofu", args...)
+	cmd.Dir = request.workspaceDir
+	cmd.Env = request.env
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		slog.Error("tofu.lock.show_failed", "dir", request.workspaceDir, "plan", planFile,
+			"stderr", strings.TrimSpace(stderr.String()), "err", err)
+		return nil, fmt.Errorf("read the saved plan %s: %w", planFile, err)
+	}
+	return stdout.Bytes(), nil
+}
+
+func requireLockTargets(inv ansible.Inventory, names []string) error {
+	inventoryHosts := inv.GroupHosts("all")
+	targeted := map[string]bool{}
+	for _, target := range hostlock.Targets(inv, names) {
+		targeted[target.Name] = true
+	}
+	for _, name := range names {
+		_, hasVariables := inv.Hosts[name]
+		if !hasVariables && !slices.Contains(inventoryHosts, name) {
+			err := fmt.Errorf("host %s from tofu.lock_targets is not an inventory host", name)
+			slog.Error("tofu.lock.host_unknown", "host", name, "err", err)
+			return err
+		}
+		if !targeted[name] {
+			err := fmt.Errorf("host %s from tofu.lock_targets has no ssh lock target", name)
+			slog.Error("tofu.lock.host_untargeted", "host", name, "err", err)
+			return err
+		}
+	}
+	return nil
 }
 
 // Run locked work with the returned context and call release after it returns.

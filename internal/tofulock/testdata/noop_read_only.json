@@ -1,0 +1,38 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.6",
+  "planned_values": {"root_module": {}},
+  "resource_changes": [
+    {
+      "address": "module.dns.cloudflare_record.apex",
+      "module_address": "module.dns",
+      "mode": "managed",
+      "type": "cloudflare_record",
+      "name": "apex",
+      "provider_name": "registry.opentofu.org/cloudflare/cloudflare",
+      "change": {
+        "actions": ["no-op"],
+        "before": {"name": "@", "type": "AAAA"},
+        "after": {"name": "@", "type": "AAAA"},
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "data.http.ipv6",
+      "mode": "data",
+      "type": "http",
+      "name": "ipv6",
+      "provider_name": "registry.opentofu.org/hashicorp/http",
+      "change": {
+        "actions": ["read"],
+        "before": null,
+        "after": {"url": "https://example.invalid"},
+        "after_unknown": {"response_body": true},
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    }
+  ]
+}
