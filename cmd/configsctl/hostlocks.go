@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 
 	"goodkind.io/configsctl/internal/ansible"
 	"goodkind.io/configsctl/internal/gate"
@@ -40,6 +41,10 @@ func lockedDeploy(opts ansible.DeployOptions) error {
 }
 
 func lockPlayHosts(ctx context.Context, opts ansible.DeployOptions) (context.Context, func(), error) {
+	loaded, err := loadSettings(settingsFile)
+	if err != nil {
+		return nil, nil, err
+	}
 	inv, err := ansible.LoadInventory(ctx, "")
 	if err != nil {
 		slog.Error("deploy.lock.inventory_failed", "err", err)
@@ -50,7 +55,34 @@ func lockPlayHosts(ctx context.Context, opts ansible.DeployOptions) (context.Con
 		slog.Error("deploy.lock.hosts_failed", "playbook", opts.Playbook, "err", err)
 		return nil, nil, fmt.Errorf("list the hosts of %s: %w", opts.Playbook, err)
 	}
-	return takeLocks(ctx, hostlock.Targets(inv, names))
+	variables := loaded.Deploy.LockHostVariables[ansible.PlaybookName(opts.Playbook)]
+	hosts, err := deployLockTargets(inv, names, variables)
+	if err != nil {
+		return nil, nil, err
+	}
+	return takeLocks(ctx, hosts)
+}
+
+func deployLockTargets(inv ansible.Inventory, playHosts, variables []string) ([]hostlock.Host, error) {
+	extraHosts, err := inv.VariableHosts(playHosts, variables)
+	if err != nil {
+		slog.Error("deploy.lock.variable_read_failed", "variables", variables, "err", err)
+		return nil, fmt.Errorf("read the lock host variables %v: %w", variables, err)
+	}
+	targeted := map[string]bool{}
+	for _, target := range hostlock.Targets(inv, extraHosts) {
+		targeted[target.Name] = true
+	}
+	for _, name := range extraHosts {
+		if !targeted[name] {
+			err := fmt.Errorf("host %s from a lock host variable has no ssh lock target", name)
+			slog.Error("deploy.lock.variable_host_untargeted", "host", name, "err", err)
+			return nil, err
+		}
+	}
+	names := slices.Concat(playHosts, extraHosts)
+	slices.Sort(names)
+	return hostlock.Targets(inv, slices.Compact(names)), nil
 }
 
 func lockHypervisors(ctx context.Context) (context.Context, func(), error) {

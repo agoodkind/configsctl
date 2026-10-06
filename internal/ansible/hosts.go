@@ -23,8 +23,9 @@ type HostVars struct {
 
 // Inventory is the resolved inventory: host variables and group membership.
 type Inventory struct {
-	Hosts  map[string]HostVars
-	groups map[string]inventoryGroup
+	Hosts     map[string]HostVars
+	groups    map[string]inventoryGroup
+	variables map[string]map[string]json.RawMessage
 }
 
 type inventoryGroup struct {
@@ -38,6 +39,12 @@ type inventoryList struct {
 	} `json:"_meta"`
 }
 
+type inventoryVariables struct {
+	Meta struct {
+		HostVars map[string]map[string]json.RawMessage `json:"hostvars"`
+	} `json:"_meta"`
+}
+
 // LoadInventory runs ansible-inventory --list in the ansible directory of
 // repoRoot and decodes the result. An empty repoRoot is the working directory.
 func LoadInventory(ctx context.Context, repoRoot string) (Inventory, error) {
@@ -45,10 +52,21 @@ func LoadInventory(ctx context.Context, repoRoot string) (Inventory, error) {
 	if err != nil {
 		return Inventory{}, err
 	}
+	return DecodeInventory(out)
+}
+
+// DecodeInventory reads connection settings, raw host variables, and group
+// membership from ansible-inventory --list JSON.
+func DecodeInventory(out []byte) (Inventory, error) {
 	var list inventoryList
 	if err := json.Unmarshal(out, &list); err != nil {
 		slog.Error("ansible.inventory.decode_failed", "err", err)
 		return Inventory{}, fmt.Errorf("decode ansible-inventory hostvars: %w", err)
+	}
+	var variables inventoryVariables
+	if err := json.Unmarshal(out, &variables); err != nil {
+		slog.Error("ansible.inventory.decode_failed", "err", err)
+		return Inventory{}, fmt.Errorf("decode ansible-inventory host variables: %w", err)
 	}
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(out, &raw); err != nil {
@@ -65,7 +83,7 @@ func LoadInventory(ctx context.Context, repoRoot string) (Inventory, error) {
 			groups[name] = group
 		}
 	}
-	return Inventory{Hosts: list.Meta.HostVars, groups: groups}, nil
+	return Inventory{Hosts: list.Meta.HostVars, groups: groups, variables: variables.Meta.HostVars}, nil
 }
 
 // GroupHosts returns the hosts of group and of its child groups, sorted.
@@ -87,6 +105,13 @@ func (inv Inventory) GroupHosts(group string) []string {
 		worklist = append(worklist, entry.Children...)
 	}
 	return sortedKeys(found)
+}
+
+// PlaybookName removes directories and .yml or .yaml suffixes for
+// declaration lookup.
+func PlaybookName(playbook string) string {
+	base := filepath.Base(playbook)
+	return strings.TrimSuffix(strings.TrimSuffix(base, ".yml"), ".yaml")
 }
 
 var listHostsHeader = regexp.MustCompile(`^(\s*)hosts \(\d+\):$`)
