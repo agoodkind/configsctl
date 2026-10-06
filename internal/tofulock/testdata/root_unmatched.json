@@ -1,0 +1,39 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.6",
+  "planned_values": {"root_module": {}},
+  "resource_changes": [
+    {
+      "address": "module.overlay[\"poweredge\"].proxmox_virtual_environment_file.snippet",
+      "module_address": "module.overlay[\"poweredge\"]",
+      "mode": "managed",
+      "type": "proxmox_virtual_environment_file",
+      "name": "snippet",
+      "provider_name": "registry.opentofu.org/bpg/proxmox",
+      "change": {
+        "actions": ["update"],
+        "before": {"node_name": "poweredge"},
+        "after": {"node_name": "poweredge"},
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "module.dns.cloudflare_record.apex",
+      "module_address": "module.dns",
+      "mode": "managed",
+      "type": "cloudflare_record",
+      "name": "apex",
+      "provider_name": "registry.opentofu.org/cloudflare/cloudflare",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {"name": "@", "type": "AAAA"},
+        "after_unknown": {"id": true},
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    }
+  ]
+}

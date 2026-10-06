@@ -316,15 +316,22 @@ func runTofu(env cmdEnv, args []string) error {
 	}
 	slog.Info("tofu run", "dir", workspaceDir, "args", strings.Join(safeArgs, " "))
 	ctx := context.Background()
+	commandArgs := safeArgs
 	if tofuSubcommand(safeArgs) == tofuApply || tofuSubcommand(safeArgs) == tofuDestroy {
-		lockedCtx, release, lockErr := lockHypervisors(ctx)
+		lockedCtx, lockedArgs, release, lockErr := lockTofuHosts(ctx, tofuLockRequest{
+			workspaceDir: workspaceDir,
+			env:          childEnv,
+			args:         safeArgs,
+			lockTargets:  loaded.Tofu.LockTargets,
+		})
 		if lockErr != nil {
 			return lockErr
 		}
 		defer release()
 		ctx = lockedCtx
+		commandArgs = lockedArgs
 	}
-	cmd := exec.CommandContext(ctx, "tofu", safeArgs...)
+	cmd := exec.CommandContext(ctx, "tofu", commandArgs...)
 	cmd.Dir = workspaceDir
 	cmd.Env = childEnv
 	cmd.Stdin = os.Stdin

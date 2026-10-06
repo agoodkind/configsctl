@@ -1,0 +1,22 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.6",
+  "planned_values": {"root_module": {}},
+  "resource_changes": [
+    {
+      "address": "pveguest_host_kernel_modules.wireguard",
+      "mode": "managed",
+      "type": "pveguest_host_kernel_modules",
+      "name": "wireguard",
+      "provider_name": "registry.opentofu.org/agoodkind/pveguest",
+      "change": {
+        "actions": ["update"],
+        "before": {"node": "suburban", "modules": ["wireguard"]},
+        "after": {"node": "suburban", "modules": ["wireguard", "tun"]},
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    }
+  ]
+}

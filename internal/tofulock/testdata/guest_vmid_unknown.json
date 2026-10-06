@@ -1,0 +1,22 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.6",
+  "planned_values": {"root_module": {}},
+  "resource_changes": [
+    {
+      "address": "pveguest_container.new",
+      "mode": "managed",
+      "type": "pveguest_container",
+      "name": "new",
+      "provider_name": "registry.opentofu.org/agoodkind/pveguest",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {"node": "suburban"},
+        "after_unknown": {"vmid": true},
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.6",
+  "planned_values": {"root_module": {}},
+  "resource_changes": [
+    {
+      "address": "pveguest_container.clyde",
+      "mode": "managed",
+      "type": "pveguest_container",
+      "name": "clyde",
+      "provider_name": "registry.opentofu.org/agoodkind/pveguest",
+      "change": {
+        "actions": ["update"],
+        "before": {"node": "suburban", "vmid": 224, "memory": 4096},
+        "after": {"node": "suburban", "vmid": 224, "memory": 8192},
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    }
+  ]
+}

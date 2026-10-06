@@ -1,0 +1,52 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.6",
+  "planned_values": {"root_module": {}},
+  "resource_changes": [
+    {
+      "address": "mwan_network_config.example",
+      "mode": "managed",
+      "type": "mwan_network_config",
+      "name": "example",
+      "provider_name": "registry.opentofu.org/agoodkind/mwan",
+      "change": {
+        "actions": ["delete", "create"],
+        "before": {"id": "example", "uplinks": ["wan0"]},
+        "after": {"uplinks": ["wan0", "wan1"]},
+        "after_unknown": {"id": true},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "pveguest_container.clyde",
+      "mode": "managed",
+      "type": "pveguest_container",
+      "name": "clyde",
+      "provider_name": "registry.opentofu.org/agoodkind/pveguest",
+      "change": {
+        "actions": ["no-op"],
+        "before": {"node": "suburban", "vmid": 224},
+        "after": {"node": "suburban", "vmid": 224},
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "data.pveguest_nodes.all",
+      "mode": "data",
+      "type": "pveguest_nodes",
+      "name": "all",
+      "provider_name": "registry.opentofu.org/agoodkind/pveguest",
+      "change": {
+        "actions": ["read"],
+        "before": null,
+        "after": {},
+        "after_unknown": {"names": true},
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    }
+  ]
+}
