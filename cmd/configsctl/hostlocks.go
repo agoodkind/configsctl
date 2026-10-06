@@ -156,7 +156,10 @@ func selectTofuLockHosts(ctx context.Context, inv ansible.Inventory, request tof
 	if !declared {
 		return everyHost, nil
 	}
-	planFile := savedPlanFile(request.workspaceDir, request.args)
+	planFile, err := savedPlanFile(request.workspaceDir, request.args)
+	if err != nil {
+		return tofuHostSelection{}, err
+	}
 	if planFile == "" {
 		slog.Info("tofu.lock.all_hypervisors", "workspace", workspace, "reason", "the apply has no saved plan")
 		return everyHost, nil
@@ -198,19 +201,26 @@ func planDecision(
 	return decision, requireLockTargets(inv, decision.Hosts)
 }
 
-func savedPlanFile(workspaceDir string, args []string) string {
+func savedPlanFile(workspaceDir string, args []string) (string, error) {
 	if len(args) < 2 || tofuSubcommand(args[:len(args)-1]) != tofuApply {
-		return ""
+		return "", nil
 	}
 	candidate := args[len(args)-1]
 	if strings.HasPrefix(candidate, "-") || consumesTofuValue(args[len(args)-2]) {
-		return ""
+		return "", nil
 	}
-	info, err := os.Stat(workspacePath(workspaceDir, candidate))
-	if err != nil || !info.Mode().IsRegular() {
-		return ""
+	path := workspacePath(workspaceDir, candidate)
+	info, err := os.Stat(path)
+	if err != nil {
+		slog.Error("tofu.lock.plan_stat_failed", "plan", path, "err", err)
+		return "", fmt.Errorf("read the saved plan %s: %w", path, err)
 	}
-	return candidate
+	if !info.Mode().IsRegular() {
+		err := fmt.Errorf("the saved plan %s is not a regular file", path)
+		slog.Error("tofu.lock.plan_not_regular", "plan", path, "err", err)
+		return "", err
+	}
+	return candidate, nil
 }
 
 func consumesTofuValue(arg string) bool {

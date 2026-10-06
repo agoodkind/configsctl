@@ -134,6 +134,26 @@ func TestTofuApplyOfUnmatchedPlanLocksEveryHypervisor(t *testing.T) {
 	requireFile(t, filepath.Join(tree.workspaces, "locked", "locked.tfstate"))
 }
 
+func TestTofuApplyOfMissingSavedPlanIsRefusedBeforeLocking(t *testing.T) {
+	requireTofu(t)
+	tree := newLockedTree(t)
+
+	result := runConfigsctl(t, tree, tofuArgs("locked", "apply", "-auto-approve", "missing.plan")...)
+	if result.exitCode == 0 {
+		t.Fatalf("apply succeeded, want a refusal for the missing saved plan\nstderr: %s", result.stderr)
+	}
+	missingPath := filepath.Join("workspaces", "locked", "missing.plan")
+	if !strings.Contains(result.stderr, "read the saved plan "+missingPath) ||
+		!strings.Contains(result.stderr, "no such file or directory") {
+		t.Fatalf("stderr = %q, want the stat error for %s", result.stderr, missingPath)
+	}
+	for _, fragment := range []string{"hostlock.acquired", "tofu.lock.plan_copied", "tofu.lock.show_failed"} {
+		if strings.Contains(result.stderr, fragment) {
+			t.Fatalf("stderr = %q, want no %s", result.stderr, fragment)
+		}
+	}
+}
+
 func TestTofuApplyWithVarFileValueLocksEveryHypervisor(t *testing.T) {
 	requireTofu(t)
 	tree := newLockedTree(t)
