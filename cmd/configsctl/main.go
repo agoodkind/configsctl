@@ -349,27 +349,50 @@ func runTofu(env cmdEnv, args []string) error {
 		log.Announce("Tofu")
 	}
 
-	runErr := procgroup.Run(cmd)
+	runErr := procgroup.RunGroup(cmd)
+	logPath := ""
 	if log != nil {
+		logPath = log.Path()
 		if closeErr := log.Close(); closeErr != nil {
 			return closeErr
 		}
 	}
 	if runErr != nil {
-		slog.Error("tofu command failed", "err", runErr)
-		if log != nil {
-			fmt.Fprintf(os.Stderr, "The tofu output is in %s\n", log.Path())
-		}
-		if cause := context.Cause(ctx); cause != nil {
-			return fmt.Errorf("tofu stopped: %w", cause)
-		}
-		var exitErr *exec.ExitError
-		if errors.As(runErr, &exitErr) {
-			return &exitCodeError{code: exitErr.ExitCode()}
-		}
-		return errors.New("tofu failed")
+		return tofuFailure(ctx, runErr, logPath)
 	}
 	return nil
+}
+
+const tofuCrashExitCode = 11
+
+func tofuFailure(ctx context.Context, runErr error, logPath string) error {
+	cause := context.Cause(ctx)
+	var exitErr *exec.ExitError
+	exited := errors.As(runErr, &exitErr)
+	if cause == nil && exited && exitErr.ExitCode() == tofuCrashExitCode {
+		return tofuCrashError(runErr, logPath)
+	}
+	slog.Error("tofu command failed", "err", runErr)
+	if logPath != "" {
+		fmt.Fprintf(os.Stderr, "The tofu output is in %s\n", logPath)
+	}
+	if cause != nil {
+		return fmt.Errorf("tofu stopped: %w", cause)
+	}
+	if exited {
+		return &exitCodeError{code: exitErr.ExitCode()}
+	}
+	return errors.New("tofu failed")
+}
+
+func tofuCrashError(runErr error, logPath string) error {
+	crash := &exitCodeError{code: tofuCrashExitCode}
+	if logPath == "" {
+		slog.Error("tofu.crashed", "exit_code", tofuCrashExitCode, "err", runErr)
+		return fmt.Errorf("OpenTofu crashed: %w", crash)
+	}
+	slog.Error("tofu.crashed", "exit_code", tofuCrashExitCode, "log", logPath, "err", runErr)
+	return fmt.Errorf("OpenTofu crashed; the tofu output is in %s: %w", logPath, crash)
 }
 
 // tofuCommand is the subcommand name a tofu invocation carries.
