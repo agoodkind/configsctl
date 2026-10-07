@@ -23,26 +23,33 @@ func RunGroup(cmd *exec.Cmd) error {
 	if terminal >= 0 {
 		defer closeTerminal(terminal)
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Foreground: true, Ctty: terminal}
+		signal.Ignore(syscall.SIGTTOU)
+		defer signal.Reset(syscall.SIGTTOU)
 	} else {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
+	output, err := pipeOutput(cmd)
+	if err != nil {
+		return err
 	}
 	cmd.Cancel = func() error {
 		return signalProcess(-cmd.Process.Pid, syscall.SIGTERM)
 	}
 	cmd.WaitDelay = StopGrace
-	if err := cmd.Start(); err != nil {
-		slog.Error("procgroup.start_failed", "command", cmd.Path, "err", err)
-		return fmt.Errorf("start %s: %w", cmd.Path, err)
+	if startErr := cmd.Start(); startErr != nil {
+		output.abort()
+		slog.Error("procgroup.start_failed", "command", cmd.Path, "err", startErr)
+		return fmt.Errorf("start %s: %w", cmd.Path, startErr)
 	}
-	if terminal >= 0 {
-		signal.Ignore(syscall.SIGTTOU)
-	}
-	err := cmd.Wait()
+	output.started()
+	err = cmd.Wait()
 	if terminal >= 0 {
 		reclaimTerminal(terminal)
-		signal.Reset(syscall.SIGTTOU)
 	}
 	stopGroup(cmd.Process.Pid)
+	if copyErr := output.wait(); err == nil {
+		err = copyErr
+	}
 	if err != nil {
 		slog.Error("procgroup.run_failed", "command", cmd.Path, "err", err)
 		return fmt.Errorf("run %s: %w", cmd.Path, err)
@@ -76,6 +83,9 @@ func closeTerminal(terminal int) {
 }
 
 func stopGroup(groupID int) {
+	if !groupHasLiveMembers(groupID) {
+		return
+	}
 	if err := signalProcess(-groupID, syscall.SIGTERM); err != nil {
 		return
 	}
@@ -83,7 +93,7 @@ func stopGroup(groupID int) {
 	defer grace.Stop()
 	poll := time.NewTicker(groupPollInterval)
 	defer poll.Stop()
-	for !errors.Is(syscall.Kill(-groupID, 0), syscall.ESRCH) {
+	for groupHasLiveMembers(groupID) {
 		select {
 		case <-grace.C:
 			killGroup(groupID)
@@ -91,6 +101,14 @@ func stopGroup(groupID int) {
 		case <-poll.C:
 		}
 	}
+}
+
+func groupHasLiveMembers(groupID int) bool {
+	live, err := liveMembers(groupID)
+	if err != nil {
+		return !errors.Is(syscall.Kill(-groupID, 0), syscall.ESRCH)
+	}
+	return live > 0
 }
 
 func killGroup(groupID int) {

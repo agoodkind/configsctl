@@ -17,16 +17,23 @@ import (
 const lingeringChildWait = 10 * time.Second
 
 const fakeTofuScript = `#!/bin/sh
-sleep 300 </dev/null >/dev/null 2>&1 &
+sleep 300 </dev/null %s &
 echo $! > '%s'
 exit %d
 `
 
-func installFakeTofu(t *testing.T, exitCode int) (string, string) {
+const (
+	childOutputDiscarded = ">/dev/null 2>&1"
+	childOutputInherited = ""
+)
+
+const inheritedOutputExitLimit = 5 * time.Second
+
+func installFakeTofu(t *testing.T, exitCode int, childOutput string) (string, string) {
 	t.Helper()
 	binDir := t.TempDir()
 	pidFile := filepath.Join(t.TempDir(), "child.pid")
-	script := fmt.Sprintf(fakeTofuScript, pidFile, exitCode)
+	script := fmt.Sprintf(fakeTofuScript, childOutput, pidFile, exitCode)
 	if err := os.WriteFile(filepath.Join(binDir, "tofu"), []byte(script), 0o700); err != nil {
 		t.Fatalf("write fake tofu: %v", err)
 	}
@@ -68,7 +75,7 @@ func requireProcessGone(t *testing.T, pid int) {
 
 func TestTofuCrashStopsLingeringChildAndReportsTheCrash(t *testing.T) {
 	tree := newConfigsTree(t)
-	path, pidFile := installFakeTofu(t, 11)
+	path, pidFile := installFakeTofu(t, 11, childOutputDiscarded)
 
 	result := runConfigsctlWithPath(t, tree, path, "tofu", "alpha", "plan")
 	child := readChildPID(t, pidFile)
@@ -88,12 +95,29 @@ func TestTofuCrashStopsLingeringChildAndReportsTheCrash(t *testing.T) {
 
 func TestTofuSuccessStopsLingeringChild(t *testing.T) {
 	tree := newConfigsTree(t)
-	path, pidFile := installFakeTofu(t, 0)
+	path, pidFile := installFakeTofu(t, 0, childOutputDiscarded)
 
 	args := []string{"tofu", "alpha", "plan"}
 	result := runConfigsctlWithPath(t, tree, path, args...)
 	child := readChildPID(t, pidFile)
 
 	requireSuccess(t, result, args...)
+	requireProcessGone(t, child)
+}
+
+func TestTofuSuccessReturnsPromptlyWhenChildKeepsTheRunLogOpen(t *testing.T) {
+	tree := newConfigsTree(t)
+	path, pidFile := installFakeTofu(t, 0, childOutputInherited)
+
+	args := []string{"tofu", "alpha", "plan"}
+	started := time.Now()
+	result := runConfigsctlWithPath(t, tree, path, args...)
+	elapsed := time.Since(started)
+	child := readChildPID(t, pidFile)
+
+	requireSuccess(t, result, args...)
+	if elapsed > inheritedOutputExitLimit {
+		t.Fatalf("configsctl took %v to return, want under %v", elapsed, inheritedOutputExitLimit)
+	}
 	requireProcessGone(t, child)
 }
