@@ -75,57 +75,23 @@ var ErrNotHeld = errors.New("the lock on the host belongs to another run")
 
 // Do runs one operation on host for run, owned by controller.
 func Do(ctx context.Context, host Host, op Operation, run, controller string) error {
-	result := runScript(ctx, host, op, lockOwner{run: run, controller: controller})
-	if result.err == nil {
-		return nil
-	}
-	if !result.ran {
-		return result.err
-	}
-	var exitErr *exec.ExitError
-	if errors.As(result.err, &exitErr) {
-		switch exitErr.ExitCode() {
-		case exitHeld:
-			return heldError(host.Name, result.stdout)
-		case exitNotHeld:
-			return fmt.Errorf("%s on %s: %w (%s)", op, host.Name, ErrNotHeld, strings.TrimSpace(result.stdout))
-		}
-	}
-	slog.Error("hostlock.operation_failed", "host", host.Name, "operation", string(op),
-		"stderr", result.stderr, "err", result.err)
-	return fmt.Errorf("%s lock on %s: %w: %s", op, host.Name, result.err, result.stderr)
-}
-
-type lockOwner struct {
-	run        string
-	controller string
-}
-
-type commandResult struct {
-	ran    bool
-	stdout string
-	stderr string
-	err    error
-}
-
-func runScript(ctx context.Context, host Host, op Operation, owner lockOwner) commandResult {
 	dir := host.Dir
 	if dir == "" {
 		dir = DefaultDir
 	}
-	script := []string{"-s", "--", string(op), owner.run, owner.controller, strconv.Itoa(int(TTL / time.Second)), dir}
+	script := []string{"-s", "--", string(op), run, controller, strconv.Itoa(int(TTL / time.Second)), dir}
 	var cmd *exec.Cmd
 	if host.Address == "" {
 		args, err := checkedArgs(script)
 		if err != nil {
-			return commandResult{ran: false, stdout: "", stderr: "", err: err}
+			return err
 		}
 		cmd = exec.CommandContext(ctx, "bash", args...)
 	} else {
 		remote := append([]string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host.User + "@" + host.Address, "bash"}, script...)
 		args, err := checkedArgs(remote)
 		if err != nil {
-			return commandResult{ran: false, stdout: "", stderr: "", err: err}
+			return err
 		}
 		cmd = exec.CommandContext(ctx, "ssh", args...)
 	}
@@ -134,9 +100,22 @@ func runScript(ctx context.Context, host Host, op Operation, owner lockOwner) co
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	slog.Debug("hostlock.command_started", "host", host.Name, "operation", string(op))
 	err := cmd.Run()
-	return commandResult{ran: true, stdout: stdout.String(), stderr: strings.TrimSpace(stderr.String()), err: err}
+	if err == nil {
+		return nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		switch exitErr.ExitCode() {
+		case exitHeld:
+			return heldError(host.Name, stdout.String())
+		case exitNotHeld:
+			return fmt.Errorf("%s on %s: %w (%s)", op, host.Name, ErrNotHeld, strings.TrimSpace(stdout.String()))
+		}
+	}
+	slog.Error("hostlock.operation_failed", "host", host.Name, "operation", string(op),
+		"stderr", strings.TrimSpace(stderr.String()), "err", err)
+	return fmt.Errorf("%s lock on %s: %w: %s", op, host.Name, err, strings.TrimSpace(stderr.String()))
 }
 
 func heldError(host, line string) error {

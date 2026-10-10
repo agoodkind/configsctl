@@ -123,7 +123,6 @@ func (s *Set) KeepRenewed(ctx context.Context, lost func(error)) (stop func()) {
 	}
 }
 
-// ReleaseAll attempts release on every locked host.
 // ReleaseAll retries failed release commands every five seconds.
 // Retries stop after two minutes or when the context is done.
 // A first round without failures returns without waiting.
@@ -142,7 +141,7 @@ func (s *Set) ReleaseAll(ctx context.Context) {
 		if !waitForReleaseRetry(boundCtx, s.ReleaseRetryInterval) {
 			for _, failure := range failed {
 				slog.Error("hostlock.release_failed", "host", failure.host.Name, "run", s.run,
-					"attempts", attempt, "stderr", failure.stderr, "err", failure.err)
+					"attempts", attempt, "err", failure.err)
 			}
 			return
 		}
@@ -154,21 +153,16 @@ func (s *Set) ReleaseAll(ctx context.Context) {
 }
 
 type failedRelease struct {
-	host   Host
-	stderr string
-	err    error
+	host Host
+	err  error
 }
 
 func (s *Set) releaseEach(ctx context.Context, hosts []Host) []failedRelease {
 	var failed []failedRelease
 	for _, host := range hosts {
-		result := runScript(ctx, host, Release, lockOwner{run: s.run, controller: s.controller})
-		if result.err == nil {
-			continue
+		if err := Do(ctx, host, Release, s.run, s.controller); err != nil {
+			failed = append(failed, failedRelease{host: host, err: err})
 		}
-		slog.Warn("hostlock.operation_failed", "host", host.Name, "operation", string(Release),
-			"stderr", result.stderr, "err", result.err)
-		failed = append(failed, failedRelease{host: host, stderr: result.stderr, err: result.err})
 	}
 	return failed
 }
