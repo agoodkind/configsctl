@@ -17,18 +17,8 @@ var ErrLost = errors.New("the run lost a host lock")
 
 const lostAfter = TTL - RenewInterval
 
-// ReleaseRetryInterval is the default delay between release retry rounds.
-const ReleaseRetryInterval = 5 * time.Second
-
-// ReleaseRetryBound limits release retries to two minutes.
-// The bound is shorter than the five-minute lock expiry.
-const ReleaseRetryBound = 2 * time.Minute
-
 // Set is the locks of one run on its target hosts.
 type Set struct {
-	ReleaseRetryInterval time.Duration
-	ReleaseRetryBound    time.Duration
-
 	run        string
 	controller string
 	mu         sync.Mutex
@@ -39,15 +29,7 @@ type Set struct {
 // AcquireAll requires a lock on every host. On failure, it attempts to release
 // the locks already acquired and returns the error.
 func AcquireAll(ctx context.Context, hosts []Host, run, controller string) (*Set, error) {
-	set := &Set{
-		ReleaseRetryInterval: ReleaseRetryInterval,
-		ReleaseRetryBound:    ReleaseRetryBound,
-		run:                  run,
-		controller:           controller,
-		mu:                   sync.Mutex{},
-		held:                 nil,
-		renewed:              map[string]time.Time{},
-	}
+	set := &Set{run: run, controller: controller, mu: sync.Mutex{}, held: nil, renewed: map[string]time.Time{}}
 	for _, host := range hosts {
 		if err := Do(ctx, host, Acquire, run, controller); err != nil {
 			set.ReleaseAll(context.WithoutCancel(ctx))
@@ -123,60 +105,15 @@ func (s *Set) KeepRenewed(ctx context.Context, lost func(error)) (stop func()) {
 	}
 }
 
-// ReleaseAll retries failed release commands every five seconds.
-// Retries stop after two minutes or when the context is done.
-// A first round without failures returns without waiting.
+// ReleaseAll deletes every lock file that this run took.
 func (s *Set) ReleaseAll(ctx context.Context) {
 	s.mu.Lock()
 	hosts := s.held
 	s.held = nil
 	s.mu.Unlock()
-	boundCtx, cancel := context.WithTimeout(ctx, s.ReleaseRetryBound)
-	defer cancel()
-	for attempt := 1; ; attempt++ {
-		failed := s.releaseEach(boundCtx, hosts)
-		if len(failed) == 0 {
-			return
-		}
-		if !waitForReleaseRetry(boundCtx, s.ReleaseRetryInterval) {
-			for _, failure := range failed {
-				slog.Error("hostlock.release_failed", "host", failure.host.Name, "run", s.run,
-					"attempts", attempt, "err", failure.err)
-			}
-			return
-		}
-		hosts = hosts[:0]
-		for _, failure := range failed {
-			hosts = append(hosts, failure.host)
-		}
-	}
-}
-
-type failedRelease struct {
-	host Host
-	err  error
-}
-
-func (s *Set) releaseEach(ctx context.Context, hosts []Host) []failedRelease {
-	var failed []failedRelease
 	for _, host := range hosts {
 		if err := Do(ctx, host, Release, s.run, s.controller); err != nil {
-			failed = append(failed, failedRelease{host: host, err: err})
+			slog.Warn("hostlock.release_failed", "host", host.Name, "run", s.run, "err", err)
 		}
-	}
-	return failed
-}
-
-func waitForReleaseRetry(ctx context.Context, interval time.Duration) bool {
-	if ctx.Err() != nil {
-		return false
-	}
-	retry := time.NewTimer(interval)
-	defer retry.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-retry.C:
-		return true
 	}
 }
