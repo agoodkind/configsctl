@@ -73,6 +73,16 @@ var ErrNotHeld = errors.New("the lock on the host belongs to another run")
 
 // Do runs one operation on host for run, owned by controller.
 func Do(ctx context.Context, host Host, op Operation, run, controller string) error {
+	return runScript(ctx, host, op, lockOwner{run: run, controller: controller}, slog.LevelError)
+}
+
+type lockOwner struct {
+	run        string
+	controller string
+}
+
+func runScript(ctx context.Context, host Host, op Operation, owner lockOwner, failureLevel slog.Level) error {
+	run, controller := owner.run, owner.controller
 	dir := host.Dir
 	if dir == "" {
 		dir = DefaultDir
@@ -110,8 +120,13 @@ func Do(ctx context.Context, host Host, op Operation, run, controller string) er
 			return fmt.Errorf("%s on %s: %w (%s)", op, host.Name, ErrNotHeld, strings.TrimSpace(stdout.String()))
 		}
 	}
-	slog.Error("hostlock.operation_failed", "host", host.Name, "operation", string(op),
-		"stderr", strings.TrimSpace(stderr.String()), "err", err)
+	if failureLevel == slog.LevelWarn {
+		slog.Warn("hostlock.operation_failed", "host", host.Name, "operation", string(op),
+			"stderr", strings.TrimSpace(stderr.String()), "err", err)
+	} else {
+		slog.Error("hostlock.operation_failed", "host", host.Name, "operation", string(op),
+			"stderr", strings.TrimSpace(stderr.String()), "err", err)
+	}
 	return fmt.Errorf("%s lock on %s: %w: %s", op, host.Name, err, strings.TrimSpace(stderr.String()))
 }
 
