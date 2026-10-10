@@ -3,14 +3,17 @@
 package procgroup_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
+	"sync"
 	"testing"
 	"time"
 
@@ -41,14 +44,215 @@ func TestRunStopsTheDescendantsOfACanceledCommand(t *testing.T) {
 	// still answers kill 0 until then.
 	deadline := time.Now().Add(pidWait)
 	for {
-		err := syscall.Kill(child, 0)
-		if errors.Is(err, syscall.ESRCH) {
+		stopped, err := processStopped(child)
+		if stopped {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the background child %d survived Run: kill 0 = %v", child, err)
+			t.Fatalf("the background child %d survived Run: state check error = %v", child, err)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+type lockedBuffer struct {
+	mu   sync.Mutex
+	data bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(chunk []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.data.Write(chunk)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.data.String()
+}
+
+type sliceWriter struct {
+	sinks []*lockedBuffer
+}
+
+func (w sliceWriter) Write(chunk []byte) (int, error) {
+	return w.sinks[0].Write(chunk)
+}
+
+type wrapWriter struct {
+	inner io.Writer
+}
+
+func (w wrapWriter) Write(chunk []byte) (int, error) {
+	return w.inner.Write(chunk)
+}
+
+const (
+	bothStreamsScript        = `echo out; echo err >&2`
+	alternatingStreamsScript = `i=0; while [ "$i" -lt "$1" ]; do echo out; echo err >&2; i=$((i+1)); done`
+	alternatingPairs         = 200
+	orderedRuns              = 30
+)
+
+func TestRunGroupCopiesEachStreamToItsOwnWriter(t *testing.T) {
+	stdout := &lockedBuffer{}
+	stderr := &lockedBuffer{}
+	cmd := exec.CommandContext(t.Context(), "sh", "-c", bothStreamsScript)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	if err := procgroup.RunGroup(cmd); err != nil {
+		t.Fatalf("RunGroup returned %v", err)
+	}
+	if got := stdout.String(); got != "out\n" {
+		t.Fatalf("stdout = %q, want %q", got, "out\n")
+	}
+	if got := stderr.String(); got != "err\n" {
+		t.Fatalf("stderr = %q, want %q", got, "err\n")
+	}
+}
+
+func TestRunGroupCopiesBothStreamsInOrderToOnePointerWriter(t *testing.T) {
+	want := strings.Repeat("out\nerr\n", alternatingPairs)
+	for i := range orderedRuns {
+		sink := &lockedBuffer{}
+		cmd := exec.CommandContext(
+			t.Context(), "sh", "-c", alternatingStreamsScript, "sh", strconv.Itoa(alternatingPairs),
+		)
+		cmd.Stdout = sink
+		cmd.Stderr = sink
+		if err := procgroup.RunGroup(cmd); err != nil {
+			t.Fatalf("run %d: RunGroup returned %v", i, err)
+		}
+		if got := sink.String(); got != want {
+			t.Fatalf("run %d: the %d output bytes are not %d alternating pairs of %q", i, len(got), alternatingPairs, "out\nerr\n")
+		}
+	}
+}
+
+func TestRunGroupCopiesBothStreamsToOneWriterWithANonComparableField(t *testing.T) {
+	sink := &lockedBuffer{}
+	writer := wrapWriter{inner: sliceWriter{sinks: []*lockedBuffer{sink}}}
+	cmd := exec.CommandContext(t.Context(), "sh", "-c", bothStreamsScript)
+	cmd.Stdout = writer
+	cmd.Stderr = writer
+	if err := procgroup.RunGroup(cmd); err != nil {
+		t.Fatalf("RunGroup returned %v", err)
+	}
+	got := sink.String()
+	if !strings.Contains(got, "out\n") || !strings.Contains(got, "err\n") {
+		t.Fatalf("output = %q, want it to contain %q and %q", got, "out\n", "err\n")
+	}
+}
+
+func TestRunGroupCopiesBothStreamsToOneWriterOfANonComparableType(t *testing.T) {
+	sink := &lockedBuffer{}
+	writer := sliceWriter{sinks: []*lockedBuffer{sink}}
+	cmd := exec.CommandContext(t.Context(), "sh", "-c", bothStreamsScript)
+	cmd.Stdout = writer
+	cmd.Stderr = writer
+	if err := procgroup.RunGroup(cmd); err != nil {
+		t.Fatalf("RunGroup returned %v", err)
+	}
+	got := sink.String()
+	if !strings.Contains(got, "out\n") || !strings.Contains(got, "err\n") {
+		t.Fatalf("output = %q, want it to contain %q and %q", got, "out\n", "err\n")
+	}
+}
+
+const (
+	writerPanicValue  = "the writer panicked in the test"
+	largeOutputScript = `head -c 300000 /dev/zero`
+	hangLimit         = 5 * time.Second
+)
+
+var errWriterFailed = errors.New("the writer failed in the test")
+
+type panickingWriter struct{}
+
+func (panickingWriter) Write([]byte) (int, error) {
+	panic(writerPanicValue)
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) {
+	return 0, errWriterFailed
+}
+
+func TestRunGroupReturnsAnErrorWhenTheWriterPanics(t *testing.T) {
+	cmd := exec.CommandContext(t.Context(), "sh", "-c", `echo out`)
+	cmd.Stdout = panickingWriter{}
+	err := procgroup.RunGroup(cmd)
+	if err == nil {
+		t.Fatal("RunGroup returned nil after the writer panicked")
+	}
+	if !strings.Contains(err.Error(), writerPanicValue) {
+		t.Fatalf("error = %v, want it to contain %q", err, writerPanicValue)
+	}
+}
+
+type closedWriter struct{}
+
+func (closedWriter) Write([]byte) (int, error) {
+	return 0, fmt.Errorf("the writer is closed in the test: %w", os.ErrClosed)
+}
+
+func TestRunGroupReturnsAnErrorWhenTheWriterReportsAClosedFile(t *testing.T) {
+	cmd := exec.CommandContext(t.Context(), "sh", "-c", `echo out`)
+	cmd.Stdout = closedWriter{}
+	err := procgroup.RunGroup(cmd)
+	if !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("RunGroup returned %v, want an error that wraps %v", err, os.ErrClosed)
+	}
+}
+
+type blockingWriter struct {
+	release <-chan struct{}
+}
+
+func (w blockingWriter) Write(chunk []byte) (int, error) {
+	<-w.release
+	return len(chunk), nil
+}
+
+func TestRunGroupReturnsAnErrorWhenTheWriterBlocks(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	cmd := exec.CommandContext(t.Context(), "sh", "-c", `echo out`)
+	cmd.Stdout = blockingWriter{release: release}
+	done := make(chan error, 1)
+	go func() { done <- procgroup.RunGroup(cmd) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("RunGroup returned nil while the writer still blocked")
+		}
+	case <-time.After(procgroup.StopGrace + pidWait):
+		t.Fatalf("RunGroup did not return within %v of a blocked writer", procgroup.StopGrace+pidWait)
+	}
+}
+
+func TestRunGroupReturnsPromptlyWhenTheWriterFailsOnLargeOutput(t *testing.T) {
+	requirePromptError(t, failingWriter{})
+}
+
+func TestRunGroupReturnsPromptlyWhenTheWriterPanicsOnLargeOutput(t *testing.T) {
+	requirePromptError(t, panickingWriter{})
+}
+
+func requirePromptError(t *testing.T, writer io.Writer) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), hangLimit)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sh", "-c", largeOutputScript)
+	cmd.Stdout = writer
+	err := procgroup.RunGroup(cmd)
+	if ctx.Err() != nil {
+		t.Fatalf("RunGroup returned only after the %v deadline stopped the command: %v", hangLimit, err)
+	}
+	if err == nil {
+		t.Fatal("RunGroup returned nil after the writer stopped accepting output")
 	}
 }
 
