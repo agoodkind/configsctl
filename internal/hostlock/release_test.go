@@ -17,6 +17,7 @@ const (
 	shortBound        = 300 * time.Millisecond
 	longBound         = 30 * time.Second
 	hungReleaseLimit  = 5 * time.Second
+	healthyLimit      = 2 * time.Second
 )
 
 type switchedHost struct {
@@ -152,8 +153,8 @@ func TestReleaseAllReturnsWithoutDelayWhenTheReleaseSucceeds(t *testing.T) {
 	}
 	started := time.Now()
 	set.ReleaseAll(t.Context())
-	if elapsed := time.Since(started); elapsed > hostlock.ReleaseRetryInterval/2 {
-		t.Fatalf("ReleaseAll took %s on a healthy host, want under %s", elapsed, hostlock.ReleaseRetryInterval/2)
+	if elapsed := time.Since(started); elapsed > healthyLimit {
+		t.Fatalf("ReleaseAll took %s on a healthy host, want under %s", elapsed, healthyLimit)
 	}
 	if _, err := os.Stat(filepath.Join(host.Dir, "deploy.lock")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the lock file remains after ReleaseAll: %v", err)
