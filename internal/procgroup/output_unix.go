@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"reflect"
 	"sync"
 	"time"
 )
@@ -51,12 +52,14 @@ func pipeOutput(cmd *exec.Cmd) (*outputCopier, error) {
 	return copier, nil
 }
 
-func sameWriter(first io.Writer, second io.Writer) (same bool) {
-	defer func() {
-		if recover() != nil {
-			same = false
-		}
-	}()
+func sameWriter(first io.Writer, second io.Writer) bool {
+	if first == nil || second == nil {
+		return first == nil && second == nil
+	}
+	firstType := reflect.TypeOf(first)
+	if firstType != reflect.TypeOf(second) || !firstType.Comparable() {
+		return false
+	}
 	return first == second
 }
 

@@ -3,6 +3,7 @@
 package procgroup_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -49,6 +51,70 @@ func TestRunStopsTheDescendantsOfACanceledCommand(t *testing.T) {
 			t.Fatalf("the background child %d survived Run: kill 0 = %v", child, err)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+type lockedBuffer struct {
+	mu   sync.Mutex
+	data bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(chunk []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.data.Write(chunk)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.data.String()
+}
+
+type sliceWriter struct {
+	sinks []*lockedBuffer
+}
+
+func (w sliceWriter) Write(chunk []byte) (int, error) {
+	return w.sinks[0].Write(chunk)
+}
+
+type fieldWriter struct {
+	sink *lockedBuffer
+}
+
+func (w fieldWriter) Write(chunk []byte) (int, error) {
+	return w.sink.Write(chunk)
+}
+
+const bothStreamsScript = `echo out; echo err >&2`
+
+func TestRunGroupCopiesBothStreamsToOneWriterOfANonComparableType(t *testing.T) {
+	sink := &lockedBuffer{}
+	writer := sliceWriter{sinks: []*lockedBuffer{sink}}
+	cmd := exec.CommandContext(t.Context(), "sh", "-c", bothStreamsScript)
+	cmd.Stdout = writer
+	cmd.Stderr = writer
+	if err := procgroup.RunGroup(cmd); err != nil {
+		t.Fatalf("RunGroup returned %v", err)
+	}
+	got := sink.String()
+	if !strings.Contains(got, "out\n") || !strings.Contains(got, "err\n") {
+		t.Fatalf("output = %q, want it to contain %q and %q", got, "out\n", "err\n")
+	}
+}
+
+func TestRunGroupCopiesBothStreamsInOrderToOneWriterOfAComparableType(t *testing.T) {
+	sink := &lockedBuffer{}
+	writer := fieldWriter{sink: sink}
+	cmd := exec.CommandContext(t.Context(), "sh", "-c", bothStreamsScript)
+	cmd.Stdout = writer
+	cmd.Stderr = writer
+	if err := procgroup.RunGroup(cmd); err != nil {
+		t.Fatalf("RunGroup returned %v", err)
+	}
+	if got := sink.String(); got != "out\nerr\n" {
+		t.Fatalf("output = %q, want %q", got, "out\nerr\n")
 	}
 }
 

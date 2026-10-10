@@ -51,7 +51,6 @@ func RunGroup(cmd *exec.Cmd) error {
 		err = copyErr
 	}
 	if err != nil {
-		slog.Error("procgroup.run_failed", "command", cmd.Path, "err", err)
 		return fmt.Errorf("run %s: %w", cmd.Path, err)
 	}
 	return nil
