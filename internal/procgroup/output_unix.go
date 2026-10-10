@@ -96,22 +96,41 @@ func goRecovering(event string, run func()) {
 
 func (c *outputCopier) copy(destination io.Writer, source *os.File) {
 	defer c.copies.Done()
+	recorder := &writeRecorder{destination: destination, writeErr: nil}
 	var err error
 	defer func() {
+		readEndClosed := recorder.writeErr == nil && errors.Is(err, os.ErrClosed)
 		if recovered := recover(); recovered != nil {
 			err = fmt.Errorf("the output writer panicked: %v", recovered)
+			readEndClosed = false
 		}
-		c.fail(err, source)
+		c.fail(err, readEndClosed, source)
 	}()
-	_, err = io.Copy(destination, source)
+	_, err = io.Copy(recorder, source)
 }
 
-func (c *outputCopier) fail(err error, source *os.File) {
+type writeRecorder struct {
+	destination io.Writer
+	writeErr    error
+}
+
+func (r *writeRecorder) Write(chunk []byte) (int, error) {
+	written, err := r.destination.Write(chunk)
+	if err == nil {
+		return written, nil
+	}
+	if r.writeErr == nil {
+		r.writeErr = err
+	}
+	return written, fmt.Errorf("write command output: %w", err)
+}
+
+func (c *outputCopier) fail(err error, readEndClosed bool, source *os.File) {
 	if err == nil {
 		return
 	}
 	_ = source.Close()
-	if errors.Is(err, os.ErrClosed) {
+	if readEndClosed {
 		return
 	}
 	c.mu.Lock()

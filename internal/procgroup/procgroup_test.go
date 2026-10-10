@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -189,6 +190,21 @@ func TestRunGroupReturnsAnErrorWhenTheWriterPanics(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), writerPanicValue) {
 		t.Fatalf("error = %v, want it to contain %q", err, writerPanicValue)
+	}
+}
+
+type closedWriter struct{}
+
+func (closedWriter) Write([]byte) (int, error) {
+	return 0, fmt.Errorf("the writer is closed in the test: %w", os.ErrClosed)
+}
+
+func TestRunGroupReturnsAnErrorWhenTheWriterReportsAClosedFile(t *testing.T) {
+	cmd := exec.CommandContext(t.Context(), "sh", "-c", `echo out`)
+	cmd.Stdout = closedWriter{}
+	err := procgroup.RunGroup(cmd)
+	if !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("RunGroup returned %v, want an error that wraps %v", err, os.ErrClosed)
 	}
 }
 
