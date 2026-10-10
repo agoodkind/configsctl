@@ -160,6 +160,61 @@ func TestRunGroupCopiesBothStreamsToOneWriterOfANonComparableType(t *testing.T) 
 	}
 }
 
+const (
+	writerPanicValue  = "the writer panicked in the test"
+	largeOutputScript = `head -c 300000 /dev/zero`
+	hangLimit         = 5 * time.Second
+)
+
+var errWriterFailed = errors.New("the writer failed in the test")
+
+type panickingWriter struct{}
+
+func (panickingWriter) Write([]byte) (int, error) {
+	panic(writerPanicValue)
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) {
+	return 0, errWriterFailed
+}
+
+func TestRunGroupReturnsAnErrorWhenTheWriterPanics(t *testing.T) {
+	cmd := exec.CommandContext(t.Context(), "sh", "-c", `echo out`)
+	cmd.Stdout = panickingWriter{}
+	err := procgroup.RunGroup(cmd)
+	if err == nil {
+		t.Fatal("RunGroup returned nil after the writer panicked")
+	}
+	if !strings.Contains(err.Error(), writerPanicValue) {
+		t.Fatalf("error = %v, want it to contain %q", err, writerPanicValue)
+	}
+}
+
+func TestRunGroupReturnsPromptlyWhenTheWriterFailsOnLargeOutput(t *testing.T) {
+	requirePromptError(t, failingWriter{})
+}
+
+func TestRunGroupReturnsPromptlyWhenTheWriterPanicsOnLargeOutput(t *testing.T) {
+	requirePromptError(t, panickingWriter{})
+}
+
+func requirePromptError(t *testing.T, writer io.Writer) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), hangLimit)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sh", "-c", largeOutputScript)
+	cmd.Stdout = writer
+	err := procgroup.RunGroup(cmd)
+	if ctx.Err() != nil {
+		t.Fatalf("RunGroup returned only after the %v deadline stopped the command: %v", hangLimit, err)
+	}
+	if err == nil {
+		t.Fatal("RunGroup returned nil after the writer stopped accepting output")
+	}
+}
+
 func waitForPID(t *testing.T, path string) int {
 	t.Helper()
 	deadline := time.Now().Add(pidWait)

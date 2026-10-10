@@ -96,8 +96,22 @@ func goRecovering(event string, run func()) {
 
 func (c *outputCopier) copy(destination io.Writer, source *os.File) {
 	defer c.copies.Done()
-	_, err := io.Copy(destination, source)
-	if err == nil || errors.Is(err, os.ErrClosed) {
+	var err error
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("the output writer panicked: %v", recovered)
+		}
+		c.fail(err, source)
+	}()
+	_, err = io.Copy(destination, source)
+}
+
+func (c *outputCopier) fail(err error, source *os.File) {
+	if err == nil {
+		return
+	}
+	_ = source.Close()
+	if errors.Is(err, os.ErrClosed) {
 		return
 	}
 	c.mu.Lock()
