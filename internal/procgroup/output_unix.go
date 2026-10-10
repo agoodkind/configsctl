@@ -14,6 +14,8 @@ import (
 	"time"
 )
 
+const abandonedCopyWait = 2 * time.Second
+
 var errOutputOpen = errors.New("the command output stayed open after its process group stopped")
 
 type outputCopier struct {
@@ -171,7 +173,13 @@ func (c *outputCopier) wait() error {
 	case <-grace.C:
 		slog.Error("procgroup.output_copy_abandoned", "err", errOutputOpen)
 		c.closeReadEnds()
-		<-done
+		abandon := time.NewTimer(abandonedCopyWait)
+		defer abandon.Stop()
+		select {
+		case <-done:
+		case <-abandon.C:
+			return fmt.Errorf("copy command output: %w", errOutputOpen)
+		}
 	}
 	c.closeReadEnds()
 	c.mu.Lock()

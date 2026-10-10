@@ -5,6 +5,7 @@ package procgroup
 import (
 	"bytes"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"strconv"
@@ -23,7 +24,7 @@ func liveMembers(groupID int) (int, error) {
 		return 0, fmt.Errorf("open /proc: %w", err)
 	}
 	defer func() { _ = proc.Close() }()
-	entries, err := os.ReadDir("/proc")
+	entries, err := fs.ReadDir(proc.FS(), ".")
 	if err != nil {
 		slog.Error("procgroup.members_failed", "group", groupID, "err", err)
 		return 0, fmt.Errorf("list /proc: %w", err)

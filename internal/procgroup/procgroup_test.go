@@ -208,6 +208,32 @@ func TestRunGroupReturnsAnErrorWhenTheWriterReportsAClosedFile(t *testing.T) {
 	}
 }
 
+type blockingWriter struct {
+	release <-chan struct{}
+}
+
+func (w blockingWriter) Write(chunk []byte) (int, error) {
+	<-w.release
+	return len(chunk), nil
+}
+
+func TestRunGroupReturnsAnErrorWhenTheWriterBlocks(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	cmd := exec.CommandContext(t.Context(), "sh", "-c", `echo out`)
+	cmd.Stdout = blockingWriter{release: release}
+	done := make(chan error, 1)
+	go func() { done <- procgroup.RunGroup(cmd) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("RunGroup returned nil while the writer still blocked")
+		}
+	case <-time.After(procgroup.StopGrace + pidWait):
+		t.Fatalf("RunGroup did not return within %v of a blocked writer", procgroup.StopGrace+pidWait)
+	}
+}
+
 func TestRunGroupReturnsPromptlyWhenTheWriterFailsOnLargeOutput(t *testing.T) {
 	requirePromptError(t, failingWriter{})
 }
