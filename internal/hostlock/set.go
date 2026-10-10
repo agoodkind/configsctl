@@ -17,7 +17,7 @@ var ErrLost = errors.New("the run lost a host lock")
 
 const lostAfter = TTL - RenewInterval
 
-// ReleaseRetryInterval sets the five-second delay between release rounds.
+// ReleaseRetryInterval is the default delay between release retry rounds.
 const ReleaseRetryInterval = 5 * time.Second
 
 // ReleaseRetryBound limits release retries to two minutes.
