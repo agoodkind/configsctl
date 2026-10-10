@@ -28,6 +28,8 @@ const TTL = 5 * time.Minute
 // RenewInterval is the time between two renewals of a held lock.
 const RenewInterval = time.Minute
 
+const killedCommandWait = time.Second
+
 // Operation is one action of the lock script.
 type Operation string
 
@@ -94,6 +96,7 @@ func Do(ctx context.Context, host Host, op Operation, run, controller string) er
 		cmd = exec.CommandContext(ctx, "ssh", args...)
 	}
 	cmd.Stdin = bytes.NewReader(lockScript)
+	cmd.WaitDelay = killedCommandWait
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
