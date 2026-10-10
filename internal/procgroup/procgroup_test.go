@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -45,12 +44,12 @@ func TestRunStopsTheDescendantsOfACanceledCommand(t *testing.T) {
 	// still answers kill 0 until then.
 	deadline := time.Now().Add(pidWait)
 	for {
-		err := syscall.Kill(child, 0)
-		if errors.Is(err, syscall.ESRCH) {
+		stopped, err := processStopped(child)
+		if stopped {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the background child %d survived Run: kill 0 = %v", child, err)
+			t.Fatalf("the background child %d survived Run: state check error = %v", child, err)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

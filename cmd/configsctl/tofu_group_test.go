@@ -3,7 +3,6 @@
 package main_test
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -62,12 +61,12 @@ func requireProcessGone(t *testing.T, pid int) {
 	t.Helper()
 	deadline := time.Now().Add(lingeringChildWait)
 	for {
-		err := syscall.Kill(pid, 0)
-		if errors.Is(err, syscall.ESRCH) {
+		stopped, err := processStopped(pid)
+		if stopped {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the fake tofu child %d survived configsctl: kill 0 = %v", pid, err)
+			t.Fatalf("the fake tofu child %d survived configsctl: state check error = %v", pid, err)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
