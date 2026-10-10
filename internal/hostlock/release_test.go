@@ -16,6 +16,7 @@ const (
 	repairDelay       = 150 * time.Millisecond
 	shortBound        = 300 * time.Millisecond
 	longBound         = 30 * time.Second
+	hungReleaseLimit  = 5 * time.Second
 )
 
 type switchedHost struct {
@@ -94,6 +95,36 @@ func TestReleaseAllStopsAtTheBoundWhenTheReleaseKeepsFailing(t *testing.T) {
 	after, err := os.ReadFile(switched.lockFile)
 	if err != nil || string(after) != string(before) {
 		t.Fatalf("lock file = %q, err = %v; want %q", after, err, before)
+	}
+}
+
+func TestReleaseAllReturnsAtTheBoundWhenAReleaseCommandHangs(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root creates the guard directory in a read-only lock directory")
+	}
+	host := localHost(t)
+	set, err := hostlock.AcquireAll(t.Context(), []hostlock.Host{host}, firstRun, "controller-a")
+	if err != nil {
+		t.Fatalf("AcquireAll: %v", err)
+	}
+	if err := os.Chmod(host.Dir, 0o500); err != nil {
+		t.Fatalf("make the lock directory read-only: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(host.Dir, 0o700); err != nil {
+			t.Errorf("make the lock directory writable: %v", err)
+		}
+	})
+	set.ReleaseRetryInterval = testRetryInterval
+	set.ReleaseRetryBound = shortBound
+	started := time.Now()
+	set.ReleaseAll(t.Context())
+	elapsed := time.Since(started)
+	if elapsed < shortBound || elapsed > hungReleaseLimit {
+		t.Fatalf("ReleaseAll returned after %s, want at least %s and under %s", elapsed, shortBound, hungReleaseLimit)
+	}
+	if _, err := os.Stat(filepath.Join(host.Dir, "deploy.lock")); err != nil {
+		t.Fatalf("the lock file after the hung release: %v", err)
 	}
 }
 

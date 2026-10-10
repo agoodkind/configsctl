@@ -132,17 +132,17 @@ func (s *Set) ReleaseAll(ctx context.Context) {
 	hosts := s.held
 	s.held = nil
 	s.mu.Unlock()
-	bound := time.NewTimer(s.ReleaseRetryBound)
-	defer bound.Stop()
+	boundCtx, cancel := context.WithTimeout(ctx, s.ReleaseRetryBound)
+	defer cancel()
 	for attempt := 1; ; attempt++ {
-		failed := s.releaseEach(ctx, hosts)
+		failed := s.releaseEach(boundCtx, hosts)
 		if len(failed) == 0 {
 			return
 		}
-		if !waitForReleaseRetry(ctx, bound, s.ReleaseRetryInterval) {
+		if !waitForReleaseRetry(boundCtx, s.ReleaseRetryInterval) {
 			for _, failure := range failed {
 				slog.Error("hostlock.release_failed", "host", failure.host.Name, "run", s.run,
-					"attempts", attempt, "err", failure.err)
+					"attempts", attempt, "stderr", failure.stderr, "err", failure.err)
 			}
 			return
 		}
@@ -154,22 +154,26 @@ func (s *Set) ReleaseAll(ctx context.Context) {
 }
 
 type failedRelease struct {
-	host Host
-	err  error
+	host   Host
+	stderr string
+	err    error
 }
 
 func (s *Set) releaseEach(ctx context.Context, hosts []Host) []failedRelease {
 	var failed []failedRelease
 	for _, host := range hosts {
-		owner := lockOwner{run: s.run, controller: s.controller}
-		if err := runScript(ctx, host, Release, owner, slog.LevelWarn); err != nil {
-			failed = append(failed, failedRelease{host: host, err: err})
+		result := runScript(ctx, host, Release, lockOwner{run: s.run, controller: s.controller})
+		if result.err == nil {
+			continue
 		}
+		slog.Warn("hostlock.operation_failed", "host", host.Name, "operation", string(Release),
+			"stderr", result.stderr, "err", result.err)
+		failed = append(failed, failedRelease{host: host, stderr: result.stderr, err: result.err})
 	}
 	return failed
 }
 
-func waitForReleaseRetry(ctx context.Context, bound *time.Timer, interval time.Duration) bool {
+func waitForReleaseRetry(ctx context.Context, interval time.Duration) bool {
 	if ctx.Err() != nil {
 		return false
 	}
@@ -177,8 +181,6 @@ func waitForReleaseRetry(ctx context.Context, bound *time.Timer, interval time.D
 	defer retry.Stop()
 	select {
 	case <-ctx.Done():
-		return false
-	case <-bound.C:
 		return false
 	case <-retry.C:
 		return true
