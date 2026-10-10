@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -79,15 +80,70 @@ func (w sliceWriter) Write(chunk []byte) (int, error) {
 	return w.sinks[0].Write(chunk)
 }
 
-type fieldWriter struct {
-	sink *lockedBuffer
+type wrapWriter struct {
+	inner io.Writer
 }
 
-func (w fieldWriter) Write(chunk []byte) (int, error) {
-	return w.sink.Write(chunk)
+func (w wrapWriter) Write(chunk []byte) (int, error) {
+	return w.inner.Write(chunk)
 }
 
-const bothStreamsScript = `echo out; echo err >&2`
+const (
+	bothStreamsScript        = `echo out; echo err >&2`
+	alternatingStreamsScript = `i=0; while [ "$i" -lt "$1" ]; do echo out; echo err >&2; i=$((i+1)); done`
+	alternatingPairs         = 200
+	orderedRuns              = 30
+)
+
+func TestRunGroupCopiesEachStreamToItsOwnWriter(t *testing.T) {
+	stdout := &lockedBuffer{}
+	stderr := &lockedBuffer{}
+	cmd := exec.CommandContext(t.Context(), "sh", "-c", bothStreamsScript)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	if err := procgroup.RunGroup(cmd); err != nil {
+		t.Fatalf("RunGroup returned %v", err)
+	}
+	if got := stdout.String(); got != "out\n" {
+		t.Fatalf("stdout = %q, want %q", got, "out\n")
+	}
+	if got := stderr.String(); got != "err\n" {
+		t.Fatalf("stderr = %q, want %q", got, "err\n")
+	}
+}
+
+func TestRunGroupCopiesBothStreamsInOrderToOnePointerWriter(t *testing.T) {
+	want := strings.Repeat("out\nerr\n", alternatingPairs)
+	for i := range orderedRuns {
+		sink := &lockedBuffer{}
+		cmd := exec.CommandContext(
+			t.Context(), "sh", "-c", alternatingStreamsScript, "sh", strconv.Itoa(alternatingPairs),
+		)
+		cmd.Stdout = sink
+		cmd.Stderr = sink
+		if err := procgroup.RunGroup(cmd); err != nil {
+			t.Fatalf("run %d: RunGroup returned %v", i, err)
+		}
+		if got := sink.String(); got != want {
+			t.Fatalf("run %d: the %d output bytes are not %d alternating pairs of %q", i, len(got), alternatingPairs, "out\nerr\n")
+		}
+	}
+}
+
+func TestRunGroupCopiesBothStreamsToOneWriterWithANonComparableField(t *testing.T) {
+	sink := &lockedBuffer{}
+	writer := wrapWriter{inner: sliceWriter{sinks: []*lockedBuffer{sink}}}
+	cmd := exec.CommandContext(t.Context(), "sh", "-c", bothStreamsScript)
+	cmd.Stdout = writer
+	cmd.Stderr = writer
+	if err := procgroup.RunGroup(cmd); err != nil {
+		t.Fatalf("RunGroup returned %v", err)
+	}
+	got := sink.String()
+	if !strings.Contains(got, "out\n") || !strings.Contains(got, "err\n") {
+		t.Fatalf("output = %q, want it to contain %q and %q", got, "out\n", "err\n")
+	}
+}
 
 func TestRunGroupCopiesBothStreamsToOneWriterOfANonComparableType(t *testing.T) {
 	sink := &lockedBuffer{}
@@ -101,20 +157,6 @@ func TestRunGroupCopiesBothStreamsToOneWriterOfANonComparableType(t *testing.T) 
 	got := sink.String()
 	if !strings.Contains(got, "out\n") || !strings.Contains(got, "err\n") {
 		t.Fatalf("output = %q, want it to contain %q and %q", got, "out\n", "err\n")
-	}
-}
-
-func TestRunGroupCopiesBothStreamsInOrderToOneWriterOfAComparableType(t *testing.T) {
-	sink := &lockedBuffer{}
-	writer := fieldWriter{sink: sink}
-	cmd := exec.CommandContext(t.Context(), "sh", "-c", bothStreamsScript)
-	cmd.Stdout = writer
-	cmd.Stderr = writer
-	if err := procgroup.RunGroup(cmd); err != nil {
-		t.Fatalf("RunGroup returned %v", err)
-	}
-	if got := sink.String(); got != "out\nerr\n" {
-		t.Fatalf("output = %q, want %q", got, "out\nerr\n")
 	}
 }
 

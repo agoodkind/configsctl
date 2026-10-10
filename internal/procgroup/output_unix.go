@@ -57,7 +57,11 @@ func sameWriter(first io.Writer, second io.Writer) bool {
 		return first == nil && second == nil
 	}
 	firstType := reflect.TypeOf(first)
-	if firstType != reflect.TypeOf(second) || !firstType.Comparable() {
+	if firstType != reflect.TypeOf(second) {
+		return false
+	}
+	kind := firstType.Kind()
+	if kind != reflect.Pointer && kind != reflect.Chan && kind != reflect.UnsafePointer {
 		return false
 	}
 	return first == second

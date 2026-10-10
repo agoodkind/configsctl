@@ -351,16 +351,15 @@ func runTofu(env cmdEnv, args []string) error {
 
 	runErr := procgroup.RunGroup(cmd)
 	logPath := ""
+	var closeErr error
 	if log != nil {
 		logPath = log.Path()
-		if closeErr := log.Close(); closeErr != nil {
-			return closeErr
-		}
+		closeErr = log.Close()
 	}
 	if runErr != nil {
 		return tofuFailure(ctx, runErr, logPath)
 	}
-	return nil
+	return closeErr
 }
 
 const tofuCrashExitCode = 11
