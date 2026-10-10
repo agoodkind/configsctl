@@ -172,6 +172,11 @@ func newConfigsTree(t *testing.T) configsTree {
 
 func runConfigsctl(t *testing.T, tree configsTree, args ...string) commandResult {
 	t.Helper()
+	return runConfigsctlWithPath(t, tree, os.Getenv("PATH"), args...)
+}
+
+func runConfigsctlWithPath(t *testing.T, tree configsTree, path string, args ...string) commandResult {
+	t.Helper()
 	tempDir := filepath.Join(tree.root, "tmp")
 	if err := os.MkdirAll(tempDir, 0o700); err != nil {
 		t.Fatalf("create TMPDIR: %v", err)
@@ -179,7 +184,7 @@ func runConfigsctl(t *testing.T, tree configsTree, args ...string) commandResult
 	command := exec.CommandContext(context.Background(), configsctlBinary, args...)
 	command.Dir = tree.root
 	command.Env = []string{
-		"PATH=" + os.Getenv("PATH"),
+		"PATH=" + path,
 		"HOME=" + tree.home,
 		"TMPDIR=" + tempDir,
 	}
