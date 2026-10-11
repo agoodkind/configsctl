@@ -278,6 +278,11 @@ func runDeployWith(env cmdEnv, args []string, deploy deployRunner) error {
 	if closeErr := log.Close(); closeErr != nil {
 		return closeErr
 	}
+	var gateErr *planGateError
+	if errors.As(deployErr, &gateErr) {
+		fmt.Fprintf(os.Stderr, "The plan output is in %s\n", log.Path())
+		return gateErr
+	}
 	if deployErr != nil {
 		return fmt.Errorf("deploy failed; the play output is in %s", log.Path())
 	}
