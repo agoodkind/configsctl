@@ -40,6 +40,17 @@ type tofuSettings struct {
 	// environment variable <NAME>.
 	EnvKeyPrefix string                      `yaml:"env_key_prefix"`
 	LockTargets  map[string]tofulock.Targets `yaml:"lock_targets"`
+	// GuestModule specifies the module address indexed by service_name for guest plans.
+	// An empty GuestModule disables the deploy plan gate.
+	GuestModule string `yaml:"guest_module"`
+}
+
+func (t tofuSettings) guestWorkspaceDir() string {
+	return filepath.Join(t.WorkspacesDir, guestWorkspaceName)
+}
+
+func (t tofuSettings) guestHosts() map[string]string {
+	return t.LockTargets[tofuWorkspaceKey(t.guestWorkspaceDir())].GuestHosts
 }
 
 func loadSettings(path string) (settings, error) {
@@ -63,6 +74,12 @@ func loadSettings(path string) (settings, error) {
 	}
 	if err := validateLockTargets(path, loaded.Tofu.LockTargets); err != nil {
 		return loaded, err
+	}
+	if loaded.Tofu.GuestModule != "" && loaded.Tofu.guestHosts() == nil {
+		return loaded, fmt.Errorf(
+			"%s: tofu.guest_module requires tofu.lock_targets.%s.guest_hosts",
+			path, tofuWorkspaceKey(loaded.Tofu.guestWorkspaceDir()),
+		)
 	}
 	return loaded, validateDeploySettings(path, loaded.Deploy)
 }

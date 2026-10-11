@@ -74,6 +74,20 @@ func (inv Inventory) variableHost(host, variable string) (string, error) {
 	return value, nil
 }
 
+// HostString returns a nonempty string from a host's inventory variable.
+// The method returns an error for a missing variable, an empty string, or an invalid string value.
+func (inv Inventory) HostString(host, variable string) (string, error) {
+	raw, ok := inv.variables[host][variable]
+	if !ok {
+		return "", fmt.Errorf("host %s has no inventory variable %s", host, variable)
+	}
+	value, ok := inventoryString(raw)
+	if !ok || value == "" {
+		return "", fmt.Errorf("inventory variable %s of host %s is not a string", variable, host)
+	}
+	return value, nil
+}
+
 func (inv Inventory) hasHost(name string) bool {
 	if _, ok := inv.Hosts[name]; ok {
 		return true

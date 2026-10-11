@@ -45,6 +45,21 @@ configsctl passes every argument after the workspace name to OpenTofu. When the 
 
 configsctl exports a vault key as `TF_VAR_<key>` only when the selected workspace declares a variable with that name.
 
+## Gate a deploy on the guest plan
+
+configsctl runs targeted OpenTofu plans before acquiring host locks or running Ansible when `tofu.guest_module` is set. The key selects the module address in the `guest` workspace and requires that workspace's `guest_hosts` mapping under `tofu.lock_targets`. The gate plans only selected playbook hosts listed as values in that mapping. Each plan targets the module instance keyed by the host's `service_name` inventory variable. The gate refuses the deploy if any plan fails or reports pending changes.
+
+The `--check` option skips the gate. An absent `tofu.guest_module` key disables the gate.
+
+```yaml
+tofu:
+  guest_module: module.base
+  lock_targets:
+    opentofu/guest:
+      guest_hosts:
+        suburban/224: clyde.suburban.goodkind.io
+```
+
 ## Prerequisites
 
 - Go at the version in `go.mod`.

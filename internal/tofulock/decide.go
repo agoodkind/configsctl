@@ -3,6 +3,7 @@ package tofulock
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"maps"
 	"slices"
 	"strings"
@@ -45,6 +46,27 @@ func Decide(plan []byte, targets Targets) Decision {
 		}
 	}
 	return Decision{AllHosts: false, Reason: "", Hosts: slices.Sorted(maps.Keys(found))}
+}
+
+// PendingAddresses returns sorted addresses of pending resource changes from plan JSON.
+// The function returns an error when decoding fails or the format version is outside 1.x.
+func PendingAddresses(plan []byte) ([]string, error) {
+	var document planDocument
+	if err := json.Unmarshal(plan, &document); err != nil {
+		slog.Error("tofu.plan.decode_failed", "err", err)
+		return nil, fmt.Errorf("decode the plan JSON: %w", err)
+	}
+	if !strings.HasPrefix(document.FormatVersion, supportedFormatMajor) {
+		return nil, fmt.Errorf("the plan JSON format version %q is not 1.x", document.FormatVersion)
+	}
+	var addresses []string
+	for _, resource := range document.ResourceChanges {
+		if !resource.Change.inert() {
+			addresses = append(addresses, resource.Address)
+		}
+	}
+	slices.Sort(addresses)
+	return addresses, nil
 }
 
 func allHosts(reason string) Decision {

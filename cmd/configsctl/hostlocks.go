@@ -35,7 +35,14 @@ func allTofuLockHosts(inv ansible.Inventory) []string {
 func lockedDeploy(opts ansible.DeployOptions) error {
 	ctx := context.Background()
 	if !opts.Check {
-		lockedCtx, release, err := lockPlayHosts(ctx, opts)
+		targets, err := loadDeployTargets(ctx, opts)
+		if err != nil {
+			return err
+		}
+		if err := gateGuestPlans(ctx, targets, opts.Output); err != nil {
+			return err
+		}
+		lockedCtx, release, err := lockPlayHosts(ctx, opts, targets)
 		if err != nil {
 			return err
 		}
@@ -52,23 +59,35 @@ func lockedDeploy(opts ansible.DeployOptions) error {
 	return nil
 }
 
-func lockPlayHosts(ctx context.Context, opts ansible.DeployOptions) (context.Context, func(), error) {
+type deployTargets struct {
+	settings  settings
+	inventory ansible.Inventory
+	playHosts []string
+}
+
+func loadDeployTargets(ctx context.Context, opts ansible.DeployOptions) (deployTargets, error) {
 	loaded, err := loadSettings(settingsFile)
 	if err != nil {
-		return nil, nil, err
+		return deployTargets{}, err
 	}
 	inv, err := ansible.LoadInventory(ctx, "")
 	if err != nil {
 		slog.Error("deploy.lock.inventory_failed", "err", err)
-		return nil, nil, fmt.Errorf("load the inventory for host locks: %w", err)
+		return deployTargets{}, fmt.Errorf("load the inventory for host locks: %w", err)
 	}
 	names, err := ansible.PlayHosts(ctx, opts)
 	if err != nil {
 		slog.Error("deploy.lock.hosts_failed", "playbook", opts.Playbook, "err", err)
-		return nil, nil, fmt.Errorf("list the hosts of %s: %w", opts.Playbook, err)
+		return deployTargets{}, fmt.Errorf("list the hosts of %s: %w", opts.Playbook, err)
 	}
-	variables := loaded.Deploy.LockHostVariables[ansible.PlaybookName(opts.Playbook)]
-	hosts, err := deployLockTargets(inv, names, variables)
+	return deployTargets{settings: loaded, inventory: inv, playHosts: names}, nil
+}
+
+func lockPlayHosts(
+	ctx context.Context, opts ansible.DeployOptions, targets deployTargets,
+) (context.Context, func(), error) {
+	variables := targets.settings.Deploy.LockHostVariables[ansible.PlaybookName(opts.Playbook)]
+	hosts, err := deployLockTargets(targets.inventory, targets.playHosts, variables)
 	if err != nil {
 		return nil, nil, err
 	}
