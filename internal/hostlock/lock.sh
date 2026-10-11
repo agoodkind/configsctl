@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Arguments: <operation> <run id> <controller> <ttl seconds> <lock directory>
-# Exit 3: a current lock of another run exists. Exit 4: the lock file names
-# another run.
+# The script accepts <operation>, <run id>, <controller>, <lease seconds>,
+# <lock directory>, and <extend cap seconds>.
+# The script exits with status 3 when another run owns a current lock.
+# The script exits with status 4 when the lock file records another owner.
+# extend exits with status 6 when the requested lease exceeds the cap.
+# acquire, renew, and extend print "<expiry> <host time>" in epoch seconds.
 set -euo pipefail
 
 OPERATION=$1
@@ -9,6 +12,7 @@ RUN=$2
 CONTROLLER=$3
 TTL=$4
 LOCK_DIR=$5
+EXTEND_CAP=$6
 LOCK_FILE="$LOCK_DIR/deploy.lock"
 GUARD_PREFIX="$LOCK_DIR/deploy.lock.guard"
 GUARD_WAIT_SECONDS=30
@@ -52,9 +56,20 @@ take_guard() {
 }
 
 write_lock() {
-    local current_time=$1
-    printf '%s %s %s\n' "$RUN" "$CONTROLLER" $((current_time + TTL)) > "$LOCK_FILE.tmp"
+    local current_time=$1 new_expiry=$2
+    printf '%s %s %s\n' "$RUN" "$CONTROLLER" "$new_expiry" > "$LOCK_FILE.tmp"
     mv "$LOCK_FILE.tmp" "$LOCK_FILE"
+    echo "$new_expiry $current_time"
+}
+
+# renew and extend never write an expiry earlier than the stored expiry.
+write_later_expiry() {
+    local current_time=$1 stored_expiry=$2 new_expiry
+    new_expiry=$((current_time + TTL))
+    if [[ "$stored_expiry" -gt "$new_expiry" ]]; then
+        new_expiry=$stored_expiry
+    fi
+    write_lock "$current_time" "$new_expiry"
 }
 
 main() {
@@ -70,14 +85,25 @@ main() {
                 echo "$holder $holder_controller $expiry"
                 exit 3
             fi
-            write_lock "$current_time"
+            write_lock "$current_time" $((current_time + TTL))
             ;;
         renew)
             if [[ "$holder" != "$RUN" ]]; then
                 echo "$holder $holder_controller $expiry"
                 exit 4
             fi
-            write_lock "$current_time"
+            write_later_expiry "$current_time" "$expiry"
+            ;;
+        extend)
+            if [[ "$TTL" -lt 1 || "$TTL" -gt "$EXTEND_CAP" ]]; then
+                echo "extend of $TTL seconds is outside 1 to $EXTEND_CAP seconds" >&2
+                exit 6
+            fi
+            if [[ "$holder" != "$RUN" ]]; then
+                echo "$holder $holder_controller $expiry"
+                exit 4
+            fi
+            write_later_expiry "$current_time" "$expiry"
             ;;
         release)
             if [[ "$holder" == "$RUN" ]]; then

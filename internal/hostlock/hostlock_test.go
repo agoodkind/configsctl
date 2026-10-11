@@ -116,7 +116,7 @@ func TestAcquireAllReleasesTakenLocksWhenOneHostIsHeld(t *testing.T) {
 	if err := hostlock.Do(ctx, busy, hostlock.Acquire, firstRun, "controller-a"); err != nil {
 		t.Fatalf("lock the busy host: %v", err)
 	}
-	_, err := hostlock.AcquireAll(ctx, []hostlock.Host{free, busy}, secondRun, "controller-b")
+	_, err := hostlock.AcquireAll(ctx, []hostlock.Host{free, busy}, secondRun, "controller-b", hostlock.DefaultLease())
 	var held *hostlock.HeldError
 	if !errors.As(err, &held) || held.Host != "busy" {
 		t.Fatalf("AcquireAll: err = %v, want the lock on busy", err)
@@ -135,7 +135,7 @@ func TestAcquireAllRefusesTheRunWhenALockCommandFails(t *testing.T) {
 		t.Fatalf("write the blocking file: %v", err)
 	}
 	broken.Dir = blocker
-	_, err := hostlock.AcquireAll(t.Context(), []hostlock.Host{free, broken}, secondRun, "controller-b")
+	_, err := hostlock.AcquireAll(t.Context(), []hostlock.Host{free, broken}, secondRun, "controller-b", hostlock.DefaultLease())
 	if err == nil {
 		t.Fatal("AcquireAll: err = nil, want a refusal for the broken host")
 	}
@@ -147,7 +147,7 @@ func TestAcquireAllRefusesTheRunWhenALockCommandFails(t *testing.T) {
 func TestRenewAllReportsALockThatAnotherRunTook(t *testing.T) {
 	host := localHost(t)
 	ctx := t.Context()
-	set, err := hostlock.AcquireAll(ctx, []hostlock.Host{host}, firstRun, "controller-a")
+	set, err := hostlock.AcquireAll(ctx, []hostlock.Host{host}, firstRun, "controller-a", hostlock.DefaultLease())
 	if err != nil {
 		t.Fatalf("AcquireAll: %v", err)
 	}
