@@ -338,10 +338,15 @@ func takeLocks(ctx context.Context, hosts []hostlock.Host) (locked context.Conte
 	if err != nil {
 		return nil, nil, err
 	}
-	set, err := hostlock.AcquireAll(ctx, hosts, run, controller)
+	set, err := hostlock.AcquireAll(ctx, hosts, run, controller, hostlock.DefaultLease())
 	if err != nil {
 		slog.Error("lock.acquire_failed", "run", run, "err", err)
 		return nil, nil, fmt.Errorf("lock the target hosts: %w", err)
+	}
+	if err := os.Setenv(hostlock.StateEnvVar, set.StateDir()); err != nil {
+		set.ReleaseAll(context.WithoutCancel(ctx))
+		slog.Error("lock.state_export_failed", "run", run, "err", err)
+		return nil, nil, fmt.Errorf("export %s to the child processes: %w", hostlock.StateEnvVar, err)
 	}
 	lockedCtx, cancel := context.WithCancelCause(ctx)
 	stop := set.KeepRenewed(ctx, cancel)

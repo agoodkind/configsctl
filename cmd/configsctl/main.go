@@ -62,6 +62,7 @@ var handlers = map[string]func(cmdEnv, []string) error{
 	"version":        runVersion,
 	"gate":           runGate,
 	"gate-finish":    runGateFinish,
+	"lock":           runLock,
 }
 
 // runVersion prints the link-time build identity and the hash of the running
