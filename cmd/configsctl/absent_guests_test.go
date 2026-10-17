@@ -41,6 +41,7 @@ const absentGuestPlaybook = `- name: Write the host marker
   gather_facts: false
   tasks:
     - name: Write the host marker
+      check_mode: false
       ansible.builtin.copy:
         content: "played\n"
         dest: "{{ playbook_dir }}/played-{{ inventory_hostname }}"
@@ -201,6 +202,9 @@ func TestDeployInCheckModeSkipsAHostWithNoProxmoxGuest(t *testing.T) {
 	if strings.Contains(result.stderr, "hostlock.") {
 		t.Fatalf("stderr = %q, want no lock work in check mode", result.stderr)
 	}
+	requireFile(t, hostMarker(tree, presentGuestHost))
+	requireFile(t, hostMarker(tree, unmappedGuestHost))
+	requireNoFile(t, hostMarker(tree, missingGuestHost))
 }
 
 func TestDeployRefusesANodeWithNoProxmoxGuests(t *testing.T) {

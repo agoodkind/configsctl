@@ -5,7 +5,6 @@ import (
 	"io"
 	"log/slog"
 	"maps"
-	"os"
 	"slices"
 	"strings"
 
@@ -37,9 +36,6 @@ func skipAbsentGuests(
 	targets deployTargets, opts ansible.DeployOptions,
 ) (deployTargets, ansible.DeployOptions, error) {
 	nodes := targets.settings.Deploy.AbsentGuestNodes
-	if len(nodes) == 0 {
-		return targets, opts, nil
-	}
 	absent, err := absentGuests(targets.inventory, targets.playHosts, nodes)
 	if err != nil || len(absent) == 0 {
 		return targets, opts, err
@@ -182,8 +178,5 @@ func logAbsentGuests(absent []absentGuest, output io.Writer) {
 		vmids = append(vmids, guest.vmid)
 	}
 	slog.Info("deploy.hosts_absent", "hosts", hosts, "nodes", nodes, "vmids", vmids)
-	if output == nil {
-		output = os.Stdout
-	}
 	fmt.Fprintf(output, "Skipping hosts with no Proxmox guest: %s\n", strings.Join(hosts, ", "))
 }

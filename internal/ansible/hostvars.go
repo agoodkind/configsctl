@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"regexp"
 	"slices"
 	"strconv"
@@ -91,7 +90,8 @@ func (inv Inventory) HostString(host, variable string) (string, error) {
 	return value, nil
 }
 
-// HasVariable reports whether a host has the specified inventory variable.
+// HasVariable reports whether a host has the specified inventory variable. A
+// variable with a null value counts as present.
 func (inv Inventory) HasVariable(host, variable string) bool {
 	_, ok := inv.variables[host][variable]
 	return ok
@@ -115,8 +115,7 @@ func (inv Inventory) HostInteger(host, variable string) (int, error) {
 	}
 	number, err := strconv.Atoi(digits)
 	if err != nil {
-		slog.Error("ansible.inventory.integer_failed", "host", host, "variable", variable, "err", err)
-		return 0, fmt.Errorf("read inventory variable %s of host %s: %w", variable, host, err)
+		return 0, fmt.Errorf("inventory variable %s of host %s is outside the integer range", variable, host)
 	}
 	return number, nil
 }

@@ -38,12 +38,15 @@ func lockedDeploy(opts ansible.DeployOptions) error {
 	if err != nil {
 		return err
 	}
+	checkAbsentGuests := len(loaded.Deploy.AbsentGuestNodes) > 0
 	var targets deployTargets
-	if !opts.Check || len(loaded.Deploy.AbsentGuestNodes) > 0 {
+	if !opts.Check || checkAbsentGuests {
 		targets, err = loadDeployTargets(ctx, opts, loaded)
 		if err != nil {
 			return err
 		}
+	}
+	if checkAbsentGuests {
 		targets, opts, err = skipAbsentGuests(targets, opts)
 		if err != nil {
 			return err
