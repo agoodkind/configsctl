@@ -1,7 +1,11 @@
 package main_test
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -50,13 +54,23 @@ const (
 	unmappedGuestHost       = "other.away.example"
 	enrolledGuestSettings   = "  lock_targets:\n    workspaces/guest:\n      guest_hosts:\n        vault/117: " +
 		missingGuestHost + "\n"
+	shortTempRoot    = "/tmp"
+	shortTempPattern = "cfgabs"
 )
 
 func absentGuestNodes(label, node string) string {
 	return "deploy:\n  absent_guest_nodes:\n    " + label + ": " + node + "\n"
 }
 
-func newAbsentGuestTree(t *testing.T, settings string) configsTree {
+// absentGuestTree runs configsctl with a TMPDIR outside t.TempDir. Ansible
+// starts an RPC server on a Unix socket under TMPDIR, and Linux limits a
+// socket path to 108 bytes.
+type absentGuestTree struct {
+	configsTree
+	tempDir string
+}
+
+func newAbsentGuestTree(t *testing.T, settings string) absentGuestTree {
 	t.Helper()
 	requireAnsiblePlaybook(t)
 	tree := newConfigsTree(t)
@@ -65,10 +79,40 @@ func newAbsentGuestTree(t *testing.T, settings string) configsTree {
 	writeFixtureFile(t, filepath.Join(tree.root, "ansible", "inventory", "hosts.yml"), absentGuestInventory)
 	writeFixtureFile(t, filepath.Join(tree.root, "ansible", "playbooks", absentGuestPlaybookName+".yml"),
 		absentGuestPlaybook)
-	return tree
+	tempDir, err := os.MkdirTemp(shortTempRoot, shortTempPattern)
+	if err != nil {
+		t.Fatalf("create a short TMPDIR: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tempDir) })
+	return absentGuestTree{configsTree: tree, tempDir: tempDir}
 }
 
-func hostMarker(tree configsTree, host string) string {
+func runAbsentDeploy(t *testing.T, tree absentGuestTree, args ...string) commandResult {
+	t.Helper()
+	command := exec.CommandContext(context.Background(), configsctlBinary, args...)
+	command.Dir = tree.root
+	command.Env = []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + tree.home,
+		"TMPDIR=" + tree.tempDir,
+	}
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	runErr := command.Run()
+	result := commandResult{stdout: stdout.String(), stderr: stderr.String(), exitCode: 0}
+	var exitErr *exec.ExitError
+	switch {
+	case runErr == nil:
+	case errors.As(runErr, &exitErr):
+		result.exitCode = exitErr.ExitCode()
+	default:
+		t.Fatalf("run configsctl %v: %v", args, runErr)
+	}
+	return result
+}
+
+func hostMarker(tree absentGuestTree, host string) string {
 	return filepath.Join(tree.root, "ansible", "playbooks", "played-"+host)
 }
 
@@ -81,7 +125,7 @@ func requireStderr(t *testing.T, result commandResult, fragments ...string) {
 	}
 }
 
-func requireDeployRefusal(t *testing.T, tree configsTree, result commandResult, fragments ...string) {
+func requireDeployRefusal(t *testing.T, tree absentGuestTree, result commandResult, fragments ...string) {
 	t.Helper()
 	if result.exitCode == 0 {
 		t.Fatalf("Deploy succeeded. The test expected a refusal.\nstderr: %s", result.stderr)
@@ -95,9 +139,9 @@ func requireDeployRefusal(t *testing.T, tree configsTree, result commandResult, 
 	}
 }
 
-func readRunLogs(t *testing.T, tree configsTree) string {
+func readRunLogs(t *testing.T, tree absentGuestTree) string {
 	t.Helper()
-	paths, err := filepath.Glob(filepath.Join(tree.root, "tmp", "configs-runs", "*.log"))
+	paths, err := filepath.Glob(filepath.Join(tree.tempDir, "configs-runs", "*.log"))
 	if err != nil {
 		t.Fatalf("list run logs: %v", err)
 	}
@@ -112,7 +156,7 @@ func readRunLogs(t *testing.T, tree configsTree) string {
 	return combined.String()
 }
 
-func requireDeploySuccess(t *testing.T, tree configsTree, result commandResult, args ...string) {
+func requireDeploySuccess(t *testing.T, tree absentGuestTree, result commandResult, args ...string) {
 	t.Helper()
 	if result.exitCode != 0 {
 		t.Fatalf("configsctl %v exited %d\nstderr: %s\nrun log: %s",
@@ -120,13 +164,10 @@ func requireDeploySuccess(t *testing.T, tree configsTree, result commandResult, 
 	}
 }
 
-// Ansible on Python 3.12 binds a socket under TMPDIR, and TMPDIR contains the
-// test name. Each test that runs a play keeps its name at 38 characters or
-// fewer, because a longer TMPDIR exceeds the 108-byte socket path limit of Linux.
 func TestDeploySkipsAHostWithNoProxmoxGuest(t *testing.T) {
 	tree := newAbsentGuestTree(t, absentGuestNodes("home", "vault"))
 
-	result := runConfigsctl(t, tree, "deploy", absentGuestPlaybookName)
+	result := runAbsentDeploy(t, tree, "deploy", absentGuestPlaybookName)
 	requireDeploySuccess(t, tree, result, "deploy", absentGuestPlaybookName)
 	requireStderr(t, result,
 		"deploy.hosts_absent hosts=["+missingGuestHost+"] nodes=[vault] vmids=[117]",
@@ -139,11 +180,11 @@ func TestDeploySkipsAHostWithNoProxmoxGuest(t *testing.T) {
 	requireNoFile(t, hostMarker(tree, missingGuestHost))
 }
 
-func TestDeployCommaLimitSkipsAnAbsentHost(t *testing.T) {
+func TestDeployWithACommaLimitSkipsAHostWithNoProxmoxGuest(t *testing.T) {
 	tree := newAbsentGuestTree(t, absentGuestNodes("home", "vault"))
 	limit := missingGuestHost + "," + presentGuestHost
 
-	result := runConfigsctl(t, tree, "deploy", absentGuestPlaybookName, "--limit", limit)
+	result := runAbsentDeploy(t, tree, "deploy", absentGuestPlaybookName, "--limit", limit)
 	requireDeploySuccess(t, tree, result, "deploy", absentGuestPlaybookName, "--limit", limit)
 	requireStderr(t, result, "deploy.hosts_absent hosts=["+missingGuestHost+"]")
 	requireFile(t, hostMarker(tree, presentGuestHost))
@@ -151,10 +192,10 @@ func TestDeployCommaLimitSkipsAnAbsentHost(t *testing.T) {
 	requireNoFile(t, hostMarker(tree, unmappedGuestHost))
 }
 
-func TestDeployCheckModeSkipsAnAbsentHost(t *testing.T) {
+func TestDeployInCheckModeSkipsAHostWithNoProxmoxGuest(t *testing.T) {
 	tree := newAbsentGuestTree(t, absentGuestNodes("home", "vault"))
 
-	result := runConfigsctl(t, tree, "deploy", absentGuestPlaybookName, "--check")
+	result := runAbsentDeploy(t, tree, "deploy", absentGuestPlaybookName, "--check")
 	requireDeploySuccess(t, tree, result, "deploy", absentGuestPlaybookName, "--check")
 	requireStderr(t, result, "deploy.hosts_absent hosts=["+missingGuestHost+"]")
 	if strings.Contains(result.stderr, "hostlock.") {
@@ -165,14 +206,14 @@ func TestDeployCheckModeSkipsAnAbsentHost(t *testing.T) {
 func TestDeployRefusesANodeWithNoProxmoxGuests(t *testing.T) {
 	tree := newAbsentGuestTree(t, absentGuestNodes("home", "poweredge"))
 
-	result := runConfigsctl(t, tree, "deploy", absentGuestPlaybookName)
+	result := runAbsentDeploy(t, tree, "deploy", absentGuestPlaybookName)
 	requireDeployRefusal(t, tree, result, "the Proxmox inventory returned no guests for node poweredge")
 }
 
 func TestDeployRefusesAnAbsentEnrolledGuest(t *testing.T) {
 	tree := newAbsentGuestTree(t, enrolledGuestSettings+absentGuestNodes("home", "vault"))
 
-	result := runConfigsctl(t, tree, "deploy", absentGuestPlaybookName)
+	result := runAbsentDeploy(t, tree, "deploy", absentGuestPlaybookName)
 	requireDeployRefusal(t, tree, result,
 		"host "+missingGuestHost+" is a value of tofu.guest_hosts, and node vault reports no guest with VMID 117")
 }
@@ -180,14 +221,14 @@ func TestDeployRefusesAnAbsentEnrolledGuest(t *testing.T) {
 func TestDeployRefusesWhenEveryPlayHostIsAbsent(t *testing.T) {
 	tree := newAbsentGuestTree(t, absentGuestNodes("home", "vault"))
 
-	result := runConfigsctl(t, tree, "deploy", absentGuestPlaybookName, "--limit", missingGuestHost)
+	result := runAbsentDeploy(t, tree, "deploy", absentGuestPlaybookName, "--limit", missingGuestHost)
 	requireDeployRefusal(t, tree, result, "every play host has no Proxmox guest: "+missingGuestHost)
 }
 
-func TestDeployWithoutGuestNodesKeepsHosts(t *testing.T) {
+func TestDeployWithoutAbsentGuestNodesKeepsEveryPlayHost(t *testing.T) {
 	tree := newAbsentGuestTree(t, "")
 
-	result := runConfigsctl(t, tree, "deploy", absentGuestPlaybookName)
+	result := runAbsentDeploy(t, tree, "deploy", absentGuestPlaybookName)
 	requireDeploySuccess(t, tree, result, "deploy", absentGuestPlaybookName)
 	requireStderr(t, result,
 		`hostlock.targets_skipped hosts="[`+missingGuestHost+" "+unmappedGuestHost+" "+presentGuestHost+`]"`)
