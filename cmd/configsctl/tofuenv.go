@@ -31,6 +31,9 @@ type settings struct {
 
 type deploySettings struct {
 	LockHostVariables map[string][]string `yaml:"lock_host_variables"`
+	// AbsentGuestNodes maps the second label of a host name to the
+	// ansible_proxmox_host value of its Proxmox node.
+	AbsentGuestNodes map[string]string `yaml:"absent_guest_nodes"`
 }
 
 type tofuSettings struct {
@@ -114,6 +117,14 @@ func validateDeploySettings(path string, deploy deploySettings) error {
 		}
 		if slices.Contains(variables, "") {
 			return fmt.Errorf("%s: deploy.lock_host_variables.%s has an empty variable name", path, playbook)
+		}
+	}
+	for _, label := range slices.Sorted(maps.Keys(deploy.AbsentGuestNodes)) {
+		if label == "" {
+			return errors.New(path + ": deploy.absent_guest_nodes has an empty host name label")
+		}
+		if deploy.AbsentGuestNodes[label] == "" {
+			return fmt.Errorf("%s: deploy.absent_guest_nodes.%s has an empty node name", path, label)
 		}
 	}
 	return nil
