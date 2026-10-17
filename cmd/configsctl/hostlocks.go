@@ -34,11 +34,22 @@ func allTofuLockHosts(inv ansible.Inventory) []string {
 // modules may continue running.
 func lockedDeploy(opts ansible.DeployOptions) error {
 	ctx := context.Background()
-	if !opts.Check {
-		targets, err := loadDeployTargets(ctx, opts)
+	loaded, err := loadSettings(settingsFile)
+	if err != nil {
+		return err
+	}
+	var targets deployTargets
+	if !opts.Check || len(loaded.Deploy.AbsentGuestNodes) > 0 {
+		targets, err = loadDeployTargets(ctx, opts, loaded)
 		if err != nil {
 			return err
 		}
+		targets, opts, err = skipAbsentGuests(targets, opts)
+		if err != nil {
+			return err
+		}
+	}
+	if !opts.Check {
 		if err := gateGuestPlans(ctx, targets, opts.Output); err != nil {
 			return err
 		}
@@ -65,11 +76,7 @@ type deployTargets struct {
 	playHosts []string
 }
 
-func loadDeployTargets(ctx context.Context, opts ansible.DeployOptions) (deployTargets, error) {
-	loaded, err := loadSettings(settingsFile)
-	if err != nil {
-		return deployTargets{}, err
-	}
+func loadDeployTargets(ctx context.Context, opts ansible.DeployOptions, loaded settings) (deployTargets, error) {
 	inv, err := ansible.LoadInventory(ctx, "")
 	if err != nil {
 		slog.Error("deploy.lock.inventory_failed", "err", err)

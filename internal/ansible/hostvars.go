@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"regexp"
 	"slices"
+	"strconv"
 )
 
 // unsafeKey is the wrapper key of an untrusted string in ansible-inventory
@@ -87,6 +90,38 @@ func (inv Inventory) HostString(host, variable string) (string, error) {
 	}
 	return value, nil
 }
+
+// HasVariable reports whether a host has the specified inventory variable.
+func (inv Inventory) HasVariable(host, variable string) bool {
+	_, ok := inv.variables[host][variable]
+	return ok
+}
+
+// HostInteger returns a host's inventory variable as a nonnegative integer.
+// It accepts a JSON integer, a JSON string of digits, or an untrusted-string
+// wrapper object containing a string of digits.
+func (inv Inventory) HostInteger(host, variable string) (int, error) {
+	raw, ok := inv.variables[host][variable]
+	if !ok {
+		return 0, fmt.Errorf("host %s has no inventory variable %s", host, variable)
+	}
+	digits := string(raw)
+	if !digitsPattern.MatchString(digits) {
+		value, isString := inventoryString(raw)
+		if !isString || !digitsPattern.MatchString(value) {
+			return 0, fmt.Errorf("inventory variable %s of host %s is not an integer or a string of digits", variable, host)
+		}
+		digits = value
+	}
+	number, err := strconv.Atoi(digits)
+	if err != nil {
+		slog.Error("ansible.inventory.integer_failed", "host", host, "variable", variable, "err", err)
+		return 0, fmt.Errorf("read inventory variable %s of host %s: %w", variable, host, err)
+	}
+	return number, nil
+}
+
+var digitsPattern = regexp.MustCompile(`^[0-9]+$`)
 
 func (inv Inventory) hasHost(name string) bool {
 	if _, ok := inv.Hosts[name]; ok {

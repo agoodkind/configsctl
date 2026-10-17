@@ -60,6 +60,33 @@ tofu:
         suburban/224: clyde.suburban.goodkind.io
 ```
 
+## Deploy behavior for hosts without Proxmox guests
+
+The `deploy.absent_guest_nodes` setting maps the second label of a host name to a Proxmox node name from `ansible_proxmox_host`. A missing or empty mapping disables the check.
+
+```yaml
+deploy:
+  absent_guest_nodes:
+    home: vault
+```
+
+This mapping checks hosts such as `tack-search1.home.goodkind.io` against the Proxmox node `vault`. A play host qualifies for the check only when it has the inventory variable `service_vmid` and its second label appears in the mapping.
+
+A guest matches when an inventory host has `ansible_proxmox_host` equal to the mapped node and `ansible_proxmox_vmid` equal to the play host's `service_vmid`. The check compares VMIDs rather than host names. The Proxmox inventory can list an existing guest under a different name, such as `mwan-failover` for `mwan-failover.home.goodkind.io`.
+
+configsctl skips each checked play host without a matching guest. It does not lock that host. It adds an exclusion for the host to the Ansible limit, using a comma separator when the limit contains a comma and a colon separator otherwise.
+
+The run log records `Skipping hosts with no Proxmox guest: <hosts>`. configsctl also logs `deploy.hosts_absent`.
+
+With a nonempty mapping, the deploy fails before taking any locks when any of these conditions applies:
+
+* The Proxmox inventory does not report any guests on the mapped node of a checked host.
+* A skipped host is a value of `tofu.guest_hosts`.
+* The check would skip every play host.
+* The `--limit` value starts with `@`.
+
+The check also runs with `--check`. Check mode now reads the settings and still does not take locks.
+
 ## Prerequisites
 
 - Go at the version in `go.mod`.
