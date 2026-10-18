@@ -62,10 +62,6 @@ type Credential struct {
 	Password string
 }
 
-func credentialFor(username, value string) Credential {
-	return Credential{Username: username, Password: value}
-}
-
 // Prepare verifies read access. Rotation requires the caller's host lock.
 func (c Config) Prepare(ctx context.Context, password string) (Credential, error) {
 	if err := c.Validate(); err != nil {
@@ -88,7 +84,7 @@ func (c Config) Prepare(ctx context.Context, password string) (Credential, error
 	}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 30 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
-	rotator := credentialFor(c.RotatorUser, password)
+	rotator := Credential{c.RotatorUser, password}
 	for _, path := range c.ReadPaths {
 		if err := c.request(ctx, client, rotator, http.MethodGet, path, nil); err != nil {
 			return Credential{}, err
@@ -109,7 +105,7 @@ func (c Config) Prepare(ctx context.Context, password string) (Credential, error
 		candidate.WriteByte(alphabet[choice.Int64()])
 	}
 	candidate.WriteString(base64.RawURLEncoding.EncodeToString(random))
-	credential := credentialFor(c.Username, candidate.String())
+	credential := Credential{c.Username, candidate.String()}
 	accountPath := "/redfish/v1/AccountService/Accounts/" + c.AccountID
 	if err := c.verifyAccount(ctx, client, rotator, accountPath); err != nil {
 		return Credential{}, err

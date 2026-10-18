@@ -99,9 +99,9 @@ It changes that deployment account password and applies only a private local
 `terraform_data` resource. It also reads the real NIC through the pinned REST
 provider. Run it only during an available host lock window:
 
-``sh
+```sh
 CONFIGSCTL_DELL_INTEGRATION_ROOT=/path/to/configs go test ./cmd/configsctl -run '^TestDellCredentialSavedPlanLifecycle$' -count=1 -v
-``sh
+```
 
 ## Gate a deploy on the guest plan
 

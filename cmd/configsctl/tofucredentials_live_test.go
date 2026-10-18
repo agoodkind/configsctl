@@ -144,6 +144,9 @@ func TestDellCredentialSavedPlanLifecycle(t *testing.T) {
 	if stale.exitCode == 0 {
 		t.Fatal("the stale saved plan unexpectedly applied")
 	}
+	if !strings.Contains(stale.stdout, "Saved plan is stale") {
+		t.Fatalf("OpenTofu did not report the stale saved plan: %s", stale.stdout)
+	}
 	requireSuccess(t, run("plan", "-input=false", "-out=recovery.plan"))
 	requireSuccess(t, run("apply", "-input=false", "recovery.plan"))
 	if err := os.WriteFile(filepath.Join(workspace, "main.tf"), []byte("invalid configuration"), 0o600); err != nil {
