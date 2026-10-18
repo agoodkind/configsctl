@@ -127,10 +127,11 @@ func deployLockTargets(inv ansible.Inventory, playHosts, variables []string) ([]
 }
 
 type tofuLockRequest struct {
-	workspaceDir string
-	env          []string
-	args         []string
-	lockTargets  map[string]tofulock.Targets
+	workspaceDir  string
+	env           []string
+	args          []string
+	lockTargets   map[string]tofulock.Targets
+	requiredHosts []string
 }
 
 type tofuHostSelection struct {
@@ -149,6 +150,13 @@ func lockTofuHosts(
 	}
 	selection, err := selectTofuLockHosts(ctx, inv, request)
 	if err != nil {
+		return nil, nil, nil, err
+	}
+	selection.names = slices.Concat(selection.names, request.requiredHosts)
+	slices.Sort(selection.names)
+	selection.names = slices.Compact(selection.names)
+	if err := requireLockTargets(inv, request.requiredHosts); err != nil {
+		selection.cleanup()
 		return nil, nil, nil, err
 	}
 	targets := hostlock.Targets(inv, selection.names)

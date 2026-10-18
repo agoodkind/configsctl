@@ -321,22 +321,51 @@ func runTofu(env cmdEnv, args []string) error {
 		return err
 	}
 	slog.Info("tofu run", "dir", workspaceDir, "args", strings.Join(safeArgs, " "))
+	credential, configured := loaded.Tofu.Credentials[tofuWorkspaceKey(workspaceDir)]
+	usesCredential := configured && credentialCommand(safeArgs)
+	var requiredHosts []string
+	if usesCredential {
+		if err := credential.validateWorkspace(workspaceDir, childEnv); err != nil {
+			return err
+		}
+		requiredHosts = []string{credential.LockHost}
+	}
 	ctx := context.Background()
 	commandArgs := safeArgs
+	release := func() {}
 	if tofuSubcommand(safeArgs) == tofuApply || tofuSubcommand(safeArgs) == tofuDestroy {
-		lockedCtx, lockedArgs, release, lockErr := lockTofuHosts(ctx, tofuLockRequest{
-			workspaceDir: workspaceDir,
-			env:          childEnv,
-			args:         safeArgs,
-			lockTargets:  loaded.Tofu.LockTargets,
-		})
-		if lockErr != nil {
-			return lockErr
-		}
-		defer release()
-		ctx = lockedCtx
-		commandArgs = lockedArgs
+		ctx, commandArgs, release, err = lockTofuHosts(ctx, tofuLockRequest{workspaceDir: workspaceDir, env: childEnv, args: safeArgs, lockTargets: loaded.Tofu.LockTargets, requiredHosts: requiredHosts})
+	} else if usesCredential {
+		ctx, release, err = lockCredentialHost(ctx, credential.LockHost)
 	}
+	if err != nil {
+		return err
+	}
+	defer release()
+	if usesCredential {
+		rotatorPassword, err := vault.Secret(credential.Dell.RotatorPasswordKey, defaultVaultFile, passwordFile)
+		if err != nil {
+			slog.Error("tofu.credential.vault_failed", "err", err)
+			return fmt.Errorf("read rotator credential: %w", err)
+		}
+		var patterns []redact.Pattern
+		childEnv, patterns, err = credential.prepare(ctx, rotatorPassword, childEnv)
+		if err != nil {
+			return err
+		}
+		env.secrets = append(env.secrets, patterns...)
+		restore, err := installRedaction(patterns)
+		if err != nil {
+			return err
+		}
+		defer restore()
+	}
+	return executeTofu(ctx, env, workspaceDir, safeArgs, commandArgs, childEnv)
+}
+
+func executeTofu(ctx context.Context, env cmdEnv, workspaceDir string, safeArgs, commandArgs, childEnv []string) error {
+	var err error
+	slog.Info("tofu.command_started", "workspace", workspaceDir, "subcommand", tofuSubcommand(safeArgs))
 	cmd := exec.CommandContext(ctx, "tofu", commandArgs...)
 	cmd.Dir = workspaceDir
 	cmd.Env = childEnv

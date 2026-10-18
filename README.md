@@ -45,6 +45,64 @@ configsctl passes every argument after the workspace name to OpenTofu. When the 
 
 configsctl exports a vault key as `TF_VAR_<key>` only when the selected workspace declares a variable with that name.
 
+## Rotate a Dell provider credential
+
+A workspace can use an existing iDRAC rotator account to set a fresh password
+for a separate deployment account. Store only the rotator password in the
+Configs vault. The rotator needs Login and Configure Users. Configure Users
+allows changes to every iDRAC account; iDRAC does not restrict it to the selected
+deployment account.
+
+```yaml
+tofu:
+  credentials:
+    opentofu/firmware:
+      lock_host: poweredge
+      username_variable: poweredge_idrac_user
+      password_variable: poweredge_idrac_password
+      dell:
+        endpoint: https://[<iDRAC IPv6 address>]
+        ca_file: certificates/idrac.pem
+        server_name: idrac.example.net
+        rotator_user: tofu-rotator
+        rotator_password_key: vault_idrac_rotator_password
+        account_id: "3"
+        username: tofu-firmware
+        read_paths:
+          - /redfish/v1/Systems/System.Embedded.1
+```
+
+Declare both selected OpenTofu variables with `sensitive = true` and
+`ephemeral = true`. configsctl rejects other declarations. Each entry in
+`read_paths` must accept authenticated GET requests needed by the provider.
+The adapter verifies those reads with the rotator before changing the account,
+then verifies them with the generated deployment credential.
+
+The `plan`, `refresh`, `import`, `apply`, and `destroy` commands acquire
+the selected host lock before rotating the deployment password. An apply also
+uses the existing resource-based host selection. The lock remains active until
+OpenTofu exits. The rotator password stays inside configsctl. Only the deployment
+credential enters the OpenTofu child environment. configsctl redacts that
+password from terminal output and run logs and refuses `TF_LOG_PATH`, which
+would bypass its output redaction.
+
+A saved-plan apply generates a fresh password. The ephemeral username and
+password do not persist in the saved plan or state. A failed password request or
+failed login stops execution before OpenTofu starts. A later command can recover
+with another rotation through the rotator account. The generated password stays
+valid on iDRAC until the next rotation; command completion does not revoke it.
+The `fmt`, `validate`, and `show` commands do not rotate credentials.
+
+The live integration test requires an approved Configs checkout with the
+`opentofu/firmware` credential entry and the existing PowerEdge lock target.
+It changes that deployment account password and applies only a private local
+`terraform_data` resource. It also reads the real NIC through the pinned REST
+provider. Run it only during an available host lock window:
+
+```sh
+CONFIGSCTL_DELL_INTEGRATION_ROOT=/path/to/configs go test ./cmd/configsctl -run '^TestDellCredentialSavedPlanLifecycle$' -count=1 -v
+```
+
 ## Gate a deploy on the guest plan
 
 configsctl runs targeted OpenTofu plans before acquiring host locks or running Ansible when `tofu.guest_module` is set. The key selects the module address in the `guest` workspace and requires that workspace's `guest_hosts` mapping under `tofu.lock_targets`. The gate plans only selected playbook hosts listed as values in that mapping. Each plan targets the module instance keyed by the host's `service_name` inventory variable. The gate refuses the deploy if any plan fails or reports pending changes.
