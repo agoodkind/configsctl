@@ -343,8 +343,13 @@ func runTofu(env cmdEnv, args []string) error {
 	}
 	defer release()
 	if usesCredential {
+		rotatorPassword, err := vault.Secret(credential.Dell.RotatorPasswordKey, defaultVaultFile, passwordFile)
+		if err != nil {
+			slog.Error("tofu.credential.vault_failed", "err", err)
+			return fmt.Errorf("read rotator credential: %w", err)
+		}
 		var patterns []redact.Pattern
-		childEnv, patterns, err = credential.prepare(ctx, passwordFile, childEnv)
+		childEnv, patterns, err = credential.prepare(ctx, rotatorPassword, childEnv)
 		if err != nil {
 			return err
 		}

@@ -14,7 +14,6 @@ import (
 	"goodkind.io/configsctl/internal/dellcredential"
 	"goodkind.io/configsctl/internal/hostlock"
 	"goodkind.io/configsctl/internal/redact"
-	"goodkind.io/configsctl/internal/vault"
 )
 
 type tofuCredentialSettings struct {
@@ -84,16 +83,7 @@ func (s tofuCredentialSettings) requireEphemeral(workspace string) error {
 	return nil
 }
 
-func (s tofuCredentialSettings) prepare(ctx context.Context, passwordFile string, childEnv []string) ([]string, []redact.Pattern, error) {
-	values, err := vault.Values(defaultVaultFile, passwordFile)
-	if err != nil {
-		slog.Error("tofu.credential.vault_failed", "err", err)
-		return nil, nil, fmt.Errorf("read credential adapter vault input: %w", err)
-	}
-	password, exists := values[s.Dell.RotatorPasswordKey]
-	if !exists || password == "" {
-		return nil, nil, fmt.Errorf("required vault key %s is missing", s.Dell.RotatorPasswordKey)
-	}
+func (s tofuCredentialSettings) prepare(ctx context.Context, password string, childEnv []string) ([]string, []redact.Pattern, error) {
 	credential, err := s.Dell.Prepare(ctx, password)
 	if err != nil {
 		slog.Error("tofu.credential.prepare_failed", "err", err)
