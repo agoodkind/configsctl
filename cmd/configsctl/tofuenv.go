@@ -45,7 +45,8 @@ type tofuSettings struct {
 	LockTargets  map[string]tofulock.Targets `yaml:"lock_targets"`
 	// GuestModule specifies the module address indexed by service_name for guest plans.
 	// An empty GuestModule disables the deploy plan gate.
-	GuestModule string `yaml:"guest_module"`
+	GuestModule string                            `yaml:"guest_module"`
+	Credentials map[string]tofuCredentialSettings `yaml:"credentials"`
 }
 
 func (t tofuSettings) guestWorkspaceDir() string {
@@ -76,6 +77,9 @@ func loadSettings(path string) (settings, error) {
 		return loaded, errors.New(path + ": tofu.env_key_prefix is empty")
 	}
 	if err := validateLockTargets(path, loaded.Tofu.LockTargets); err != nil {
+		return loaded, err
+	}
+	if err := validateTofuCredentials(loaded.Tofu.Credentials); err != nil {
 		return loaded, err
 	}
 	if loaded.Tofu.GuestModule != "" && loaded.Tofu.guestHosts() == nil {
