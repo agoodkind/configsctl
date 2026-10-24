@@ -61,7 +61,14 @@ func acquire(pauseFile string, operation int) (func(), error) {
 	}
 	if err := syscall.Flock(int(file.Fd()), operation|syscall.LOCK_NB); err != nil {
 		_ = file.Close()
-		return nil, errors.New("another infrastructure writer owns the required migration lease; wait for that operation to finish")
+		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
+			slog.Error("migration.lease.acquire_failed", "err", err)
+			return nil, fmt.Errorf("acquire the infrastructure writer lease: %w", err)
+		}
+		if operation&syscall.LOCK_EX != 0 {
+			return nil, errors.New("active infrastructure writers or another migration prevent the exclusive lease; wait for those operations to finish")
+		}
+		return nil, errors.New("an active migration prevents this infrastructure write; wait for it to finish")
 	}
 	return func() { _ = file.Close() }, nil
 }

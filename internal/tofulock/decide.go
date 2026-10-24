@@ -6,8 +6,9 @@ import (
 	"log/slog"
 	"maps"
 	"slices"
-	"strconv"
 	"strings"
+
+	"goodkind.io/configsctl/internal/hostlock"
 )
 
 const (
@@ -32,9 +33,12 @@ type GuestLock struct {
 
 // Validate requires a known node, an SSH host, and a positive numeric VMID.
 func (g GuestLock) Validate() error {
-	vmid, err := strconv.ParseUint(g.VMID, 10, 32)
-	if err != nil || vmid == 0 || strconv.FormatUint(vmid, 10) != g.VMID || g.Node == "" || g.Host == "" {
+	if g.Host == "" {
 		return fmt.Errorf("guest lock for node %s requires a declared host and a positive numeric VMID", g.Node)
+	}
+	if err := hostlock.ValidateGuestIdentity(g.Node, g.VMID); err != nil {
+		slog.Error("tofu.lock.guest_identity_invalid", "node", g.Node, "err", err)
+		return fmt.Errorf("validate guest lock identity: %w", err)
 	}
 	return nil
 }
