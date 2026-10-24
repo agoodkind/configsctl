@@ -148,7 +148,7 @@ func independentUnlockedTree(t *testing.T) configsTree {
 
 func runMutationInput(t *testing.T, tree configsTree, input string, args ...string) commandResult {
 	t.Helper()
-	tempDir, err := os.MkdirTemp("", "workspace-lock-*")
+	tempDir, err := os.MkdirTemp(shortTempRoot, "workspace-lock-*")
 	if err != nil {
 		t.Fatal(err)
 	}

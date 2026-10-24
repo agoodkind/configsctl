@@ -178,7 +178,14 @@ func runConfigsctl(t *testing.T, tree configsTree, args ...string) commandResult
 func runConfigsctlWithPath(t *testing.T, tree configsTree, path string, args ...string) commandResult {
 	t.Helper()
 	tempDir := filepath.Join(tree.root, "tmp")
-	if err := os.MkdirAll(tempDir, 0o700); err != nil {
+	if len(args) != 0 && args[0] == "deploy" {
+		var err error
+		tempDir, err = os.MkdirTemp(shortTempRoot, "configscli-*")
+		if err != nil {
+			t.Fatalf("create a short deploy TMPDIR: %v", err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(tempDir) })
+	} else if err := os.MkdirAll(tempDir, 0o700); err != nil {
 		t.Fatalf("create TMPDIR: %v", err)
 	}
 	command := exec.CommandContext(context.Background(), configsctlBinary, args...)
