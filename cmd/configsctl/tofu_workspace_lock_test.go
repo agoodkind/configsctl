@@ -148,7 +148,7 @@ func independentUnlockedTree(t *testing.T) configsTree {
 
 func runMutationInput(t *testing.T, tree configsTree, input string, args ...string) commandResult {
 	t.Helper()
-	tempDir, err := os.MkdirTemp("", "workspace-lock-*")
+	tempDir, err := os.MkdirTemp(shortTempRoot, "workspace-lock-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,20 +165,10 @@ func runMutationInput(t *testing.T, tree configsTree, input string, args ...stri
 	var exited *exec.ExitError
 	if errors.As(err, &exited) {
 		result.exitCode = exited.ExitCode()
-		paths, listErr := filepath.Glob(filepath.Join(tempDir, "configs-runs", "*.log"))
-		if listErr != nil {
-			t.Fatal(listErr)
-		}
-		for _, path := range paths {
-			log, readErr := os.ReadFile(path)
-			if readErr != nil {
-				t.Fatal(readErr)
-			}
-			result.stderr += "\n" + string(log)
-		}
 	} else if err != nil {
 		t.Fatalf("run a mutation with confirmation input: %v", err)
 	}
+	appendFailedRunLogs(t, &result, tempDir)
 	return result
 }
 

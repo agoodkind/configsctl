@@ -12,6 +12,9 @@ CMD    := ./cmd/configsctl
 # so `configsctl version` reports the commit a binary was built from.
 VPKG   := goodkind.io/configsctl/internal/version
 
+# Native encrypted state and real Ansible tests exceed ten minutes on CI runners.
+GO_TEST_TARGETS := -timeout=30m ./...
+
 # Pipeline modules. Add go-service.mk if this binary ships as a daemon and
 # set LAUNCHD_LABEL, SYSTEMD_UNIT, LOG_PATH before the include bootstrap.mk line.
 GO_MK_MODULES := go-build.mk go-release.mk

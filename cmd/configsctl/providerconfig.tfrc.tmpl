@@ -1,0 +1,9 @@
+provider_installation {
+  filesystem_mirror {
+    path    = {{hcl .Mirror}}
+    include = {{hcl .Sources}}
+  }
+  direct {
+    exclude = {{hcl .Sources}}
+  }
+}

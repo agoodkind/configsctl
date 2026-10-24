@@ -137,7 +137,11 @@ func writeFixtureFile(t *testing.T, path, content string) {
 // The shared module has no backend block.
 func newConfigsTree(t *testing.T) configsTree {
 	t.Helper()
-	base := t.TempDir()
+	return newConfigsTreeAt(t, t.TempDir())
+}
+
+func newConfigsTreeAt(t *testing.T, base string) configsTree {
+	t.Helper()
 	tree := configsTree{
 		root:       filepath.Join(base, "configs"),
 		home:       filepath.Join(base, "home"),
@@ -178,7 +182,14 @@ func runConfigsctl(t *testing.T, tree configsTree, args ...string) commandResult
 func runConfigsctlWithPath(t *testing.T, tree configsTree, path string, args ...string) commandResult {
 	t.Helper()
 	tempDir := filepath.Join(tree.root, "tmp")
-	if err := os.MkdirAll(tempDir, 0o700); err != nil {
+	if len(args) != 0 && args[0] == "deploy" {
+		var err error
+		tempDir, err = os.MkdirTemp(shortTempRoot, "configscli-*")
+		if err != nil {
+			t.Fatalf("create a short deploy TMPDIR: %v", err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(tempDir) })
+	} else if err := os.MkdirAll(tempDir, 0o700); err != nil {
 		t.Fatalf("create TMPDIR: %v", err)
 	}
 	command := exec.CommandContext(context.Background(), configsctlBinary, args...)
@@ -202,7 +213,26 @@ func runConfigsctlWithPath(t *testing.T, tree configsTree, path string, args ...
 	default:
 		t.Fatalf("run configsctl %v: %v", args, runErr)
 	}
+	appendFailedRunLogs(t, &result, tempDir)
 	return result
+}
+
+func appendFailedRunLogs(t *testing.T, result *commandResult, directory string) {
+	t.Helper()
+	if result.exitCode == 0 {
+		return
+	}
+	paths, err := filepath.Glob(filepath.Join(directory, "configs-runs", "*.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range paths {
+		log, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result.stderr += "\n" + string(log)
+	}
 }
 
 func requireTofu(t *testing.T) {

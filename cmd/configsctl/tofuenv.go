@@ -135,5 +135,12 @@ func tofuSecretEnv(tofu tofuSettings, workspaceDir, vaultFile, passwordFile stri
 	for _, key := range envKeys {
 		assignments = append(assignments, strings.TrimPrefix(key, tofu.EnvKeyPrefix)+"="+values[key])
 	}
+	if tofu.ProviderMirror != nil {
+		configuration, err := tofuProviderConfig(*tofu.ProviderMirror)
+		if err != nil {
+			return nil, err
+		}
+		assignments = append(assignments, "TF_CLI_CONFIG_FILE="+configuration)
+	}
 	return assignments, nil
 }
