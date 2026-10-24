@@ -1,0 +1,8 @@
+all:
+  hosts:
+    guest-alpha:
+      ansible_connection: local
+      service_name: guest_alpha
+    guest-beta:
+      ansible_connection: local
+      service_name: guest_beta

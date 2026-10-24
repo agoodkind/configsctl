@@ -16,7 +16,9 @@ The commands are `lint`, `baseline`, `keys`, `secret`, `set-secrets`, `rename-se
 
 ## Select an OpenTofu workspace
 
-A workspace is a directory with a `backend` block inside a `terraform` block in one of its `*.tf` or `*.tf.json` files. The workspace name is the directory name. configsctl checks the directory in `tofu.workspaces_dir` and each direct child directory of it. A directory without a `backend` block is a module, not a workspace.
+A workspace is a directory with a `backend` block inside a `terraform` block in one of its `*.tf` or `*.tf.json` files. Its selector is the complete relative path below `tofu.workspaces_dir`, such as `suburban/tack-qa`. Workspace roots can have any nesting depth. A directory without a backend is not a workspace.
+
+configsctl checks the selected root without parsing unrelated roots. Workspace discovery skips hidden directories, provider caches, and reusable `modules` directories. Selectors must use clean relative paths without parent traversal or directory symlinks.
 
 `configsctl.yml` at the root of the configs checkout has two required keys:
 
@@ -29,10 +31,10 @@ tofu:
 - `workspaces_dir` is the path of the directory with the workspaces, relative to the root of the checkout.
 - `env_key_prefix` selects the vault keys that configsctl exports as plain environment variables. A vault key `<env_key_prefix><NAME>` exports as `<NAME>`.
 
-To run OpenTofu in a child workspace, pass the workspace name as the first argument:
+To run OpenTofu in a nested workspace, pass its selector as the first argument:
 
 ```sh
-configsctl tofu <workspace> plan
+configsctl tofu suburban/tack-qa plan
 ```
 
 To run OpenTofu in `workspaces_dir` itself, omit the workspace name:
@@ -41,7 +43,7 @@ To run OpenTofu in `workspaces_dir` itself, omit the workspace name:
 configsctl tofu plan
 ```
 
-configsctl passes every argument after the workspace name to OpenTofu. When the first argument is not a child workspace name, configsctl passes every argument to OpenTofu. When `workspaces_dir` has no `backend` block and the first argument is not a child workspace name, the command fails and prints the child workspace names.
+configsctl passes the remaining arguments to OpenTofu. Existing immediate-child selectors still work. A command without a workspace selector uses the backend in `workspaces_dir`; if that backend is absent, the command fails and lists the available selectors. Nested roots with the same final directory name require their complete selectors.
 
 configsctl exports a vault key as `TF_VAR_<key>` only when the selected workspace declares a variable with that name.
 
@@ -105,17 +107,20 @@ CONFIGSCTL_DELL_INTEGRATION_ROOT=/path/to/configs go test ./cmd/configsctl -run 
 
 ## Gate a deploy on the guest plan
 
-configsctl runs targeted OpenTofu plans before acquiring host locks or running Ansible when `tofu.guest_module` is set. The key selects the module address in the `guest` workspace and requires that workspace's `guest_hosts` mapping under `tofu.lock_targets`. The gate plans only selected playbook hosts listed as values in that mapping. Each plan targets the module instance keyed by the host's `service_name` inventory variable. The gate refuses the deploy if any plan fails or reports pending changes.
+configsctl checks each selected enrolled guest in its owning workspace before acquiring deployment locks or running Ansible. `tofu.guest_modules` maps workspace selectors to the module address indexed by the inventory's `service_name`. Each workspace's `guest_hosts` mapping supplies its enrolled inventory hosts. Duplicate ownership and missing required mappings refuse deployment.
 
-The `--check` option skips the gate. An absent `tofu.guest_module` key disables the gate.
+Each plan targets the selected guest module in its root. The gate verifies that the saved plan includes that exact module instance. A failed plan, pending changes, or an empty target plan refuses deployment. Unrelated workspace configuration and state do not participate in the check.
+
+The `--check` option skips the gate. A configuration without either guest-module key disables it. Legacy `tofu.guest_module` still selects the shared `guest` workspace during tooling rollout; the configuration cannot set both keys.
 
 ```yaml
 tofu:
-  guest_module: module.base
+  guest_modules:
+    suburban/tack-qa: module.base
   lock_targets:
-    opentofu/guest:
+    opentofu/suburban/tack-qa:
       guest_hosts:
-        suburban/224: clyde.suburban.goodkind.io
+        suburban/217: tack-qa.suburban.goodkind.io
 ```
 
 ## Deploy behavior for hosts without Proxmox guests
