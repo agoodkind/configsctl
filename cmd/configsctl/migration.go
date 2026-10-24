@@ -12,7 +12,7 @@ import (
 	"goodkind.io/configsctl/internal/statemigration"
 )
 
-const migrationUsage = "usage: configsctl migrate-state <inspect|inspect-plan|prepare|preflight|execute|resume|verify|restore|verify-restored> <workspace-or-manifest> <private-directory> [--parallelism=N]"
+const migrationUsage = "usage: configsctl migrate-state <inspect|inspect-plan|prepare|preflight|transfer|execute|resume|verify|restore|verify-restored> <workspace-or-manifest> <private-directory> [--parallelism=N]"
 
 type migrationAction string
 
@@ -21,6 +21,7 @@ const (
 	migrationInspectPlan    migrationAction = "inspect-plan"
 	migrationPrepare        migrationAction = "prepare"
 	migrationPreflight      migrationAction = "preflight"
+	migrationTransfer       migrationAction = "transfer"
 	migrationExecute        migrationAction = "execute"
 	migrationResume         migrationAction = "resume"
 	migrationVerify         migrationAction = "verify"
@@ -68,7 +69,7 @@ func runStateMigration(_ cmdEnv, args []string) error {
 		return err
 	}
 	engine.PlanOptions = parsed.PlanOptions
-	if err := runMigrationAction(ctx, engine, workspacesDirectory, action); err != nil {
+	if err := coordinateMigrationAction(ctx, engine, workspacesDirectory, passwordFile, action); err != nil {
 		return err
 	}
 	fmt.Printf("State migration %s completed. Private verification records: %s\n", action, directory)
@@ -82,6 +83,10 @@ func runMigrationAction(ctx context.Context, engine statemigration.Engine, works
 		err = engine.Prepare(ctx)
 	case migrationPreflight:
 		err = engine.Preflight(ctx, engine.Manifest.ConfigurationDirectory, workspacesDirectory)
+	case migrationTransfer:
+		if err = engine.Execute(ctx); err == nil {
+			err = engine.Verify(ctx)
+		}
 	case migrationExecute, migrationResume:
 		err = engine.Execute(ctx)
 	case migrationVerify:

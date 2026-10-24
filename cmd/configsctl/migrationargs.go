@@ -45,11 +45,11 @@ func parseMigrationArguments(arguments []string) (migrationArguments, error) {
 	parsed.Subject = positionals[1]
 	parsed.Directory = positionals[2]
 	switch parsed.Action {
-	case migrationPreflight, migrationExecute, migrationResume, migrationVerify, migrationVerifyRestored:
+	case migrationPreflight, migrationTransfer, migrationExecute, migrationResume, migrationVerify, migrationVerifyRestored:
 		return parsed, nil
 	case migrationInspect, migrationInspectPlan, migrationPrepare, migrationRestore:
 		if parallelismSet {
-			return parsed, errors.New("--parallelism requires preflight, execute, resume, verify, or verify-restored")
+			return parsed, errors.New("--parallelism requires preflight, transfer, execute, resume, verify, or verify-restored")
 		}
 		return parsed, nil
 	default:
