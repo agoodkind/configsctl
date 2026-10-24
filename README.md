@@ -12,7 +12,7 @@ To run a deploy from the root of a configs checkout:
 go run goodkind.io/configsctl/cmd/configsctl@latest deploy <playbook>
 ```
 
-The commands are `lint`, `baseline`, `keys`, `secret`, `set-secrets`, `rename-secret`, `delete-secrets`, `deploy`, `tofu`, `syntax-check`, `inventory-dump`, and `version`. `version` prints the commit the binary was built from, whether that tree was dirty, and a hash of the binary. A deploy lints the files its playbook reads and refuses to run on a new finding. The playbooks pin and pull the releases they install; configsctl stages nothing.
+The commands are `lint`, `baseline`, `keys`, `secret`, `set-secrets`, `rename-secret`, `delete-secrets`, `deploy`, `tofu`, `migrate-state`, `syntax-check`, `inventory-dump`, and `version`. `version` prints the commit the binary was built from, whether that tree was dirty, and a hash of the binary. A deploy lints the files its playbook reads and refuses to run on a new finding. The playbooks pin and pull the releases they install; configsctl stages nothing.
 
 ## Select an OpenTofu workspace
 
@@ -30,6 +30,17 @@ tofu:
 
 - `workspaces_dir` is the path of the directory with the workspaces, relative to the root of the checkout.
 - `env_key_prefix` selects the vault keys that configsctl exports as plain environment variables. A vault key `<env_key_prefix><NAME>` exports as `<NAME>`.
+
+The optional `tofu.provider_mirror` setting selects a shared filesystem mirror.
+An absolute path selects that directory directly. A relative path resolves
+from the settings file directory. A missing directory refuses the command.
+configsctl discovers provider source addresses from directory metadata and
+writes a credential-free CLI configuration in the standard user cache
+directory. OpenTofu installs those sources from the mirror and uses the public
+registries for other sources. The generated configuration uses private
+directories and files and takes precedence over `TF_CLI_CONFIG_FILE` when this
+setting is present. Without this setting, configsctl preserves the native CLI
+configuration environment.
 
 To run OpenTofu in a nested workspace, pass its selector as the first argument:
 
@@ -55,9 +66,63 @@ Guest-local changes use the enrolled guest's existing SSH lock. A known node and
 
 configsctl expands `TF_CLI_ARGS` and command-specific arguments once, using OpenTofu's argument order. Explicit arguments take precedence over environment arguments.
 
-## Pause writes during state transfer
+## Transfer existing OpenTofu state
 
-Infrastructure mutations, service deployments, and credential refreshes acquire shared writer leases on the controller. A state-transfer executor requires an exclusive lease. Active writers prevent that executor from starting, and a retained migration pause refuses new writes until recovery verifies the complete transfer.
+Keep separate clean checkouts for the original configuration and the reviewed cutover configuration. Initialize cutover roots before inspection and keep original roots initialized for recovery. Retain every source and destination backend in the cutover checkout after removing transferred source resource declarations and adding destination declarations. Keep that checkout available throughout transfer and recovery.
+
+Use absolute private-directory paths outside both checkouts, with existing parent directories. Each inspection requires a new directory; the transfer requires a separate directory. Do not force-push state or reset Git history to recover.
+
+1. From the cutover checkout root, inspect each source and destination:
+
+   ```sh
+   configsctl migrate-state inspect <selector> <inspection-directory>
+   ```
+
+   Inspection inventories contain backend identity and hashes of instance records rather than state values. Inspection retains encrypted snapshots for existing state and removes transient decrypted state.
+
+2. Create a reviewed JSON manifest from those inspection inventories. The required fields are:
+
+   | Field | Value |
+   | --- | --- |
+   | `version` | `1`. |
+   | `commit` | Full Git commit SHA of the clean cutover configuration. |
+   | `restore_commit` | Full Git commit SHA of the original configuration. |
+   | `configuration_directory` | Absolute root of the retained cutover checkout, with clean HEAD equal to `commit`. |
+   | `workspaces` | Inspected `selector`, `backend`, and `before` entries for every source and destination. |
+   | `moves` | One entry per existing instance, including unchanged ownership, with `source`, `address`, `destination`, and `new_address`. |
+
+   Duplicate ownership and incomplete mappings refuse preparation.
+
+3. From the cutover checkout root, prepare encrypted before and after snapshots without writing deployment backends or pausing ordinary writes:
+
+   ```sh
+   configsctl migrate-state prepare <manifest> <private-directory>
+   ```
+
+4. Execute the prepared transfer:
+
+   ```sh
+   configsctl migrate-state execute <manifest> <private-directory>
+   ```
+
+   Both `execute` and `resume` automatically check prepared states against private local copies of the reviewed configuration before writing deployment backends. Native plans must not change managed resources; output and data-source updates may pass. Execution requires an exclusive controller writer lease. Active writers prevent execution, and a durable pause blocks new infrastructure mutations, service deployments, and credential refreshes until verification succeeds.
+
+   After an interruption, retain the manifest and private directory and retry with `configsctl migrate-state resume <manifest> <private-directory>`.
+
+5. Verify every final backend and its independent native plan before releasing the pause:
+
+   ```sh
+   configsctl migrate-state verify <manifest> <private-directory>
+   ```
+
+6. To reverse an unverified transfer instead, run recovery from the original clean checkout at `restore_commit`:
+
+   ```sh
+   configsctl migrate-state restore <manifest> <private-directory>
+   configsctl migrate-state verify-restored <manifest> <private-directory>
+   ```
+
+   `restore` restores original ownership and retains the pause. `verify-restored` checks all retained backend states, including empty new destinations, and checks native plans from the original roots before releasing the pause. Unexpected state or pending managed changes refuse verification.
 
 ## Rotate a Dell provider credential
 

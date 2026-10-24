@@ -57,6 +57,7 @@ var handlers = map[string]func(cmdEnv, []string) error{
 	"delete-secrets": runDeleteSecrets,
 	"deploy":         runDeploy,
 	"tofu":           runTofu,
+	"migrate-state":  runStateMigration,
 	"syntax-check":   runSyntaxCheck,
 	"inventory-dump": runInventoryDump,
 	"version":        runVersion,
