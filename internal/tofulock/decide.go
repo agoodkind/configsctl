@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -16,15 +17,42 @@ const (
 
 // Decision selects declared hosts or every hypervisor when plan mapping fails.
 type Decision struct {
-	AllHosts bool
-	Reason   string
-	Hosts    []string
+	AllHosts   bool
+	Reason     string
+	Hosts      []string
+	GuestLocks []GuestLock
+}
+
+// GuestLock selects one guest's lock directory on its declared SSH host.
+type GuestLock struct {
+	Node string
+	VMID string
+	Host string
+}
+
+// Validate requires a known node, an SSH host, and a positive numeric VMID.
+func (g GuestLock) Validate() error {
+	vmid, err := strconv.ParseUint(g.VMID, 10, 32)
+	if err != nil || vmid == 0 || strconv.FormatUint(vmid, 10) != g.VMID || g.Node == "" || g.Host == "" {
+		return fmt.Errorf("guest lock for node %s requires a declared host and a positive numeric VMID", g.Node)
+	}
+	return nil
 }
 
 // Decide skips no-op and read changes and resource types in LockFreeTypes.
 // Decide selects every hypervisor when plan decoding, format validation, or
 // host selection fails.
 func Decide(plan []byte, targets Targets) Decision {
+	return decide(plan, targets, false)
+}
+
+// DecideIndependent selects exact guest owners without adding their hypervisors.
+// AllHosts reports an ownership failure that independent workspaces must refuse.
+func DecideIndependent(plan []byte, targets Targets) Decision {
+	return decide(plan, targets, true)
+}
+
+func decide(plan []byte, targets Targets, independent bool) Decision {
 	var document planDocument
 	if err := json.Unmarshal(plan, &document); err != nil {
 		return allHosts("the plan JSON does not decode: " + err.Error())
@@ -33,19 +61,27 @@ func Decide(plan []byte, targets Targets) Decision {
 		return allHosts(fmt.Sprintf("the plan JSON format version %q is not 1.x", document.FormatVersion))
 	}
 	found := map[string]struct{}{}
+	guestLocks := map[GuestLock]struct{}{}
 	for _, resource := range document.ResourceChanges {
 		if resource.Change.inert() || slices.Contains(targets.LockFreeTypes, resource.Type) {
 			continue
 		}
-		hosts, reason := targets.changeHosts(resource)
+		hosts, guests, reason := targets.changeHosts(resource, independent)
 		if reason != "" {
 			return allHosts(reason)
 		}
 		for _, host := range hosts {
 			found[host] = struct{}{}
 		}
+		for _, guest := range guests {
+			guestLocks[guest] = struct{}{}
+		}
 	}
-	return Decision{AllHosts: false, Reason: "", Hosts: slices.Sorted(maps.Keys(found))}
+	guests := slices.Collect(maps.Keys(guestLocks))
+	slices.SortFunc(guests, func(first, second GuestLock) int {
+		return strings.Compare(first.Host+"/"+first.VMID+"/"+first.Node, second.Host+"/"+second.VMID+"/"+second.Node)
+	})
+	return Decision{AllHosts: false, Reason: "", Hosts: slices.Sorted(maps.Keys(found)), GuestLocks: guests}
 }
 
 // PendingAddresses returns sorted addresses of pending resource changes from plan JSON.
@@ -70,34 +106,112 @@ func PendingAddresses(plan []byte) ([]string, error) {
 }
 
 func allHosts(reason string) Decision {
-	return Decision{AllHosts: true, Reason: reason, Hosts: nil}
+	return Decision{AllHosts: true, Reason: reason, Hosts: nil, GuestLocks: nil}
 }
 
-func (t Targets) changeHosts(resource resourceChange) ([]string, string) {
+func (t Targets) changeHosts(resource resourceChange, independent bool) ([]string, []GuestLock, string) {
+	if independent && strings.HasPrefix(resource.Type, guestTypePrefix) {
+		return t.independentGuestHosts(resource)
+	}
 	states := resource.Change.states()
 	if resource.Change.deletes() && states.nodeUnknown() {
-		return nil, resource.Address + " deletes a resource with an unknown node"
+		return nil, nil, resource.Address + " deletes a resource with an unknown node"
 	}
 	var nodeHosts []string
 	if t.NodeHosts != nil && strings.HasPrefix(resource.Type, guestTypePrefix) {
 		var reason string
 		nodeHosts, reason = t.nodeHosts(resource.Address, states)
 		if reason != "" {
-			return nil, reason
+			return nil, nil, reason
 		}
 	}
 	hosts := nodeHosts
 	for _, address := range resource.addresses() {
+		if independent {
+			if host, declared := t.ModuleHosts[address]; declared {
+				hosts = append(hosts, host)
+				continue
+			}
+		}
 		addressHosts, reason := t.moduleHosts(address)
 		if reason != "" {
-			return nil, reason
+			return nil, nil, reason
 		}
 		if len(addressHosts) == 0 && len(nodeHosts) == 0 {
-			return nil, address + " matches no lock target"
+			return nil, nil, address + " matches no lock target"
 		}
 		hosts = append(hosts, addressHosts...)
 	}
-	return hosts, ""
+	return hosts, nil, ""
+}
+
+func (t Targets) independentGuestHosts(resource resourceChange) ([]string, []GuestLock, string) {
+	var explicit []string
+	for _, address := range resource.addresses() {
+		if host, declared := t.ModuleHosts[address]; declared {
+			explicit = append(explicit, host)
+		}
+	}
+	if len(explicit) == len(resource.addresses()) {
+		return explicit, nil, ""
+	}
+	if resource.Change.deletes() && resource.Change.states().nodeUnknown() {
+		return nil, nil, resource.Address + " deletes a resource with an unknown node"
+	}
+	hosts, guests, reason := t.independentNodeHosts(resource.Address, resource.Change.states())
+	return append(hosts, explicit...), guests, reason
+}
+
+func (t Targets) independentNodeHosts(address string, states changeStates) ([]string, []GuestLock, string) {
+	present := states.present()
+	if len(present) == 0 {
+		return nil, nil, address + " has no node"
+	}
+	guestResource := slices.ContainsFunc(present, func(state *resourceState) bool {
+		return state.declares(vmidAttribute)
+	})
+	var hosts []string
+	var guests []GuestLock
+	for _, state := range present {
+		node, known := state.text(nodeAttribute)
+		if !known {
+			return nil, nil, address + " has an unknown or absent node"
+		}
+		if guestResource {
+			stateHosts, stateGuests, reason := t.independentGuestState(node, state)
+			if reason != "" {
+				return nil, nil, address + reason
+			}
+			hosts = append(hosts, stateHosts...)
+			guests = append(guests, stateGuests...)
+			continue
+		}
+		host, declared := t.NodeHosts[node]
+		if !declared {
+			return nil, nil, address + " has no host lock target for its node"
+		}
+		hosts = append(hosts, host)
+	}
+	return hosts, guests, ""
+}
+
+func (t Targets) independentGuestState(node string, state *resourceState) ([]string, []GuestLock, string) {
+	vmid, known := state.text(vmidAttribute)
+	if !known {
+		return nil, nil, " has an unknown or null vmid"
+	}
+	host, enrolled := t.GuestHosts[node+"/"+vmid]
+	if !enrolled {
+		host = t.NodeHosts[node]
+	}
+	guest := GuestLock{Node: node, VMID: vmid, Host: host}
+	if err := guest.Validate(); err != nil {
+		return nil, nil, " has an unknown guest lock identity: " + err.Error()
+	}
+	if enrolled {
+		return []string{host}, nil, ""
+	}
+	return nil, []GuestLock{guest}, ""
 }
 
 func (t Targets) moduleHosts(address string) ([]string, string) {

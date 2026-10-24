@@ -420,11 +420,6 @@ func TestTofuRejectsInvalidSettingsFile(t *testing.T) {
 			fragment: "lock_free_types has an empty type name",
 		},
 		{
-			name:     "only lock-free types",
-			content:  settingsContent + "  lock_targets:\n    workspaces:\n      lock_free_types: [mwan_network_config]\n",
-			fragment: "declares no mappings",
-		},
-		{
 			name:     "unknown deploy key",
 			content:  settingsContent + "deploy:\n  lock_hosts:\n    deploy-mwan: [mwan_proxmox_delegate]\n",
 			fragment: "lock_hosts",

@@ -5,5 +5,8 @@ tofu:
     suburban/tack: module.base
   lock_targets:
     workspaces/suburban/tack:
+      lock_free_types: [terraform_data]
       guest_hosts:
         site/101: guest-alpha
+    workspaces/suburban/mwan:
+      lock_free_types: [terraform_data]

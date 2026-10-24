@@ -4,8 +4,10 @@ go 1.27.1
 
 require (
 	github.com/hashicorp/hcl/v2 v2.25.0
+	github.com/mattn/go-shellwords v1.0.12
 	github.com/nikolalohinski/gonja/v2 v2.8.0
 	github.com/sosedoff/ansible-vault-go v0.2.0
+	github.com/zclconf/go-cty v1.19.0
 	golang.org/x/sys v0.47.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -24,7 +26,6 @@ require (
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
-	github.com/zclconf/go-cty v1.19.0 // indirect
 	golang.org/x/crypto v0.54.0 // indirect
 	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546 // indirect
 	golang.org/x/mod v0.38.0 // indirect
