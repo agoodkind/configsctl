@@ -6,8 +6,10 @@ tofu:
     vault/tack: module.base
   lock_targets:
     workspaces/suburban/tack:
+      lock_free_types: [terraform_data]
       guest_hosts:
         site/101: guest-alpha
     workspaces/vault/tack:
+      lock_free_types: [terraform_data]
       guest_hosts:
         site/101: guest-beta

@@ -47,6 +47,18 @@ configsctl passes the remaining arguments to OpenTofu. Existing immediate-child 
 
 configsctl exports a vault key as `TF_VAR_<key>` only when the selected workspace declares a variable with that name.
 
+## Scope infrastructure locks
+
+When `tofu.guest_modules` enables independent workspaces, an ordinary `apply` or `destroy` prepares a native saved plan before selecting locks. configsctl preserves the confirmation prompt unless the effective arguments include `-auto-approve`. It applies that exact plan after acquiring its declared locks. Unknown ownership refuses the mutation.
+
+Guest-local changes use the enrolled guest's existing SSH lock. A known node and numeric VMID without deployment enrollment use a guest-specific lock directory through the declared hypervisor's SSH connection. Explicit resource ownership selects the host lock for guest creation, shared host changes, and firmware. `lock_free_types` can define a root that does not need Proxmox locks.
+
+configsctl expands `TF_CLI_ARGS` and command-specific arguments once, using OpenTofu's argument order. Explicit arguments take precedence over environment arguments.
+
+## Pause writes during state transfer
+
+Infrastructure mutations, service deployments, and credential refreshes acquire shared writer leases on the controller. A state-transfer executor requires an exclusive lease. Active writers prevent that executor from starting, and a retained migration pause refuses new writes until recovery verifies the complete transfer.
+
 ## Rotate a Dell provider credential
 
 A workspace can use an existing iDRAC rotator account to set a fresh password
@@ -163,6 +175,6 @@ The check also runs with `--check`. Check mode now reads the settings and still 
 
 Lint, build, test, and release come from the shared go-makefile pipeline, so use the make targets rather than calling the Go tools directly.
 
-1. Run `make check` to run every lint gate.
+1. Run `make build` to run the build and its required checks.
 2. Run `make test` to run the tests.
 3. Run `make help` to list every other target.

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -127,17 +128,20 @@ func deployLockTargets(inv ansible.Inventory, playHosts, variables []string) ([]
 }
 
 type tofuLockRequest struct {
-	workspaceDir  string
-	env           []string
-	args          []string
-	lockTargets   map[string]tofulock.Targets
-	requiredHosts []string
+	workspaceDir          string
+	env                   []string
+	args                  []string
+	lockTargets           map[string]tofulock.Targets
+	requiredHosts         []string
+	independentWorkspaces bool
+	guestModule           string
 }
 
 type tofuHostSelection struct {
-	names   []string
-	args    []string
-	cleanup func()
+	names      []string
+	args       []string
+	cleanup    func()
+	guestLocks []tofulock.GuestLock
 }
 
 func lockTofuHosts(
@@ -160,6 +164,12 @@ func lockTofuHosts(
 		return nil, nil, nil, err
 	}
 	targets := hostlock.Targets(inv, selection.names)
+	guestTargets, err := resolveGuestLocks(inv, selection.guestLocks)
+	if err != nil {
+		selection.cleanup()
+		return nil, nil, nil, err
+	}
+	targets = append(targets, guestTargets...)
 	if err := requireLockOnlyTargets(inv, selection.names, targets); err != nil {
 		selection.cleanup()
 		return nil, nil, nil, err
@@ -192,17 +202,23 @@ func requireLockOnlyTargets(inv ansible.Inventory, names []string, targets []hos
 }
 
 func selectTofuLockHosts(ctx context.Context, inv ansible.Inventory, request tofuLockRequest) (tofuHostSelection, error) {
-	everyHost := tofuHostSelection{names: allTofuLockHosts(inv), args: request.args, cleanup: func() {}}
+	everyHost := tofuHostSelection{names: allTofuLockHosts(inv), args: request.args, cleanup: func() {}, guestLocks: nil}
 	if tofuSubcommand(request.args) != tofuApply {
 		return everyHost, nil
 	}
 	workspace := tofuWorkspaceKey(request.workspaceDir)
 	targets, declared := request.lockTargets[workspace]
 	if !declared {
+		if request.independentWorkspaces {
+			return tofuHostSelection{}, fmt.Errorf("workspace %s has no declared lock ownership", workspace)
+		}
 		return everyHost, nil
 	}
 	planFile := savedPlanCandidate(request.args)
 	if planFile == "" {
+		if request.independentWorkspaces {
+			return tofuHostSelection{}, fmt.Errorf("workspace %s requires a prepared mutation plan", workspace)
+		}
 		slog.Info("tofu.lock.all_hypervisors", "workspace", workspace, "reason", "the apply has no saved plan")
 		return everyHost, nil
 	}
@@ -226,7 +242,7 @@ func selectTofuLockHosts(ctx context.Context, inv ansible.Inventory, request tof
 	if decision.AllHosts {
 		names = everyHost.names
 	}
-	return tofuHostSelection{names: names, args: args, cleanup: cleanup}, nil
+	return tofuHostSelection{names: names, args: args, cleanup: cleanup, guestLocks: decision.GuestLocks}, nil
 }
 
 func planDecision(
@@ -238,12 +254,69 @@ func planDecision(
 		return tofulock.Decision{}, err
 	}
 	decision := tofulock.Decide(plan, targets)
+	if request.independentWorkspaces {
+		targets, err = guestLockTargets(inv, request, targets)
+		if err != nil {
+			return tofulock.Decision{}, err
+		}
+		decision = tofulock.DecideIndependent(plan, targets)
+		if decision.AllHosts {
+			return tofulock.Decision{}, fmt.Errorf("workspace %s has unknown lock ownership: %s", workspace, decision.Reason)
+		}
+	}
 	if decision.AllHosts {
 		slog.Info("tofu.lock.all_hypervisors", "workspace", workspace, "reason", decision.Reason)
 		return decision, nil
 	}
-	slog.Info("tofu.lock.plan_hosts", "workspace", workspace, "plan", planPath, "hosts", decision.Hosts)
+	slog.Info("tofu.lock.plan_hosts", "workspace", workspace, "plan", planPath, "hosts", decision.Hosts, "guest_locks", decision.GuestLocks)
 	return decision, requireLockTargets(inv, decision.Hosts)
+}
+
+func resolveGuestLocks(inv ansible.Inventory, guests []tofulock.GuestLock) ([]hostlock.Host, error) {
+	var targets []hostlock.Host
+	for _, guest := range guests {
+		if err := guest.Validate(); err != nil {
+			slog.Error("tofu.lock.guest_identity_invalid", "node", guest.Node, "err", err)
+			return nil, fmt.Errorf("validate the guest lock identity: %w", err)
+		}
+		if err := requireLockTargets(inv, []string{guest.Host}); err != nil {
+			return nil, err
+		}
+		hosts := hostlock.Targets(inv, []string{guest.Host})
+		host, err := hostlock.ForGuest(hosts[0], guest.Node, guest.VMID)
+		if err != nil {
+			slog.Error("tofu.lock.guest_target_failed", "node", guest.Node, "err", err)
+			return nil, fmt.Errorf("select the guest lock target: %w", err)
+		}
+		targets = append(targets, host)
+	}
+	return targets, nil
+}
+
+func guestLockTargets(inv ansible.Inventory, request tofuLockRequest, targets tofulock.Targets) (tofulock.Targets, error) {
+	if request.guestModule == "" {
+		return targets, nil
+	}
+	keyHosts := maps.Clone(targets.ModuleKeyHosts[request.guestModule])
+	if keyHosts == nil {
+		keyHosts = make(map[string]string)
+	}
+	for _, host := range targets.GuestHosts {
+		name, err := inv.HostString(host, serviceNameVariable)
+		if err != nil {
+			slog.Error("tofu.lock.guest_name_failed", "host", host, "err", err)
+			return tofulock.Targets{}, fmt.Errorf("read the guest module key of %s for lock ownership: %w", host, err)
+		}
+		if _, explicit := keyHosts[name]; !explicit {
+			keyHosts[name] = host
+		}
+	}
+	targets.ModuleKeyHosts = maps.Clone(targets.ModuleKeyHosts)
+	if targets.ModuleKeyHosts == nil {
+		targets.ModuleKeyHosts = make(map[string]map[string]string)
+	}
+	targets.ModuleKeyHosts[request.guestModule] = keyHosts
+	return targets, nil
 }
 
 func requireRegularPlan(path string) error {

@@ -269,6 +269,13 @@ func runDeployWith(env cmdEnv, args []string, deploy deployRunner) error {
 	if err != nil {
 		return err
 	}
+	if !opts.Check {
+		release, err := acquireMigrationWriter()
+		if err != nil {
+			return err
+		}
+		defer release()
+	}
 	log, err := openRunLog(opts.Playbook, env.secrets)
 	if err != nil {
 		return err
@@ -312,18 +319,22 @@ func runTofu(env cmdEnv, args []string) error {
 	if len(tofuArgs) == 0 {
 		return errors.New(tofuUsage)
 	}
-	secretEnv, err := tofuSecretEnv(loaded.Tofu, workspaceDir, defaultVaultFile, passwordFile)
+	tofuArgs, childEnv, err := tofuInvocation(loaded.Tofu, workspaceDir, passwordFile, tofuArgs)
 	if err != nil {
 		return err
 	}
-	childEnv := append(os.Environ(), secretEnv...)
 	safeArgs, err := sanitizeTofuArgs(tofuArgs)
 	if err != nil {
 		return err
 	}
-	slog.Info("tofu run", "dir", workspaceDir, "args", strings.Join(safeArgs, " "))
 	credential, configured := loaded.Tofu.Credentials[tofuWorkspaceKey(workspaceDir)]
 	usesCredential := configured && credentialCommand(safeArgs)
+	releaseMigration, err := leaseTofuMigration(safeArgs, usesCredential)
+	if err != nil {
+		return err
+	}
+	defer releaseMigration()
+	slog.Info("tofu run", "dir", workspaceDir, "args", strings.Join(safeArgs, " "))
 	var requiredHosts []string
 	if usesCredential {
 		if err := credential.validateWorkspace(workspaceDir, childEnv); err != nil {
@@ -332,10 +343,19 @@ func runTofu(env cmdEnv, args []string) error {
 		requiredHosts = []string{credential.LockHost}
 	}
 	ctx := context.Background()
+	independent := loaded.Tofu.GuestModules != nil
+	if needsIndependentPlan(independent, safeArgs) {
+		request := tofuLockRequest{
+			workspaceDir: workspaceDir, env: childEnv, args: safeArgs,
+			lockTargets: loaded.Tofu.LockTargets, requiredHosts: requiredHosts, independentWorkspaces: true,
+			guestModule: loaded.Tofu.lockGuestModule(workspaceDir),
+		}
+		return runIndependentMutation(env, request, credential, usesCredential, passwordFile)
+	}
 	commandArgs := safeArgs
 	release := func() {}
-	if tofuSubcommand(safeArgs) == tofuApply || tofuSubcommand(safeArgs) == tofuDestroy {
-		ctx, commandArgs, release, err = lockTofuHosts(ctx, tofuLockRequest{workspaceDir: workspaceDir, env: childEnv, args: safeArgs, lockTargets: loaded.Tofu.LockTargets, requiredHosts: requiredHosts})
+	if tofuMutates(safeArgs) {
+		ctx, commandArgs, release, err = lockTofuHosts(ctx, tofuLockRequest{workspaceDir: workspaceDir, env: childEnv, args: safeArgs, lockTargets: loaded.Tofu.LockTargets, requiredHosts: requiredHosts, independentWorkspaces: independent, guestModule: loaded.Tofu.lockGuestModule(workspaceDir)})
 	} else if usesCredential {
 		ctx, release, err = lockCredentialHost(ctx, credential.LockHost)
 	}
@@ -393,6 +413,14 @@ func executeTofu(ctx context.Context, env cmdEnv, workspaceDir string, safeArgs,
 		closeErr = log.Close()
 	}
 	if runErr != nil {
+		var exited *exec.ExitError
+		if tofuSubcommand(commandArgs) == tofuPlan && tofuSubcommand(safeArgs) != tofuPlan &&
+			context.Cause(ctx) == nil && errors.As(runErr, &exited) && exited.ExitCode() == tofuPendingExitCode {
+			if closeErr != nil {
+				return closeErr
+			}
+			return &exitCodeError{code: tofuPendingExitCode}
+		}
 		return tofuFailure(ctx, runErr, logPath)
 	}
 	return closeErr
@@ -474,13 +502,7 @@ func tofuStreams(args []string) bool {
 // accepts every spelling tofu does: one or two leading dashes, bare or with an
 // explicit value.
 func hasTofuAutoApprove(args []string) bool {
-	for _, arg := range args {
-		flag := strings.TrimLeft(arg, "-")
-		if flag == "auto-approve" || strings.HasPrefix(flag, "auto-approve=") {
-			return true
-		}
-	}
-	return false
+	return tofuBooleanArgument(args, "auto-approve", false)
 }
 
 // exitCodeError carries a child process exit status to main, which exits with

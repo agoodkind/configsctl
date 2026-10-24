@@ -18,12 +18,12 @@ type Targets struct {
 	LockFreeTypes  []string                     `yaml:"lock_free_types"`
 }
 
-// Validate requires at least one host mapping.
+// Validate requires a host mapping or declared lock-free resource types.
 // Validate rejects empty declared maps, keys, and host names.
 // Validate requires guest keys in <node>/<vmid> form.
 // Validate rejects a declared LockFreeTypes list with no types or an empty name.
 func (t Targets) Validate() error {
-	if t.ModuleHosts == nil && t.ModuleKeyHosts == nil && t.NodeHosts == nil && t.GuestHosts == nil {
+	if !t.hasDeclarations() {
 		return errors.New("declares no mappings")
 	}
 	if err := validateHostMap("module_hosts", t.ModuleHosts); err != nil {
@@ -60,6 +60,10 @@ func (t Targets) Validate() error {
 		}
 	}
 	return nil
+}
+
+func (t Targets) hasDeclarations() bool {
+	return t.ModuleHosts != nil || t.ModuleKeyHosts != nil || t.NodeHosts != nil || t.GuestHosts != nil || t.LockFreeTypes != nil
 }
 
 func validateHostMap(name string, mapping map[string]string) error {
