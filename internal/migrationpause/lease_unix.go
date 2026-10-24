@@ -35,7 +35,7 @@ func AcquireExclusive(pauseFile string) (func(), error) {
 func acquire(pauseFile string, operation int) (func(), error) {
 	directory := filepath.Dir(pauseFile)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
-		slog.Error("migration.lease.directory_failed", "path", directory)
+		slog.Error("migration.lease.directory_failed", "path", directory, "err", err)
 		return nil, fmt.Errorf("create the private migration lease directory: %w", err)
 	}
 	info, err := os.Lstat(directory)
