@@ -202,7 +202,26 @@ func runConfigsctlWithPath(t *testing.T, tree configsTree, path string, args ...
 	default:
 		t.Fatalf("run configsctl %v: %v", args, runErr)
 	}
+	appendFailedRunLogs(t, &result, tempDir)
 	return result
+}
+
+func appendFailedRunLogs(t *testing.T, result *commandResult, directory string) {
+	t.Helper()
+	if result.exitCode == 0 {
+		return
+	}
+	paths, err := filepath.Glob(filepath.Join(directory, "configs-runs", "*.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range paths {
+		log, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result.stderr += "\n" + string(log)
+	}
 }
 
 func requireTofu(t *testing.T) {
