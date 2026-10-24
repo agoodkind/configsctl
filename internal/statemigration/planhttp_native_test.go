@@ -103,7 +103,7 @@ func cloudflareDiagnosticWorkspace(t *testing.T) statemigration.Workspace {
 	return workspace
 }
 
-func assertNativeHTTPDiagnostic(t *testing.T, workspace statemigration.Workspace, endpoint string, status int, transport string) {
+func assertNativeHTTPDiagnostic(t *testing.T, workspace statemigration.Workspace, endpoint string, status int, transport string) []int64 {
 	t.Helper()
 	workspace.Environment = append(workspace.Environment, "TF_VAR_fixture_base_url="+endpoint)
 	private := privateFixtureDir(t)
@@ -120,9 +120,10 @@ func assertNativeHTTPDiagnostic(t *testing.T, workspace statemigration.Workspace
 	}
 	var report struct {
 		Diagnostics []struct {
-			Category   string `json:"category"`
-			HTTPStatus int    `json:"http_status"`
-			Transport  string `json:"transport_category"`
+			Category      string  `json:"category"`
+			HTTPStatus    int     `json:"http_status"`
+			Transport     string  `json:"transport_category"`
+			APIErrorCodes []int64 `json:"api_error_codes"`
 		} `json:"diagnostics"`
 	}
 	if json.Unmarshal(data, &report) != nil || len(report.Diagnostics) != 1 {
@@ -132,10 +133,11 @@ func assertNativeHTTPDiagnostic(t *testing.T, workspace statemigration.Workspace
 	if diagnostic.Category != "provider_http_request_failed" || diagnostic.HTTPStatus != status || diagnostic.Transport != transport {
 		t.Fatalf("unexpected safe diagnostic category=%s status=%d transport=%s", diagnostic.Category, diagnostic.HTTPStatus, diagnostic.Transport)
 	}
-	for _, forbidden := range []string{httpDiagnosticMarker, endpoint, "10000", "11111111111111111111111111111111", "X-Private-Fixture", "detail", "errors", "headers"} {
+	for _, forbidden := range []string{httpDiagnosticMarker, endpoint, "11111111111111111111111111111111", "X-Private-Fixture", "detail", "errors", "headers"} {
 		if strings.Contains(string(data), forbidden) {
 			t.Fatal("the public diagnostic metadata retained private HTTP detail")
 		}
 	}
 	assertPrivatePlanMetadataOnly(t, private)
+	return diagnostic.APIErrorCodes
 }
