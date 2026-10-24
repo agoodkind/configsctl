@@ -48,19 +48,24 @@ func (e Engine) Preflight(ctx context.Context, configurationDirectory, workspace
 	if err != nil {
 		return err
 	}
+	var failures []error
 	for index, spec := range e.Manifest.Workspaces {
 		endpoint, exists := e.Workspaces[spec.Selector]
 		if !exists {
-			return fmt.Errorf("preflight workspace %s lacks its protected environment", spec.Selector)
+			failures = append(failures, fmt.Errorf("preflight workspace %s lacks its protected environment", spec.Selector))
+			continue
 		}
 		workspace := Workspace{
 			Directory: filepath.Join(checkout, relative, spec.Selector), Environment: endpoint.Environment,
 		}
 		if err := preflightMigrationWorkspace(ctx, e.Directory, scratch, index, workspace); err != nil {
-			return migrationPreflightFailure(ctx, "check prepared workspace "+spec.Selector, err)
+			failures = append(failures, migrationPreflightFailure(ctx, "check prepared workspace "+spec.Selector, err))
 		}
 	}
-	return nil
+	if len(failures) != 0 {
+		slog.ErrorContext(ctx, "migration.preflight.workspace_checks_failed", "workspaces", len(failures), "err", fmt.Sprintf("%T", failures[0]))
+	}
+	return errors.Join(failures...)
 }
 
 func preflightWorkspaceDirectory(ctx context.Context, configurationDirectory, workspacesDirectory string) (string, error) {

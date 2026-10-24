@@ -12,13 +12,14 @@ import (
 	"goodkind.io/configsctl/internal/statemigration"
 )
 
-const migrationUsage = "usage: configsctl migrate-state <inspect|prepare|execute|resume|verify|restore|verify-restored> <workspace-or-manifest> <private-directory>"
+const migrationUsage = "usage: configsctl migrate-state <inspect|prepare|preflight|execute|resume|verify|restore|verify-restored> <workspace-or-manifest> <private-directory>"
 
 type migrationAction string
 
 const (
 	migrationInspect        migrationAction = "inspect"
 	migrationPrepare        migrationAction = "prepare"
+	migrationPreflight      migrationAction = "preflight"
 	migrationExecute        migrationAction = "execute"
 	migrationResume         migrationAction = "resume"
 	migrationVerify         migrationAction = "verify"
@@ -72,6 +73,8 @@ func runMigrationAction(ctx context.Context, engine statemigration.Engine, works
 	switch action {
 	case migrationPrepare:
 		err = engine.Prepare(ctx)
+	case migrationPreflight:
+		err = engine.Preflight(ctx, engine.Manifest.ConfigurationDirectory, workspacesDirectory)
 	case migrationExecute, migrationResume:
 		err = engine.Preflight(ctx, engine.Manifest.ConfigurationDirectory, workspacesDirectory)
 		if err == nil {

@@ -99,23 +99,31 @@ Use absolute private-directory paths outside both checkouts, with existing paren
    configsctl migrate-state prepare <manifest> <private-directory>
    ```
 
-4. Execute the prepared transfer:
+4. Check prepared states before coordinating the transfer:
+
+   ```sh
+   configsctl migrate-state preflight <manifest> <private-directory>
+   ```
+
+   Preflight checks all workspaces against private local copies of the reviewed configuration and reports each validation failure. It does not write deployment backends or create the durable pause. Native plans must not change managed resources; output and data-source updates may pass.
+
+5. Execute the prepared transfer:
 
    ```sh
    configsctl migrate-state execute <manifest> <private-directory>
    ```
 
-   Both `execute` and `resume` automatically check prepared states against private local copies of the reviewed configuration before writing deployment backends. Native plans must not change managed resources; output and data-source updates may pass. Execution requires an exclusive controller writer lease. Active writers prevent execution, and a durable pause blocks new infrastructure mutations, service deployments, and credential refreshes until verification succeeds.
+   Both `execute` and `resume` repeat preflight automatically before writing deployment backends. Execution requires an exclusive controller writer lease. Active writers prevent execution, and a durable pause blocks new infrastructure mutations, service deployments, and credential refreshes until verification succeeds.
 
    After an interruption, retain the manifest and private directory and retry with `configsctl migrate-state resume <manifest> <private-directory>`.
 
-5. Verify every final backend and its independent native plan before releasing the pause:
+6. Verify every final backend and its independent native plan before releasing the pause:
 
    ```sh
    configsctl migrate-state verify <manifest> <private-directory>
    ```
 
-6. To reverse an unverified transfer instead, run recovery from the original clean checkout at `restore_commit`:
+7. To reverse an unverified transfer instead, run recovery from the original clean checkout at `restore_commit`:
 
    ```sh
    configsctl migrate-state restore <manifest> <private-directory>

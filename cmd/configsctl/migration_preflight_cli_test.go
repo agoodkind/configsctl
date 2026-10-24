@@ -27,29 +27,71 @@ func requirePreflightCleanup(t *testing.T, migration cliMigration) {
 	requireEncryptedMigrationFiles(t, migration.directory)
 }
 
+func readPreflightSource(t *testing.T, migration cliMigration) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(migration.tree.workspaces, "legacy", "runtime.tfstate"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func requirePreflightUnchanged(t *testing.T, migration cliMigration, before []byte) {
+	t.Helper()
+	if !bytes.Equal(before, readPreflightSource(t, migration)) {
+		t.Fatal("preflight changed the original backend state")
+	}
+	requireNoFile(t, filepath.Join(migration.tree.workspaces, "application", "runtime.tfstate"))
+	if err := filepath.WalkDir(migration.tree.home, func(_ string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Name() == "pause.json" {
+			t.Fatal("preflight created the durable infrastructure write pause")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	requirePreflightCleanup(t, migration)
+}
+
 func TestMigrationPreflightRefusesManagedChangesBeforeBackendWrites(t *testing.T) {
-	for _, operation := range []string{"execute", "resume"} {
+	for _, operation := range []string{"preflight", "execute", "resume"} {
 		t.Run(operation, func(t *testing.T) {
 			migration := newCLIMigration(t)
 			updatePreflightFixture(t, &migration, migrationFixtureFile(t, "preflight-change.tf"))
 			requireSuccess(t, migration.run(t, "prepare"), "migrate-state", "prepare")
-			source := filepath.Join(migration.tree.workspaces, "legacy", "runtime.tfstate")
-			before, err := os.ReadFile(source)
-			if err != nil {
-				t.Fatal(err)
-			}
+			before := readPreflightSource(t, migration)
 			refused := migration.run(t, operation)
 			if refused.exitCode == 0 || !strings.Contains(refused.stderr, "would change managed resource terraform_data.unplanned") {
 				t.Fatalf("preflight accepted an unplanned managed change: %s", refused.stderr)
 			}
-			after, err := os.ReadFile(source)
-			if err != nil || !bytes.Equal(before, after) {
-				t.Fatal("failed preflight changed the original backend state")
-			}
-			requireNoFile(t, filepath.Join(migration.tree.workspaces, "application", "runtime.tfstate"))
-			requirePreflightCleanup(t, migration)
+			requirePreflightUnchanged(t, migration, before)
 		})
 	}
+}
+
+func TestMigrationPreflightReportsAllIndependentWorkspaceFailures(t *testing.T) {
+	migration := newCLIMigration(t)
+	writeFixtureFile(t, filepath.Join(migration.tree.workspaces, "legacy", "main.tf"), migrationFixtureFile(t, "preflight-source-change.tf"))
+	updatePreflightFixture(t, &migration, migrationFixtureFile(t, "preflight-change.tf"), "workspaces/legacy/main.tf")
+	requireSuccess(t, migration.run(t, "prepare"), "migrate-state", "prepare")
+	before := readPreflightSource(t, migration)
+	refused := migration.run(t, "preflight")
+	if refused.exitCode == 0 {
+		t.Fatal("preflight accepted independent managed changes")
+	}
+	for _, failure := range []struct{ selector, address string }{
+		{"legacy", "terraform_data.unplanned_source"},
+		{"application", "terraform_data.unplanned"},
+	} {
+		fragment := "check prepared workspace " + failure.selector + ": verify prepared state against the reviewed configuration: the independent plan would change managed resource " + failure.address
+		if !strings.Contains(refused.stderr, fragment) {
+			t.Fatalf("preflight omitted the independent failure for %s: %s", failure.selector, refused.stderr)
+		}
+	}
+	requirePreflightUnchanged(t, migration, before)
 }
 
 func TestMigrationPreflightCopiesOnlyReviewedGitFiles(t *testing.T) {
@@ -61,6 +103,9 @@ func TestMigrationPreflightCopiesOnlyReviewedGitFiles(t *testing.T) {
 		writeFixtureFile(t, filepath.Join(migration.tree.workspaces, "application", path), migrationFixtureValue)
 	}
 	requireSuccess(t, migration.run(t, "prepare"), "migrate-state", "prepare")
+	before := readPreflightSource(t, migration)
+	requireSuccess(t, migration.run(t, "preflight"), "migrate-state", "preflight")
+	requirePreflightUnchanged(t, migration, before)
 	requireSuccess(t, migration.run(t, "execute"), "migrate-state", "execute")
 	if migrationCLIStateIdentity(t, migration.tree, "application", applicationInstance) != migration.identity {
 		t.Fatal("the reviewed-file preflight changed the prepared instance")
