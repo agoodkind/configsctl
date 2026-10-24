@@ -7,6 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/hclsyntax"
 )
 
 type planDiagnostic struct {
@@ -18,6 +21,7 @@ type planDiagnostic struct {
 	HTTPStatus    int     `json:"http_status,omitempty"`
 	Transport     string  `json:"transport_category,omitempty"`
 	APIErrorCodes []int64 `json:"api_error_codes,omitempty"`
+	Address       string  `json:"address,omitempty"`
 }
 
 // Only exact static summaries select a public category. Provider text remains private.
@@ -58,6 +62,7 @@ func readPlanDiagnostics(path, workspace string) ([]planDiagnostic, error) {
 				Severity string `json:"severity"`
 				Summary  string `json:"summary"`
 				Detail   string `json:"detail"`
+				Address  string `json:"address"`
 				Range    struct {
 					Filename string `json:"filename"`
 					Start    struct {
@@ -83,7 +88,7 @@ func readPlanDiagnostics(path, workspace string) ([]planDiagnostic, error) {
 		if native.Severity == "error" || native.Severity == "warning" {
 			severity = native.Severity
 		}
-		diagnostic := planDiagnostic{Severity: severity, Category: category, Digest: digest([]byte(native.Summary)), Filename: "", Line: 0, HTTPStatus: 0, Transport: "", APIErrorCodes: nil}
+		diagnostic := planDiagnostic{Severity: severity, Category: category, Digest: digest([]byte(native.Summary)), Filename: "", Line: 0, HTTPStatus: 0, Transport: "", APIErrorCodes: nil, Address: diagnosticAddress(native.Address)}
 		if category == "provider_http_request_failed" {
 			diagnostic.HTTPStatus, diagnostic.Transport, diagnostic.APIErrorCodes = providerHTTPDiagnostic(native.Detail)
 		}
@@ -93,6 +98,16 @@ func readPlanDiagnostics(path, workspace string) ([]planDiagnostic, error) {
 		}
 		diagnostics = append(diagnostics, diagnostic)
 	}
+}
+
+func diagnosticAddress(address string) string {
+	if address == "" {
+		return ""
+	}
+	if _, diagnostics := hclsyntax.ParseTraversalAbs([]byte(address), "", hcl.InitialPos); diagnostics.HasErrors() {
+		return ""
+	}
+	return address
 }
 
 func diagnosticFilename(filename, workspace string) string {
