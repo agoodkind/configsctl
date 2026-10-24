@@ -166,6 +166,9 @@ func Snapshot(ctx context.Context, source Workspace, plaintext, directory string
 	if err := Push(ctx, workspace, plaintext); err != nil {
 		return Workspace{}, err
 	}
+	if err := protectSnapshotFiles(directory); err != nil {
+		return Workspace{}, err
+	}
 	encrypted, err := os.ReadFile(filepath.Join(directory, "snapshot.tfstate"))
 	if err != nil {
 		slog.ErrorContext(ctx, "migration.snapshot.read_failed", "path", directory, "err", migrationErrorType(err))
@@ -176,6 +179,26 @@ func Snapshot(ctx context.Context, source Workspace, plaintext, directory string
 		return Workspace{}, errors.New("OpenTofu did not write an encrypted snapshot")
 	}
 	return workspace, nil
+}
+
+func protectSnapshotFiles(directory string) error {
+	if err := protectNativeFiles(directory); err != nil {
+		return err
+	}
+	root, err := privateDirectory(directory)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	if err := root.Chmod(".terraform", privateDirectoryMode); err != nil {
+		slog.Error("migration.snapshot.metadata_directory_protect_failed", "err", migrationErrorType(err))
+		return fmt.Errorf("protect retained snapshot backend directory: %w", err)
+	}
+	if err := root.Chmod(filepath.Join(".terraform", "terraform.tfstate"), privateFileMode); err != nil {
+		slog.Error("migration.snapshot.metadata_protect_failed", "err", migrationErrorType(err))
+		return fmt.Errorf("protect retained snapshot backend metadata: %w", err)
+	}
+	return nil
 }
 
 func native(ctx context.Context, workspace Workspace, output io.Writer, args ...string) error {

@@ -157,6 +157,12 @@ func requireEncryptedMigrationFiles(t *testing.T, directory string) {
 		if err != nil {
 			return err
 		}
+		if strings.HasSuffix(entry.Name(), ".tfstate") {
+			info, err := entry.Info()
+			if err != nil || info.Mode().Perm() != 0o600 {
+				t.Fatal("retained native snapshot and backend metadata files must have mode 0600")
+			}
+		}
 		if bytes.Contains(data, []byte(migrationFixtureValue)) || bytes.Contains(data, []byte(migrationFixtureKey)) {
 			t.Fatal("retained migration files contain a synthetic plaintext secret")
 		}

@@ -79,13 +79,7 @@ func TestNativeEncryptedTransferPreservesInstanceAndRefusesStalePush(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	encrypted, err := os.ReadFile(filepath.Join(snapshotPath, "snapshot.tfstate"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Contains(encrypted, []byte(syntheticMarker)) {
-		t.Fatal("the retained snapshot contains the synthetic plaintext marker")
-	}
+	requireNativeSnapshotPermissions(t, snapshotPath)
 	restored, err := statemigration.Pull(ctx, snapshot, filepath.Join(private, "restored.tfstate"))
 	if err != nil || restored.Digest != before.Digest {
 		t.Fatalf("the encrypted snapshot changed resource verification metadata: %v", err)
@@ -105,12 +99,7 @@ func TestNativeEncryptedTransferPreservesInstanceAndRefusesStalePush(t *testing.
 		t.Fatal("native transfer changed the resource identity or provider state")
 	}
 	nativeCommand(t, destination, "plan", "-input=false", "-detailed-exitcode", "-no-color")
-	for _, name := range []string{"source.tfstate", "destination.tfstate", "restored.tfstate", "after.tfstate"} {
-		info, err := os.Stat(filepath.Join(private, name))
-		if err != nil || info.Mode().Perm() != 0o600 {
-			t.Fatalf("private native export %s must have mode 0600: %v", name, err)
-		}
-	}
+	requirePrivateNativeFiles(t, private, "source.tfstate", "destination.tfstate", "restored.tfstate", "after.tfstate")
 	// A second real update advances the destination serial before the stale push.
 	destination.Environment = append(destination.Environment, "TF_VAR_fixture_value=synthetic-later-update")
 	nativeCommand(t, destination, "apply", "-auto-approve", "-input=false", "-no-color")
@@ -120,6 +109,32 @@ func TestNativeEncryptedTransferPreservesInstanceAndRefusesStalePush(t *testing.
 	}
 	if strings.Contains(err.Error(), syntheticMarker) {
 		t.Fatal("native failure exposed the synthetic state value")
+	}
+}
+
+func requireNativeSnapshotPermissions(t *testing.T, directory string) {
+	t.Helper()
+	encrypted, err := os.ReadFile(filepath.Join(directory, "snapshot.tfstate"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encrypted, []byte(syntheticMarker)) {
+		t.Fatal("the retained snapshot contains the synthetic plaintext marker")
+	}
+	requirePrivateNativeFiles(t, directory, "snapshot.tfstate", "main.tf", filepath.Join(".terraform", "terraform.tfstate"))
+	metadata, err := os.Stat(filepath.Join(directory, ".terraform"))
+	if err != nil || metadata.Mode().Perm() != 0o700 {
+		t.Fatal("retained snapshot backend metadata requires a private directory")
+	}
+}
+
+func requirePrivateNativeFiles(t *testing.T, directory string, names ...string) {
+	t.Helper()
+	for _, name := range names {
+		info, err := os.Stat(filepath.Join(directory, name))
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("private native file %s must have mode 0600: %v", name, err)
+		}
 	}
 }
 

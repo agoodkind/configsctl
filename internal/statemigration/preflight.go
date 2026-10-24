@@ -50,6 +50,11 @@ func (e Engine) Preflight(ctx context.Context, configurationDirectory, workspace
 	}
 	var failures []error
 	for index, spec := range e.Manifest.Workspaces {
+		target := planReportTarget{Directory: e.Directory, Name: fmt.Sprintf("preflight-%04d.json", index), Workspace: spec.Selector}
+		if err := target.Write(newPlanReport(spec.Selector)); err != nil {
+			failures = append(failures, err)
+			continue
+		}
 		endpoint, exists := e.Workspaces[spec.Selector]
 		if !exists {
 			failures = append(failures, fmt.Errorf("preflight workspace %s lacks its protected environment", spec.Selector))
@@ -58,7 +63,7 @@ func (e Engine) Preflight(ctx context.Context, configurationDirectory, workspace
 		workspace := Workspace{
 			Directory: filepath.Join(checkout, relative, spec.Selector), Environment: endpoint.Environment,
 		}
-		if err := preflightMigrationWorkspace(ctx, e.Directory, scratch, index, workspace); err != nil {
+		if err := preflightMigrationWorkspace(ctx, e.Directory, scratch, index, workspace, target); err != nil {
 			failures = append(failures, migrationPreflightFailure(ctx, "check prepared workspace "+spec.Selector, err))
 		}
 	}
@@ -86,7 +91,7 @@ func preflightWorkspaceDirectory(ctx context.Context, configurationDirectory, wo
 	return relative, nil
 }
 
-func preflightMigrationWorkspace(ctx context.Context, migrationDirectory, scratch string, index int, workspace Workspace) error {
+func preflightMigrationWorkspace(ctx context.Context, migrationDirectory, scratch string, index int, workspace Workspace, target planReportTarget) error {
 	state := filepath.Join(scratch, fmt.Sprintf("shadow-%04d.tfstate", index))
 	quoted := hclwrite.TokensForValue(cty.StringVal(state)).Bytes()
 	configuration := bytes.ReplaceAll(migrationOverrideTemplate, []byte(migrationOverridePlaceholder), quoted)
@@ -109,7 +114,7 @@ func preflightMigrationWorkspace(ctx context.Context, migrationDirectory, scratc
 	if err := Push(ctx, workspace, plaintext); err != nil {
 		return migrationPreflightFailure(ctx, "populate the verified private local backend", err)
 	}
-	if err := CheckPlan(ctx, workspace, scratch); err != nil {
+	if err := checkPlan(ctx, workspace, scratch, target); err != nil {
 		return migrationPreflightFailure(ctx, "verify prepared state against the reviewed configuration", err)
 	}
 	return nil
