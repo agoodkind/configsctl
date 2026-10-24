@@ -50,7 +50,7 @@ func (e Engine) shadowPlan(ctx context.Context, scratch, checkout, configuration
 	if err := populateShadowState(ctx, scratch, workspace, source, target.Name); err != nil {
 		return nil, err
 	}
-	return readIndependentPlan(ctx, workspace, scratch, target)
+	return readIndependentPlan(ctx, workspace, scratch, target, e.PlanOptions)
 }
 
 func populateShadowState(ctx context.Context, scratch string, workspace Workspace, source shadowPlanSource, name string) error {

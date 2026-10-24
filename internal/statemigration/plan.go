@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 )
 
 // CheckPlan refuses native plans that would change managed infrastructure.
@@ -19,7 +20,7 @@ func CheckPlan(ctx context.Context, workspace Workspace, directory string) (resu
 }
 
 func checkPlan(ctx context.Context, workspace Workspace, directory string, target planReportTarget) error {
-	contents, err := readIndependentPlan(ctx, workspace, directory, target)
+	contents, err := readIndependentPlan(ctx, workspace, directory, target, PlanOptions{Parallelism: 0})
 	if err != nil {
 		return err
 	}
@@ -31,7 +32,10 @@ func checkPlan(ctx context.Context, workspace Workspace, directory string, targe
 	return nil
 }
 
-func readIndependentPlan(ctx context.Context, workspace Workspace, directory string, target planReportTarget) (contents []byte, result error) {
+func readIndependentPlan(ctx context.Context, workspace Workspace, directory string, target planReportTarget, options PlanOptions) (contents []byte, result error) {
+	if err := options.validate(); err != nil {
+		return nil, err
+	}
 	slog.InfoContext(ctx, "migration.independent_plan.started", "workspace", workspace.Directory)
 	report := newPlanReport(target.Workspace)
 	defer func() {
@@ -57,7 +61,7 @@ func readIndependentPlan(ctx context.Context, workspace Workspace, directory str
 	if err := writePrivate(plan, nil); err != nil {
 		return nil, err
 	}
-	diagnostics, err := runNativePlan(ctx, workspace, scratch, plan)
+	diagnostics, err := runNativePlan(ctx, workspace, scratch, plan, options)
 	report.Diagnostics = diagnostics
 	if err != nil {
 		report.Status = "native_plan_failed"
@@ -75,12 +79,16 @@ func readIndependentPlan(ctx context.Context, workspace Workspace, directory str
 	return contents, nil
 }
 
-func runNativePlan(ctx context.Context, workspace Workspace, scratch, plan string) ([]planDiagnostic, error) {
+func runNativePlan(ctx context.Context, workspace Workspace, scratch, plan string, options PlanOptions) ([]planDiagnostic, error) {
 	events, err := createPrivate(filepath.Join(scratch, "events.jsonl"))
 	if err != nil {
 		return nil, err
 	}
-	runErr := native(ctx, workspace, events, "plan", "-json", "-input=false", "-detailed-exitcode", "-out="+plan)
+	arguments := []string{"plan", "-json", "-input=false", "-detailed-exitcode", "-out=" + plan}
+	if options.Parallelism > 0 {
+		arguments = append(arguments, "-parallelism="+strconv.Itoa(options.Parallelism))
+	}
+	runErr := native(ctx, workspace, events, arguments...)
 	if err := errors.Join(events.Close(), protectNativeFiles(scratch)); err != nil {
 		return nil, err
 	}

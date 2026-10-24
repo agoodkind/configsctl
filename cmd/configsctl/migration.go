@@ -12,7 +12,7 @@ import (
 	"goodkind.io/configsctl/internal/statemigration"
 )
 
-const migrationUsage = "usage: configsctl migrate-state <inspect|inspect-plan|prepare|preflight|execute|resume|verify|restore|verify-restored> <workspace-or-manifest> <private-directory>"
+const migrationUsage = "usage: configsctl migrate-state <inspect|inspect-plan|prepare|preflight|execute|resume|verify|restore|verify-restored> <workspace-or-manifest> <private-directory> [--parallelism=N]"
 
 type migrationAction string
 
@@ -29,32 +29,33 @@ const (
 )
 
 func runStateMigration(_ cmdEnv, args []string) error {
-	if len(args) != 3 {
-		return errors.New(migrationUsage)
+	parsed, err := parseMigrationArguments(args)
+	if err != nil {
+		return err
 	}
-	slog.Info("migration.command.started", "action", args[0])
+	slog.Info("migration.command.started", "action", parsed.Action)
 	passwordFile, err := vaultPassPath()
 	if err != nil {
 		return err
 	}
-	directory, err := migrationDirectory(args[2])
+	directory, err := migrationDirectory(parsed.Directory)
 	if err != nil {
 		return err
 	}
-	action := migrationAction(args[0])
+	action := parsed.Action
 	if action == migrationInspect || action == migrationInspectPlan {
 		loaded, err := loadSettings(settingsFile)
 		if err != nil {
 			return err
 		}
 		if action == migrationInspectPlan {
-			return inspectMigrationPlan(context.Background(), loaded, args[1], passwordFile, directory)
+			return inspectMigrationPlan(context.Background(), loaded, parsed.Subject, passwordFile, directory)
 		}
-		return inspectMigrationWorkspace(context.Background(), loaded, args[1], passwordFile, directory)
+		return inspectMigrationWorkspace(context.Background(), loaded, parsed.Subject, passwordFile, directory)
 	}
-	data, err := os.ReadFile(args[1])
+	data, err := os.ReadFile(parsed.Subject)
 	if err != nil {
-		slog.Error("migration.manifest.read_failed", "path", args[1], "err", fmt.Sprintf("%T", err))
+		slog.Error("migration.manifest.read_failed", "path", parsed.Subject, "err", fmt.Sprintf("%T", err))
 		return fmt.Errorf("read the reviewed migration manifest: %w", err)
 	}
 	manifest, err := statemigration.DecodeManifest(data)
@@ -62,14 +63,15 @@ func runStateMigration(_ cmdEnv, args []string) error {
 		return fmt.Errorf("validate the reviewed migration manifest: %w", err)
 	}
 	ctx := context.Background()
-	engine, workspacesDirectory, err := bindMigrationEngine(ctx, manifest, directory, passwordFile, migrationAction(args[0]))
+	engine, workspacesDirectory, err := bindMigrationEngine(ctx, manifest, directory, passwordFile, action)
 	if err != nil {
 		return err
 	}
-	if err := runMigrationAction(ctx, engine, workspacesDirectory, migrationAction(args[0])); err != nil {
+	engine.PlanOptions = parsed.PlanOptions
+	if err := runMigrationAction(ctx, engine, workspacesDirectory, action); err != nil {
 		return err
 	}
-	fmt.Printf("State migration %s completed. Private verification records: %s\n", args[0], directory)
+	fmt.Printf("State migration %s completed. Private verification records: %s\n", action, directory)
 	return nil
 }
 
@@ -132,6 +134,7 @@ func bindMigrationEngine(ctx context.Context, manifest statemigration.Manifest, 
 	engine := statemigration.Engine{
 		Manifest: manifest, CurrentCommit: revision, Directory: directory, PauseFile: pause,
 		Workspaces: workspaces, OriginalWorkspaces: originals, RestoreWorkspaces: nil,
+		PlanOptions: statemigration.PlanOptions{Parallelism: 0},
 	}
 	if action != migrationVerifyRestored {
 		return engine, workspacesDirectory, nil
