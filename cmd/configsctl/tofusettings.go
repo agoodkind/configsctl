@@ -33,6 +33,8 @@ type deploySettings struct {
 type tofuSettings struct {
 	// WorkspacesDir is a path relative to the repository root.
 	WorkspacesDir string `yaml:"workspaces_dir"`
+	// ProviderMirror resolves relative to the settings file directory.
+	ProviderMirror *string `yaml:"provider_mirror"`
 	// tofuSecretEnv exports a vault key <EnvKeyPrefix><NAME> as the
 	// environment variable <NAME>.
 	EnvKeyPrefix string                      `yaml:"env_key_prefix"`
@@ -62,6 +64,10 @@ func (t tofuSettings) guestHosts() map[string]string {
 }
 
 func loadSettings(path string) (settings, error) {
+	return loadSettingsWithMirror(path, nil)
+}
+
+func loadSettingsWithMirror(path string, mirror *string) (settings, error) {
 	var loaded settings
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -79,6 +85,16 @@ func loadSettings(path string) (settings, error) {
 	}
 	if loaded.Tofu.EnvKeyPrefix == "" {
 		return loaded, errors.New(path + ": tofu.env_key_prefix is empty")
+	}
+	if mirror != nil {
+		loaded.Tofu.ProviderMirror = mirror
+	}
+	if loaded.Tofu.ProviderMirror != nil {
+		mirror, err := resolveProviderMirror(path, *loaded.Tofu.ProviderMirror)
+		if err != nil {
+			return loaded, err
+		}
+		loaded.Tofu.ProviderMirror = &mirror
 	}
 	if err := validateLockTargets(path, loaded.Tofu.LockTargets); err != nil {
 		return loaded, err
