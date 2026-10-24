@@ -141,7 +141,7 @@ func (session *engineSession) close() {
 }
 
 func sameSessionEngine(actual, expected Engine) bool {
-	return actual.CurrentCommit == expected.CurrentCommit && actual.Directory == expected.Directory && actual.PauseFile == expected.PauseFile &&
+	return actual.CurrentCommit == expected.CurrentCommit && actual.Directory == expected.Directory && actual.PauseFile == expected.PauseFile && actual.PlanOptions == expected.PlanOptions &&
 		sameSessionManifest(actual.Manifest, expected.Manifest) && sameSessionWorkspaces(actual.Workspaces, expected.Workspaces) &&
 		sameSessionWorkspaces(actual.OriginalWorkspaces, expected.OriginalWorkspaces) && sameSessionWorkspaces(actual.RestoreWorkspaces, expected.RestoreWorkspaces)
 }

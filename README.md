@@ -72,6 +72,8 @@ Keep separate clean checkouts for the original configuration and the reviewed cu
 
 Use absolute private-directory paths outside both checkouts, with existing parent directories. Each inspection requires a new directory; the transfer requires a separate directory. Do not force-push state or reset Git history to recover.
 
+Migration commands that plan a workspace with a configured Dell credential adapter change the deployment account password. They generate one password per account, acquire an exclusive writer lease and the declared host locks, and activate that password for the command's provider checks. The password remains in memory. Supply required input values through `TF_VAR_` variables, protected vault bindings, or automatic variable files in the reviewed configuration commit.
+
 1. From the cutover checkout root, inspect each source and destination:
 
    ```sh
@@ -114,21 +116,23 @@ Use absolute private-directory paths outside both checkouts, with existing paren
    configsctl migrate-state preflight <manifest> <private-directory>
    ```
 
+   Add `--parallelism=N` with a positive integer to limit concurrent native plan operations. The option applies to every original and cutover plan in `preflight`, `transfer`, `execute`, `resume`, `verify`, and `verify-restored`. Omit it to use the OpenTofu default. Other migration commands reject the option.
+
    Preflight plans before snapshots against the original commit and after snapshots against the cutover commit in private local backends. Original plans use the original configuration's protected variables. Both configurations use the reviewed cutover provider mirror. Preflight compares complete managed changes after applying the reviewed address mapping. Existing pending actions may remain, but added, removed, or changed actions refuse the transfer. Unmapped creates and native validation errors also refuse the transfer. Output updates and data-source caches do not define managed changes.
 
    Preflight checks independent workspaces after a failure and retains private metadata reports with resource addresses, actions, changed attribute paths, and complete change hashes. Failed comparisons identify added, removed, or changed entries and their old and new hashes. Native error reports contain fixed diagnostic categories and configuration locations, with recognized HTTP statuses, numeric API error codes, or transport categories when available. Reports exclude values and diagnostic details. Preflight does not write deployment backends or create the durable pause.
 
-5. Execute the prepared transfer:
+5. Execute and verify the prepared transfer in one process:
 
    ```sh
-   configsctl migrate-state execute <manifest> <private-directory>
+   configsctl migrate-state transfer <manifest> <private-directory>
    ```
 
-   Both `execute` and `resume` repeat preflight automatically before writing deployment backends. Execution requires an exclusive controller writer lease. Active writers prevent execution, and a durable pause blocks new infrastructure mutations, service deployments, and credential refreshes until verification succeeds.
+   `transfer` retains one executor, exclusive controller writer lease, and generated credential set across execution and verification. It compares the original and prepared plans before writing backend states, then checks every final backend and its plan before releasing the pause. Active writers prevent execution. The durable pause blocks new infrastructure mutations, service deployments, and credential refreshes until verification succeeds.
 
-   After an interruption, retain the manifest and private directory and retry with `configsctl migrate-state resume <manifest> <private-directory>`.
+   After an interruption, retain the manifest and private directory. Run `transfer` again to resume execution and verification together, or use `resume` for execution followed by separate verification. Each command generates and activates a fresh deployment password for configured adapters.
 
-6. Verify every final backend and compare its native plan to the recorded original plan before releasing the pause:
+6. After separate `execute` or `resume` stages, verify every final backend and compare its native plan to the recorded original plan before releasing the pause:
 
    ```sh
    configsctl migrate-state verify <manifest> <private-directory>

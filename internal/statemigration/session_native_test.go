@@ -178,6 +178,7 @@ func TestMigrationSessionRefusesChangedImmutableOwnership(t *testing.T) {
 		{"manifest", func(engine *statemigration.Engine) { engine.Manifest.RestoreCommit = strings.Repeat("d", 40) }},
 		{"directory", func(engine *statemigration.Engine) { engine.Directory = filepath.Join(engine.Directory, "changed") }},
 		{"pause", func(engine *statemigration.Engine) { engine.PauseFile += ".changed" }},
+		{"parallelism", func(engine *statemigration.Engine) { engine.PlanOptions.Parallelism = 1 }},
 		{"workspace", func(engine *statemigration.Engine) {
 			workspace := engine.Workspaces["legacy"]
 			workspace.Directory = engine.OriginalWorkspaces["legacy"].Directory

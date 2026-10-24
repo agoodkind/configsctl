@@ -20,6 +20,7 @@ type Engine struct {
 	Workspaces         map[string]Workspace
 	OriginalWorkspaces map[string]Workspace
 	RestoreWorkspaces  map[string]Workspace
+	PlanOptions        PlanOptions
 	session            *engineSession
 }
 
@@ -441,6 +442,9 @@ func absentStateMetadata(state StateInfo) bool {
 }
 
 func (e Engine) acquire() (func(), error) {
+	if err := e.PlanOptions.validate(); err != nil {
+		return nil, err
+	}
 	if err := e.Manifest.Validate(); err != nil {
 		return nil, err
 	}

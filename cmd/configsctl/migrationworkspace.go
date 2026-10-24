@@ -62,7 +62,8 @@ func migrationWorkspaceAt(configurationDirectory string, loaded settings, select
 	if err != nil {
 		return statemigration.Workspace{}, "", err
 	}
-	return statemigration.Workspace{Directory: absolute, Environment: append(os.Environ(), environment...)}, identity, nil
+	childEnvironment := migrationWithoutRotators(append(os.Environ(), environment...), loaded.Tofu)
+	return statemigration.Workspace{Directory: absolute, Environment: childEnvironment}, identity, nil
 }
 
 func migrationWorkspaceBase(configurationDirectory, workspacesDirectory string) (string, error) {

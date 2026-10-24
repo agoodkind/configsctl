@@ -62,33 +62,10 @@ type Credential struct {
 	Password string
 }
 
-// Prepare verifies read access. Rotation requires the caller's host lock.
-func (c Config) Prepare(ctx context.Context, password string) (Credential, error) {
+// GenerateCredential creates a deployment credential in memory without network operations.
+func (c Config) GenerateCredential() (Credential, error) {
 	if err := c.Validate(); err != nil {
 		return Credential{}, err
-	}
-	if password == "" {
-		return Credential{}, errors.New("iDRAC rotator password is empty")
-	}
-	transport := &http.Transport{Proxy: http.ProxyFromEnvironment, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, ServerName: c.ServerName}}
-	if c.CAFile != "" {
-		certificate, err := os.ReadFile(c.CAFile)
-		if err != nil {
-			return Credential{}, fmt.Errorf("read iDRAC CA certificate: %w", err)
-		}
-		roots := x509.NewCertPool()
-		if !roots.AppendCertsFromPEM(certificate) {
-			return Credential{}, errors.New("iDRAC CA file does not contain a PEM certificate")
-		}
-		transport.TLSClientConfig.RootCAs = roots
-	}
-	defer transport.CloseIdleConnections()
-	client := &http.Client{Transport: transport, Timeout: 30 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
-	rotator := Credential{c.RotatorUser, password}
-	for _, path := range c.ReadPaths {
-		if err := c.request(ctx, client, rotator, http.MethodGet, path, nil); err != nil {
-			return Credential{}, err
-		}
 	}
 	random := make([]byte, 24)
 	if _, err := rand.Read(random); err != nil {
@@ -105,24 +82,76 @@ func (c Config) Prepare(ctx context.Context, password string) (Credential, error
 		candidate.WriteByte(alphabet[choice.Int64()])
 	}
 	candidate.WriteString(base64.RawURLEncoding.EncodeToString(random))
-	credential := Credential{c.Username, candidate.String()}
+	return Credential{c.Username, candidate.String()}, nil
+}
+
+// Prepare generates and activates a credential under the caller's host lock.
+func (c Config) Prepare(ctx context.Context, password string) (Credential, error) {
+	if err := c.Validate(); err != nil {
+		return Credential{}, err
+	}
+	if password == "" {
+		return Credential{}, errors.New("iDRAC rotator password is empty")
+	}
+	credential, err := c.GenerateCredential()
+	if err != nil {
+		return Credential{}, err
+	}
+	if err := c.PrepareCredential(ctx, password, credential); err != nil {
+		return Credential{}, err
+	}
+	return credential, nil
+}
+
+// PrepareCredential activates the supplied credential under the caller's host lock.
+func (c Config) PrepareCredential(ctx context.Context, rotatorPassword string, credential Credential) error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	if rotatorPassword == "" {
+		return errors.New("iDRAC rotator password is empty")
+	}
+	if credential.Username != c.Username || credential.Password == "" {
+		return errors.New("iDRAC deployment credential requires the configured username and a nonempty password")
+	}
+	transport := &http.Transport{Proxy: http.ProxyFromEnvironment, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, ServerName: c.ServerName}}
+	if c.CAFile != "" {
+		certificate, err := os.ReadFile(c.CAFile)
+		if err != nil {
+			slog.Error("dell.credential.ca_read_failed", "err", fmt.Sprintf("%T", err))
+			return fmt.Errorf("read iDRAC CA certificate: %w", err)
+		}
+		roots := x509.NewCertPool()
+		if !roots.AppendCertsFromPEM(certificate) {
+			return errors.New("iDRAC CA file does not contain a PEM certificate")
+		}
+		transport.TLSClientConfig.RootCAs = roots
+	}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: 30 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	rotator := Credential{c.RotatorUser, rotatorPassword}
+	for _, path := range c.ReadPaths {
+		if err := c.request(ctx, client, rotator, http.MethodGet, path, nil); err != nil {
+			return err
+		}
+	}
 	accountPath := "/redfish/v1/AccountService/Accounts/" + c.AccountID
 	if err := c.verifyAccount(ctx, client, rotator, accountPath); err != nil {
-		return Credential{}, err
+		return err
 	}
 	body, err := json.Marshal(map[string]string{"Password": credential.Password})
 	if err != nil {
-		return Credential{}, errors.New("encode Dell password request")
+		return errors.New("encode Dell password request")
 	}
 	if err := c.request(ctx, client, rotator, http.MethodPatch, accountPath, body); err != nil {
-		return Credential{}, err
+		return err
 	}
 	for _, path := range c.ReadPaths {
 		if err := c.request(ctx, client, credential, http.MethodGet, path, nil); err != nil {
-			return Credential{}, err
+			return err
 		}
 	}
-	return credential, nil
+	return nil
 }
 
 func (c Config) verifyAccount(ctx context.Context, client *http.Client, credential Credential, path string) error {
