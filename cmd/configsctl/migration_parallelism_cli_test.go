@@ -145,6 +145,7 @@ func logMigrationParallelismReports(t *testing.T, migration cliMigration) {
 }
 
 func TestMigrationCLIParallelismControlsOriginalAndCutoverNativePlans(t *testing.T) {
+	t.Parallel()
 	server, requests := newMigrationPlanService(t)
 	migration := newCLIMigration(t)
 	configureMigrationPlanReads(t, &migration)
@@ -173,6 +174,7 @@ func TestMigrationCLIParallelismControlsOriginalAndCutoverNativePlans(t *testing
 }
 
 func TestMigrationCLIParallelismControlsRestoredNativePlans(t *testing.T) {
+	t.Parallel()
 	server, requests := newMigrationPlanService(t)
 	migration := newCLIMigration(t)
 	configureMigrationPlanReads(t, &migration)
@@ -193,6 +195,7 @@ func TestMigrationCLIParallelismControlsRestoredNativePlans(t *testing.T) {
 }
 
 func TestMigrationCLIParallelismRejectsInvalidOptionsBeforeCommands(t *testing.T) {
+	t.Parallel()
 	for _, options := range [][]string{
 		{"--parallelism"},
 		{"--parallelism="},

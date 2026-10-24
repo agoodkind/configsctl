@@ -13,6 +13,7 @@ import (
 )
 
 func TestMigrationCLITransferCompletesProtectedNativeStages(t *testing.T) {
+	t.Parallel()
 	migration := newCLIMigration(t)
 	requireSuccess(t, migration.run(t, "prepare"), "migrate-state", "prepare")
 	args := []string{"migrate-state", "transfer", migration.file, migration.directory, "--parallelism=1"}
@@ -68,6 +69,7 @@ func TestMigrationCLITransferRefusesUnrelatedPauseBeforeNativeOperations(t *test
 }
 
 func TestMigrationCLIVerifyRefusesMissingPauseBeforeCredentialActivation(t *testing.T) {
+	t.Parallel()
 	migration := newCLIMigration(t)
 	configureMigrationCredentialRefusal(t, &migration, false)
 	original := originalMigrationTree(migration)
@@ -114,6 +116,7 @@ func TestMigrationCLIVerifyRefusesMissingPauseBeforeCredentialActivation(t *test
 }
 
 func TestMigrationCLITransferRefusesUnsupportedJournalPhaseBeforeNativeOperations(t *testing.T) {
+	t.Parallel()
 	migration := newCLIMigration(t)
 	requireSuccess(t, migration.run(t, "prepare"), "migrate-state", "prepare")
 	path := filepath.Join(migration.directory, "journal.json")
@@ -141,6 +144,7 @@ func TestMigrationCLITransferRefusesUnsupportedJournalPhaseBeforeNativeOperation
 }
 
 func TestMigrationCLITransferRejectsInvalidParallelismBeforeCommands(t *testing.T) {
+	t.Parallel()
 	tree := newConfigsTree(t)
 	result := runConfigsctl(t, tree, "migrate-state", "transfer", "absent-manifest", filepath.Join(t.TempDir(), "private"), "--parallelism=0")
 	if result.exitCode == 0 || !strings.Contains(result.stderr, "positive decimal integer") || strings.Contains(result.stderr, "migration.command.started") {

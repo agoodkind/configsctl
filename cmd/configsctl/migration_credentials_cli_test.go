@@ -38,6 +38,7 @@ func configureMigrationCredentialRefusal(t *testing.T, migration *cliMigration, 
 }
 
 func TestMigrationCLICredentialsRefuseMissingRequiredEphemeralInputBeforeActivation(t *testing.T) {
+	t.Parallel()
 	migration := newCLIMigration(t)
 	configureMigrationCredentialRefusal(t, &migration, false)
 	result := migration.run(t, "transfer")
@@ -54,6 +55,7 @@ func TestMigrationCLICredentialsRefuseMissingRequiredEphemeralInputBeforeActivat
 }
 
 func TestMigrationCLICredentialsRefuseMismatchedAccountsBeforeActivation(t *testing.T) {
+	t.Parallel()
 	migration := newCLIMigration(t)
 	configureMigrationCredentialRefusal(t, &migration, true)
 	result := migration.run(t, "transfer")
@@ -67,6 +69,7 @@ func TestMigrationCLICredentialsRefuseMismatchedAccountsBeforeActivation(t *test
 }
 
 func TestMigrationCLICredentialsRefuseUnsafeLoggingBeforeActivation(t *testing.T) {
+	t.Parallel()
 	migration := newCLIMigration(t)
 	configureMigrationCredentialRefusal(t, &migration, false)
 	result := runTofuEnvironment(t, migration.tree, "", []string{"TF_LOG=TRACE"}, "migrate-state", "transfer", migration.file, migration.directory)
