@@ -185,3 +185,34 @@ func TestTofuMigrationPauseRejectsCredentialPlanBeforeAuthentication(t *testing.
 		}
 	}
 }
+
+func TestTofuMigrationPauseRejectsTaintAndUntaint(t *testing.T) {
+	for _, operation := range []string{"taint", "untaint"} {
+		t.Run(operation, func(t *testing.T) {
+			tree := independentUnlockedTree(t)
+			root := filepath.Join(tree.workspaces, "suburban", "tack")
+			writeFixtureFile(t, filepath.Join(root, "main.tf"), workspaceFixture(t, "environment-args.tf"))
+			apply := tofuArgs("suburban/tack", "apply", "-auto-approve", "-input=false")
+			requireSuccess(t, runConfigsctl(t, tree, apply...), apply...)
+			if operation == "untaint" {
+				taint := tofuArgs("suburban/tack", "taint", "terraform_data.argument")
+				requireSuccess(t, runConfigsctl(t, tree, taint...), taint...)
+			}
+			state := filepath.Join(root, "tack.tfstate")
+			before, err := os.ReadFile(state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeMigrationPause(t, tree)
+			args := tofuArgs("suburban/tack", operation, "terraform_data.argument")
+			refused := runConfigsctl(t, tree, args...)
+			if refused.exitCode == 0 || !strings.Contains(refused.stderr, "writes remain paused") || strings.Contains(refused.stderr, "tofu.command_started") {
+				t.Fatalf("the native state marker command bypassed the migration pause: %s", refused.stderr)
+			}
+			after, err := os.ReadFile(state)
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatal("the paused state marker command changed backend bytes")
+			}
+		})
+	}
+}

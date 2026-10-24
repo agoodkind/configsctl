@@ -40,7 +40,7 @@ func leaseTofuMigration(args []string, usesCredential bool) (func(), error) {
 
 func tofuWritesState(args []string) bool {
 	command := string(tofuSubcommand(args))
-	if slices.Contains([]string{"apply", "destroy", "refresh", "import", "test"}, command) {
+	if slices.Contains([]string{"apply", "destroy", "refresh", "import", "test", "taint", "untaint"}, command) {
 		return true
 	}
 	if command == "init" {
