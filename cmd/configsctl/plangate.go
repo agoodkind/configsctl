@@ -45,6 +45,8 @@ func (e *planGateError) Error() string {
 type gatedGuest struct {
 	host        string
 	serviceName string
+	workspace   string
+	module      string
 }
 
 type guestPlanRequest struct {
@@ -58,8 +60,8 @@ type guestPlanRequest struct {
 // The function returns a planGateError for failed plans or pending changes.
 func gateGuestPlans(ctx context.Context, targets deployTargets, output io.Writer) error {
 	tofu := targets.settings.Tofu
-	if tofu.GuestModule == "" {
-		slog.Info("deploy.gate.disabled", "reason", "tofu.guest_module is not set")
+	if len(tofu.guestPlanModules()) == 0 {
+		slog.Info("deploy.gate.disabled", "reason", "guest deployment workspaces are not configured")
 		return nil
 	}
 	guests, err := gatedGuests(targets)
@@ -73,22 +75,17 @@ func gateGuestPlans(ctx context.Context, targets deployTargets, output io.Writer
 	if err != nil {
 		return err
 	}
-	workspaceDir := tofu.guestWorkspaceDir()
-	secretEnv, err := tofuSecretEnv(tofu, workspaceDir, defaultVaultFile, passwordFile)
-	if err != nil {
-		return err
-	}
 	if output == nil {
 		output = os.Stdout
 	}
-	request := guestPlanRequest{
-		workspaceDir: workspaceDir,
-		env:          append(os.Environ(), secretEnv...),
-		module:       tofu.GuestModule,
-		output:       output,
-	}
 	var rejections []error
 	for _, guest := range guests {
+		request, err := guestWorkspaceRequest(tofu, guest, passwordFile)
+		if err != nil {
+			return err
+		}
+		request.env = append(os.Environ(), request.env...)
+		request.output = output
 		if err := gateGuestPlan(ctx, request, guest); err != nil {
 			slog.Error("deploy.gate.rejected", "guest", guest.serviceName, "host", guest.host, "err", err)
 			rejections = append(rejections, err)
@@ -101,6 +98,10 @@ func gateGuestPlans(ctx context.Context, targets deployTargets, output io.Writer
 }
 
 func gatedGuests(targets deployTargets) ([]gatedGuest, error) {
+	owners, err := targets.settings.Tofu.guestPlanOwners()
+	if err != nil {
+		return nil, err
+	}
 	enrolledHosts := slices.Collect(maps.Values(targets.settings.Tofu.guestHosts()))
 	var guests []gatedGuest
 	var skipped []string
@@ -109,12 +110,16 @@ func gatedGuests(targets deployTargets) ([]gatedGuest, error) {
 			skipped = append(skipped, host)
 			continue
 		}
+		owner, found := owners[host]
+		if !found {
+			return nil, fmt.Errorf("enrolled host %s does not have a deployment workspace in tofu.guest_modules", host)
+		}
 		serviceName, err := targets.inventory.HostString(host, serviceNameVariable)
 		if err != nil {
 			slog.Error("deploy.gate.service_name_failed", "host", host, "err", err)
 			return nil, fmt.Errorf("read the guest name of %s for the plan gate: %w", host, err)
 		}
-		guests = append(guests, gatedGuest{host: host, serviceName: serviceName})
+		guests = append(guests, gatedGuest{host: host, serviceName: serviceName, workspace: owner.workspace, module: owner.module})
 	}
 	if len(skipped) > 0 {
 		slog.Info("deploy.gate.hosts_skipped", "hosts", skipped, "reason", gateSkipReasonUnmanaged)
@@ -147,6 +152,9 @@ func gateGuestPlan(ctx context.Context, request guestPlanRequest, guest gatedGue
 	cmd.Stderr = io.MultiWriter(request.output, &stderr)
 	runErr := procgroup.RunGroup(cmd)
 	if runErr == nil {
+		if err := requirePlannedGuest(ctx, request, planPath, target); err != nil {
+			return err
+		}
 		slog.Info("deploy.gate.passed", "guest", guest.serviceName, "host", guest.host)
 		return nil
 	}

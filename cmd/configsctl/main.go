@@ -285,7 +285,8 @@ func runDeployWith(env cmdEnv, args []string, deploy deployRunner) error {
 		return gateErr
 	}
 	if deployErr != nil {
-		return fmt.Errorf("deploy failed; the play output is in %s", log.Path())
+		slog.Error("deploy.command_failed", "playbook", opts.Playbook, "err", deployErr)
+		return fmt.Errorf("deploy failed; the play output is in %s: %w", log.Path(), deployErr)
 	}
 	return nil
 }

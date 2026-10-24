@@ -1,0 +1,13 @@
+tofu:
+  workspaces_dir: workspaces
+  env_key_prefix: fixture_env_
+  guest_modules:
+    suburban/tack: module.base
+    vault/tack: module.base
+  lock_targets:
+    workspaces/suburban/tack:
+      guest_hosts:
+        site/101: guest-alpha
+    workspaces/vault/tack:
+      guest_hosts:
+        site/101: guest-beta

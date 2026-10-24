@@ -1,0 +1,5 @@
+all:
+  hosts:
+    guest-alpha:
+      ansible_connection: local
+      service_name: unknown_guest
