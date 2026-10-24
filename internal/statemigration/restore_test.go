@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zclconf/go-cty/cty"
+
 	"goodkind.io/configsctl/internal/migrationpause"
 	"goodkind.io/configsctl/internal/statemigration"
 )
@@ -22,7 +24,6 @@ import (
 func restorationFixture(t *testing.T) (statemigration.Engine, statemigration.StateInfo) {
 	t.Helper()
 	engine, before := migrationFixture(t)
-	engine.Manifest.RestoreCommit = strings.Repeat("b", 40)
 	if err := engine.Prepare(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -382,8 +383,7 @@ func TestVerifyRestoredRefusesAChangedRecordedCandidate(t *testing.T) {
 
 func TestRestoreStagesCollidingOriginalAddresses(t *testing.T) {
 	engine, _ := migrationFixture(t)
-	engine.Manifest.RestoreCommit = strings.Repeat("b", 40)
-	source := engine.Workspaces["legacy"]
+	source := engine.OriginalWorkspaces["legacy"]
 	extra, err := os.ReadFile(filepath.Join("testdata", "restore-extra.tf"))
 	if err != nil {
 		t.Fatal(err)
@@ -392,6 +392,7 @@ func TestRestoreStagesCollidingOriginalAddresses(t *testing.T) {
 		t.Fatal(err)
 	}
 	nativeCommand(t, source, "apply", "-auto-approve", "-input=false", "-no-color")
+	engine.Workspaces["legacy"] = source
 	before := restoredState(t, engine, "legacy")
 	engine.Manifest.Workspaces = engine.Manifest.Workspaces[:1]
 	engine.Manifest.Workspaces[0].Before = before
@@ -399,6 +400,7 @@ func TestRestoreStagesCollidingOriginalAddresses(t *testing.T) {
 		{Source: "legacy", Address: "terraform_data.original", Destination: "legacy", NewAddress: "terraform_data.other"},
 		{Source: "legacy", Address: "terraform_data.other", Destination: "legacy", NewAddress: "terraform_data.original"},
 	}
+	finalizeMigrationFixture(t, &engine)
 	if err := engine.Prepare(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -421,20 +423,23 @@ func TestRestoreStagesCollidingOriginalAddresses(t *testing.T) {
 
 func TestRestorePreservesIdenticalOriginalDataRecords(t *testing.T) {
 	engine, _ := migrationFixture(t)
-	engine.Manifest.RestoreCommit = strings.Repeat("b", 40)
 	producer := workspaceFixture(t, "source")
 	nativeCommand(t, producer, "apply", "-auto-approve", "-input=false", "-no-color")
-	source := engine.Workspaces["legacy"]
+	source := engine.OriginalWorkspaces["legacy"]
 	source.Environment = append(slices.Clone(source.Environment), "TF_VAR_producer_state="+filepath.Join(producer.Directory, "runtime.tfstate"))
-	configuration, err := os.ReadFile(filepath.Join("testdata", "restore-identical.tf"))
-	if err != nil {
-		t.Fatal(err)
+	configuration := readFixtureHCL(t, filepath.Join("testdata", "restore-identical.tf"))
+	terraform := configuration.Body().FirstMatchingBlock("terraform", nil)
+	if terraform == nil {
+		t.Fatal("the identical-data fixture lacks its terraform block")
 	}
-	if err := os.WriteFile(filepath.Join(source.Directory, "main.tf"), configuration, 0o600); err != nil {
-		t.Fatal(err)
+	backend := terraform.Body().FirstMatchingBlock("backend", []string{"local"})
+	if backend == nil {
+		t.Fatal("the identical-data fixture lacks its local backend")
 	}
+	backend.Body().SetAttributeValue("path", cty.StringVal(fixtureBackendPath(t, source)))
+	writeFixtureHCL(t, filepath.Join(source.Directory, "main.tf"), configuration)
 	engine.Workspaces["legacy"] = source
-	engine.RestoreWorkspaces["legacy"] = source
+	engine.OriginalWorkspaces["legacy"] = source
 	nativeCommand(t, source, "apply", "-auto-approve", "-input=false", "-no-color")
 	before := restoredState(t, engine, "legacy")
 	first := "data.terraform_remote_state.first"
@@ -449,6 +454,7 @@ func TestRestorePreservesIdenticalOriginalDataRecords(t *testing.T) {
 		{Source: "legacy", Address: first, Destination: "legacy", NewAddress: second},
 		{Source: "legacy", Address: second, Destination: "legacy", NewAddress: first},
 	}
+	finalizeMigrationFixture(t, &engine)
 	if err := engine.Prepare(t.Context()); err != nil {
 		t.Fatal(err)
 	}

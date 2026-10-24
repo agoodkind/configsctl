@@ -3,6 +3,7 @@
 package main_test
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -49,7 +50,7 @@ func newSeparateCheckoutMigration(t *testing.T) (cliMigration, configsTree) {
 	source := inspectCLIWorkspace(t, cutover, "legacy", filepath.Join(private, "source-inspection"))
 	destination := inspectCLIWorkspace(t, cutover, "application", filepath.Join(private, "destination-inspection"))
 	manifest := statemigration.Manifest{
-		Version: 1, Commit: commit, RestoreCommit: recovery, ConfigurationDirectory: cutover.root,
+		Version: 1, Commit: commit, RestoreCommit: recovery, ConfigurationDirectory: cutover.root, RestoreConfigurationDirectory: original.root,
 		Workspaces: []statemigration.WorkspaceSpec{source, destination},
 		Moves: []statemigration.Transfer{{
 			Source: "legacy", Address: legacyInstance,
@@ -159,6 +160,9 @@ func TestMigrationCLIRestoresUsingRetainedCutoverAndOriginalCheckout(t *testing.
 		t.Fatalf("forward verification accepted an inverse terminal checkpoint: %s", refused.stderr)
 	}
 	requireMigrationPaused(t, original, "legacy")
+	callerRoot := filepath.Join(t.TempDir(), "original-caller")
+	fixtureGit(t, original, "-c", "core.hooksPath=/dev/null", "clone", "--no-hardlinks", "--", original.root, callerRoot)
+	caller.tree = configsTree{root: callerRoot, home: original.home, workspaces: filepath.Join(callerRoot, "workspaces")}
 	requireSuccess(t, caller.run(t, "verify-restored"), "migrate-state", "verify-restored")
 	apply := tofuArgs("legacy", "apply", "-auto-approve", "-input=false")
 	requireSuccess(t, runConfigsctl(t, original, apply...), apply...)
@@ -217,5 +221,60 @@ func TestMigrationCLIRequiresAnExplicitConfigurationDirectory(t *testing.T) {
 			t.Fatalf("preparation accepted a missing or relative configuration directory: %s", refused.stderr)
 		}
 		requireNoFile(t, filepath.Join(migration.directory, "journal.json"))
+	}
+}
+
+func TestMigrationCLIRequiresAnExplicitRestoreConfigurationDirectory(t *testing.T) {
+	migration := newCLIMigration(t)
+	before := readPreflightSource(t, migration)
+	for _, directory := range []string{"", ".", "relative/checkout"} {
+		migration.manifest.RestoreConfigurationDirectory = directory
+		migration.writeManifest(t)
+		refused := migration.run(t, "prepare")
+		if refused.exitCode == 0 || !strings.Contains(refused.stderr, "requires restore_configuration_directory as a clean absolute path") {
+			t.Fatalf("preparation accepted a missing or relative original directory: %s", refused.stderr)
+		}
+		requireNoFile(t, filepath.Join(migration.directory, "journal.json"))
+	}
+	requireUnpreparedMigrationUnchanged(t, migration, before)
+}
+
+func TestMigrationCLIRefusesAnOriginalBackendIdentityChange(t *testing.T) {
+	migration := newCLIMigration(t)
+	original := originalMigrationTree(migration)
+	path := filepath.Join(original.workspaces, "legacy", "backend.tf")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFixtureFile(t, path, strings.ReplaceAll(string(data), "runtime.tfstate", "unexpected.tfstate"))
+	migration.manifest.RestoreCommit = commitMigrationFixture(t, original, "workspaces/legacy/backend.tf")
+	migration.writeManifest(t)
+	before := readPreflightSource(t, migration)
+	refused := migration.run(t, "prepare")
+	if refused.exitCode == 0 || !strings.Contains(refused.stderr, "original workspace legacy does not match its reviewed backend identity") {
+		t.Fatalf("preparation trusted an unrelated original backend: %s", refused.stderr)
+	}
+	requireNoFile(t, filepath.Join(migration.directory, "journal.json"))
+	requireUnpreparedMigrationUnchanged(t, migration, before)
+}
+
+func requireUnpreparedMigrationUnchanged(t *testing.T, migration cliMigration, before []byte) {
+	t.Helper()
+	if !bytes.Equal(before, readPreflightSource(t, migration)) {
+		t.Fatal("the refused preparation changed the original backend bytes")
+	}
+	requireNoFile(t, migration.directory)
+	requireNoFile(t, filepath.Join(migration.tree.workspaces, "application", "runtime.tfstate"))
+	if err := filepath.WalkDir(migration.tree.home, func(_ string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Name() == "pause.json" {
+			t.Fatal("the refused preparation created the infrastructure pause")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -155,5 +156,71 @@ func assertPrivatePlanMetadataOnly(t *testing.T, directory string) {
 	entries, err := os.ReadDir(directory)
 	if err != nil || len(entries) != 1 || entries[0].Name() != "reports" {
 		t.Fatal("CheckPlan retained raw plan or JSON UI scratch files")
+	}
+}
+
+func TestCheckPlanRefusesNativeNoopImportsAndMoves(t *testing.T) {
+	for _, fixture := range []string{"plan_pending_import.tf", "plan_pending_move.tf"} {
+		t.Run(fixture, func(t *testing.T) {
+			workspace := workspaceFixture(t, "source")
+			nativeCommand(t, workspace, "apply", "-auto-approve", "-input=false")
+			backend := filepath.Join(workspace.Directory, "runtime.tfstate")
+			before, err := os.ReadFile(backend)
+			if err != nil {
+				t.Fatal(err)
+			}
+			configureNativeNoopPlan(t, workspace, fixture)
+			private := privateFixtureDir(t)
+			if err := statemigration.CheckPlan(t.Context(), workspace, private); err == nil || !strings.Contains(err.Error(), "would change managed resource terraform_data.pending") {
+				t.Fatalf("CheckPlan accepted a native state-only managed operation: %v", err)
+			}
+			files, err := filepath.Glob(filepath.Join(private, "reports", "verification-*.json"))
+			if err != nil || len(files) != 1 {
+				t.Fatal("CheckPlan omitted its real native change report")
+			}
+			data, err := os.ReadFile(files[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var report struct {
+				Changes []struct {
+					Actions []string `json:"actions"`
+				} `json:"managed_changes"`
+			}
+			if json.Unmarshal(data, &report) != nil || len(report.Changes) != 1 || !slices.Equal(report.Changes[0].Actions, []string{"no-op"}) {
+				t.Fatal("the real native fixture did not produce a pending no-op import or move")
+			}
+			if bytes.Contains(data, []byte("synthetic-private-import-identity-never-print")) {
+				t.Fatal("the native report exposed its private import identity")
+			}
+			after, err := os.ReadFile(backend)
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatal("the refused native no-op operation changed the actual backend")
+			}
+			assertPrivatePlanMetadataOnly(t, private)
+		})
+	}
+}
+
+func configureNativeNoopPlan(t *testing.T, workspace statemigration.Workspace, fixture string) {
+	t.Helper()
+	extra, err := os.ReadFile(filepath.Join("testdata", fixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace.Directory, "extra.tf"), extra, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if fixture != "plan_pending_move.tf" {
+		return
+	}
+	main := filepath.Join(workspace.Directory, "main.tf")
+	data, err := os.ReadFile(main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := strings.Replace(string(data), `resource "terraform_data" "original"`, `resource "terraform_data" "pending"`, 1)
+	if err := os.WriteFile(main, []byte(updated), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

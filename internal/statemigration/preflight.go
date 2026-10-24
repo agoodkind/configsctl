@@ -1,7 +1,6 @@
 package statemigration
 
 import (
-	"bytes"
 	"context"
 	_ "embed"
 	"encoding/json"
@@ -10,9 +9,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-
-	"github.com/hashicorp/hcl/v2/hclwrite"
-	"github.com/zclconf/go-cty/cty"
 )
 
 //go:embed configsctl_migration_override.tf
@@ -20,7 +16,7 @@ var migrationOverrideTemplate []byte
 
 const migrationOverridePlaceholder = "CONFIGSCTL_MIGRATION_STATE_PATH"
 
-// Preflight checks every prepared state against a private copy of the reviewed commit.
+// Preflight compares original and prepared native plans in private reviewed checkouts.
 func (e Engine) Preflight(ctx context.Context, configurationDirectory, workspacesDirectory string) (result error) {
 	slog.InfoContext(ctx, "migration.preflight.started", "commit", e.Manifest.Commit)
 	if e.CurrentCommit != e.Manifest.Commit {
@@ -31,46 +27,17 @@ func (e Engine) Preflight(ctx context.Context, configurationDirectory, workspace
 		return err
 	}
 	defer release()
-	scratch, err := os.MkdirTemp(e.Directory, "preflight-")
-	if err != nil {
-		return migrationPreflightFailure(ctx, "create the private preflight directory", err)
+	if configurationDirectory != e.Manifest.ConfigurationDirectory {
+		return errors.New("preflight requires the manifest's retained cutover configuration checkout")
 	}
-	defer func() {
-		if err := os.RemoveAll(scratch); err != nil {
-			result = errors.Join(result, migrationPreflightFailure(ctx, "remove private preflight files", err))
-		}
-	}()
-	checkout := filepath.Join(scratch, "configuration")
-	if err := archiveMigrationCommit(ctx, configurationDirectory, e.Manifest.Commit, checkout); err != nil {
+	if _, err := preflightWorkspaceDirectory(ctx, configurationDirectory, workspacesDirectory); err != nil {
 		return err
 	}
-	relative, err := preflightWorkspaceDirectory(ctx, configurationDirectory, workspacesDirectory)
+	current, err := e.loadJournal()
 	if err != nil {
 		return err
 	}
-	var failures []error
-	for index, spec := range e.Manifest.Workspaces {
-		target := planReportTarget{Directory: e.Directory, Name: fmt.Sprintf("preflight-%04d.json", index), Workspace: spec.Selector}
-		if err := target.Write(newPlanReport(spec.Selector)); err != nil {
-			failures = append(failures, err)
-			continue
-		}
-		endpoint, exists := e.Workspaces[spec.Selector]
-		if !exists {
-			failures = append(failures, fmt.Errorf("preflight workspace %s lacks its protected environment", spec.Selector))
-			continue
-		}
-		workspace := Workspace{
-			Directory: filepath.Join(checkout, relative, spec.Selector), Environment: endpoint.Environment,
-		}
-		if err := preflightMigrationWorkspace(ctx, e.Directory, scratch, index, workspace, target); err != nil {
-			failures = append(failures, migrationPreflightFailure(ctx, "check prepared workspace "+spec.Selector, err))
-		}
-	}
-	if len(failures) != 0 {
-		slog.ErrorContext(ctx, "migration.preflight.workspace_checks_failed", "workspaces", len(failures), "err", fmt.Sprintf("%T", failures[0]))
-	}
-	return errors.Join(failures...)
+	return e.establishBaseline(ctx, &current)
 }
 
 func preflightWorkspaceDirectory(ctx context.Context, configurationDirectory, workspacesDirectory string) (string, error) {
@@ -89,35 +56,6 @@ func preflightWorkspaceDirectory(ctx context.Context, configurationDirectory, wo
 		return "", errors.New("preflight workspaces must remain inside the reviewed configuration checkout")
 	}
 	return relative, nil
-}
-
-func preflightMigrationWorkspace(ctx context.Context, migrationDirectory, scratch string, index int, workspace Workspace, target planReportTarget) error {
-	state := filepath.Join(scratch, fmt.Sprintf("shadow-%04d.tfstate", index))
-	quoted := hclwrite.TokensForValue(cty.StringVal(state)).Bytes()
-	configuration := bytes.ReplaceAll(migrationOverrideTemplate, []byte(migrationOverridePlaceholder), quoted)
-	if err := writePreflightOverride(ctx, workspace.Directory, configuration); err != nil {
-		return err
-	}
-	if err := Initialize(ctx, workspace); err != nil {
-		return migrationPreflightFailure(ctx, "initialize the private local backend using the configured provider installation", err)
-	}
-	if err := requirePreflightLocalBackend(ctx, workspace.Directory, state); err != nil {
-		return err
-	}
-	plaintext := filepath.Join(scratch, fmt.Sprintf("prepared-%04d.tfstate", index))
-	snapshot := Workspace{
-		Directory: filepath.Join(migrationDirectory, fmt.Sprintf("after-%04d", index)), Environment: workspace.Environment,
-	}
-	if _, err := Pull(ctx, snapshot, plaintext); err != nil {
-		return migrationPreflightFailure(ctx, "read the retained encrypted prepared snapshot", err)
-	}
-	if err := Push(ctx, workspace, plaintext); err != nil {
-		return migrationPreflightFailure(ctx, "populate the verified private local backend", err)
-	}
-	if err := checkPlan(ctx, workspace, scratch, target); err != nil {
-		return migrationPreflightFailure(ctx, "verify prepared state against the reviewed configuration", err)
-	}
-	return nil
 }
 
 func writePreflightOverride(ctx context.Context, directory string, data []byte) error {

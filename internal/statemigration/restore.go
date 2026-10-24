@@ -372,7 +372,7 @@ func (e Engine) confirmRestoration(selector string, actual StateInfo, current *j
 	return e.saveJournal(*current)
 }
 
-// VerifyRestored requires the original configuration and zero-change source plans.
+// VerifyRestored requires the original configuration and matching original plans.
 // It releases the pause only after all restored records and plans verify.
 func (e Engine) VerifyRestored(ctx context.Context) error {
 	release, err := e.acquire()
@@ -407,6 +407,9 @@ func (e Engine) VerifyRestored(ctx context.Context) error {
 	if err := e.verifyRestoredRoots(ctx); err != nil {
 		return err
 	}
+	if err := e.verifyPlanBaseline(ctx, &current, true); err != nil {
+		return err
+	}
 	if err := e.checkRestoration(ctx, current, true); err != nil {
 		return err
 	}
@@ -436,10 +439,6 @@ func (e Engine) verifyRestoredRoots(ctx context.Context) error {
 		workspace, exists := e.RestoreWorkspaces[spec.Selector]
 		if !exists || workspace.Directory == "" {
 			return fmt.Errorf("restored workspace %s lacks its reviewed original configuration for plan verification", spec.Selector)
-		}
-		if err := CheckPlan(ctx, workspace, e.Directory); err != nil {
-			slog.Error("migration.restore.original_plan_failed", "workspace", spec.Selector, "err", err)
-			return fmt.Errorf("restored workspace %s must pass its original plan before releasing the pause: %w", spec.Selector, err)
 		}
 	}
 	return nil

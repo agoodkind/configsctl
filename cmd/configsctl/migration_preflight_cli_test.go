@@ -64,7 +64,7 @@ func TestMigrationPreflightRefusesManagedChangesBeforeBackendWrites(t *testing.T
 			requireSuccess(t, migration.run(t, "prepare"), "migrate-state", "prepare")
 			before := readPreflightSource(t, migration)
 			refused := migration.run(t, operation)
-			if refused.exitCode == 0 || !strings.Contains(refused.stderr, "would change managed resource terraform_data.unplanned") {
+			if refused.exitCode == 0 || !strings.Contains(refused.stderr, "unmapped managed instance terraform_data.unplanned in application") {
 				t.Fatalf("preflight accepted an unplanned managed change: %s", refused.stderr)
 			}
 			requirePreflightUnchanged(t, migration, before)
@@ -86,7 +86,7 @@ func TestMigrationPreflightReportsAllIndependentWorkspaceFailures(t *testing.T) 
 		{"legacy", "terraform_data.unplanned_source"},
 		{"application", "terraform_data.unplanned"},
 	} {
-		fragment := "check prepared workspace " + failure.selector + ": verify prepared state against the reviewed configuration: the independent plan would change managed resource " + failure.address
+		fragment := "unmapped managed instance " + failure.address + " in " + failure.selector
 		if !strings.Contains(refused.stderr, fragment) {
 			t.Fatalf("preflight omitted the independent failure for %s: %s", failure.selector, refused.stderr)
 		}

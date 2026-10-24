@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -93,7 +94,11 @@ func migrationCLIStateIdentity(t *testing.T, tree configsTree, selector, address
 
 func newCLIMigration(t *testing.T) cliMigration {
 	t.Helper()
-	tree := newConfigsTree(t)
+	return newCLIMigrationWithTree(t, newConfigsTree(t))
+}
+
+func newCLIMigrationWithTree(t *testing.T, tree configsTree) cliMigration {
+	t.Helper()
 	values := "vault_tofu_state_passphrase: " + migrationFixtureKey + "\nvault_migration_fixture: " + migrationFixtureValue + "\n"
 	seed := runMutationInput(t, tree, values, "set-secrets")
 	requireSuccess(t, seed, "set-secrets")
@@ -101,7 +106,8 @@ func newCLIMigration(t *testing.T) cliMigration {
 	writeFixtureFile(t, filepath.Join(tree.root, settingsName), migrationFixtureFile(t, "settings.yml"))
 	writeFixtureFile(t, filepath.Join(tree.root, ".gitignore"), migrationFixtureFile(t, "ignore.txt"))
 	for _, selector := range []string{"legacy", "application"} {
-		writeFixtureFile(t, filepath.Join(tree.workspaces, selector, "backend.tf"), migrationFixtureFile(t, "backend.tf"))
+		backend := strings.Replace(migrationFixtureFile(t, "backend.tf"), `"runtime.tfstate"`, strconv.Quote(filepath.Join(tree.workspaces, selector, "runtime.tfstate")), 1)
+		writeFixtureFile(t, filepath.Join(tree.workspaces, selector, "backend.tf"), backend)
 	}
 	writeFixtureFile(t, filepath.Join(tree.workspaces, "legacy", "main.tf"), migrationFixtureFile(t, "source.tf"))
 	writeFixtureFile(t, filepath.Join(tree.workspaces, "application", "main.tf"), migrationFixtureFile(t, "destination.tf"))
@@ -115,12 +121,14 @@ func newCLIMigration(t *testing.T) cliMigration {
 	requireSuccess(t, runConfigsctl(t, tree, apply...), apply...)
 	identity := migrationCLIStateIdentity(t, tree, "legacy", legacyInstance)
 	private := t.TempDir()
+	original := filepath.Join(private, "original")
+	fixtureGit(t, tree, "-c", "core.hooksPath=/dev/null", "clone", "--no-hardlinks", "--", tree.root, original)
 	before := inspectCLIWorkspace(t, tree, "legacy", filepath.Join(private, "source-inspection"))
 	destination := inspectCLIWorkspace(t, tree, "application", filepath.Join(private, "destination-inspection"))
 	writeFixtureFile(t, filepath.Join(tree.workspaces, "legacy", "main.tf"), migrationFixtureFile(t, "retired.tf"))
 	cutover := commitMigrationFixture(t, tree, "workspaces/legacy/main.tf")
 	manifest := statemigration.Manifest{
-		Version: 1, Commit: cutover, RestoreCommit: recovery, ConfigurationDirectory: tree.root,
+		Version: 1, Commit: cutover, RestoreCommit: recovery, ConfigurationDirectory: tree.root, RestoreConfigurationDirectory: original,
 		Workspaces: []statemigration.WorkspaceSpec{before, destination},
 		Moves:      []statemigration.Transfer{{Source: "legacy", Address: legacyInstance, Destination: "application", NewAddress: applicationInstance}},
 	}

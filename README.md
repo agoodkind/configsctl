@@ -80,6 +80,14 @@ Use absolute private-directory paths outside both checkouts, with existing paren
 
    Inspection inventories contain backend identity and hashes of instance records rather than state values. Inspection retains encrypted snapshots for existing state and removes transient decrypted state.
 
+   To diagnose an original root's native plan independently, run from the original checkout:
+
+   ```sh
+   configsctl migrate-state inspect-plan <selector> <inspection-directory>
+   ```
+
+   Plan inspection retains safe metadata reports and refuses pending managed changes or native errors. It does not require a manifest, create a journal or pause, write backend state, or rotate credentials.
+
 2. Create a reviewed JSON manifest from those inspection inventories. The required fields are:
 
    | Field | Value |
@@ -88,6 +96,7 @@ Use absolute private-directory paths outside both checkouts, with existing paren
    | `commit` | Full Git commit SHA of the clean cutover configuration. |
    | `restore_commit` | Full Git commit SHA of the original configuration. |
    | `configuration_directory` | Absolute root of the retained cutover checkout, with clean HEAD equal to `commit`. |
+   | `restore_configuration_directory` | Absolute root of the retained original checkout, with clean HEAD equal to `restore_commit`. |
    | `workspaces` | Inspected `selector`, `backend`, and `before` entries for every source and destination. |
    | `moves` | One entry per existing instance, including unchanged ownership, with `source`, `address`, `destination`, and `new_address`. |
 
@@ -105,7 +114,9 @@ Use absolute private-directory paths outside both checkouts, with existing paren
    configsctl migrate-state preflight <manifest> <private-directory>
    ```
 
-   Preflight checks all workspaces against private local copies of the reviewed configuration and reports each validation failure. It does not write deployment backends or create the durable pause. Native plans must not change managed resources; output and data-source updates may pass.
+   Preflight plans before snapshots against the original commit and after snapshots against the cutover commit in private local backends. Original plans use the original configuration's protected variables. Both configurations use the reviewed cutover provider mirror. Preflight compares complete managed changes after applying the reviewed address mapping. Existing pending actions may remain, but added, removed, or changed actions refuse the transfer. Unmapped creates and native validation errors also refuse the transfer. Output updates and data-source caches do not define managed changes.
+
+   Preflight checks independent workspaces after a failure and retains private metadata reports with resource addresses, actions, changed attribute paths, and complete change hashes. Failed comparisons identify added, removed, or changed entries and their old and new hashes. Native error reports contain fixed diagnostic categories and configuration locations, with recognized HTTP statuses or transport categories when available. Reports exclude values and diagnostic details. Preflight does not write deployment backends or create the durable pause.
 
 5. Execute the prepared transfer:
 
@@ -117,7 +128,7 @@ Use absolute private-directory paths outside both checkouts, with existing paren
 
    After an interruption, retain the manifest and private directory and retry with `configsctl migrate-state resume <manifest> <private-directory>`.
 
-6. Verify every final backend and its independent native plan before releasing the pause:
+6. Verify every final backend and compare its native plan to the recorded original plan before releasing the pause:
 
    ```sh
    configsctl migrate-state verify <manifest> <private-directory>
@@ -130,7 +141,7 @@ Use absolute private-directory paths outside both checkouts, with existing paren
    configsctl migrate-state verify-restored <manifest> <private-directory>
    ```
 
-   `restore` restores original ownership and retains the pause. `verify-restored` checks all retained backend states, including empty new destinations, and checks native plans from the original roots before releasing the pause. Unexpected state or pending managed changes refuse verification.
+   `restore` restores original ownership and retains the pause. `verify-restored` checks all retained backend states, including empty new destinations, and compares native plans from the original roots to the original baseline before releasing the pause. If forward preflight never succeeded, restoration verification derives the original baseline from the immutable before snapshots. Unexpected state or a changed original plan refuses verification.
 
 ## Rotate a Dell provider credential
 

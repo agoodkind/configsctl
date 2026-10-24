@@ -137,7 +137,11 @@ func writeFixtureFile(t *testing.T, path, content string) {
 // The shared module has no backend block.
 func newConfigsTree(t *testing.T) configsTree {
 	t.Helper()
-	base := t.TempDir()
+	return newConfigsTreeAt(t, t.TempDir())
+}
+
+func newConfigsTreeAt(t *testing.T, base string) configsTree {
+	t.Helper()
 	tree := configsTree{
 		root:       filepath.Join(base, "configs"),
 		home:       filepath.Join(base, "home"),

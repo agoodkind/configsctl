@@ -115,6 +115,7 @@ func TestMigrationHandlesInitiallyAbsentRemoteState(t *testing.T) {
 			destination := nativeHTTPConfiguredWorkspace(t, endpoint, "renamed")
 			engine.Workspaces["application"] = destination
 			engine.Manifest.Workspaces[1].Backend = "http:" + endpoint
+			finalizeMigrationFixture(t, &engine)
 			if err := engine.Prepare(t.Context()); err != nil {
 				t.Fatal(err)
 			}

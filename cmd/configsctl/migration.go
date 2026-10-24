@@ -12,12 +12,13 @@ import (
 	"goodkind.io/configsctl/internal/statemigration"
 )
 
-const migrationUsage = "usage: configsctl migrate-state <inspect|prepare|preflight|execute|resume|verify|restore|verify-restored> <workspace-or-manifest> <private-directory>"
+const migrationUsage = "usage: configsctl migrate-state <inspect|inspect-plan|prepare|preflight|execute|resume|verify|restore|verify-restored> <workspace-or-manifest> <private-directory>"
 
 type migrationAction string
 
 const (
 	migrationInspect        migrationAction = "inspect"
+	migrationInspectPlan    migrationAction = "inspect-plan"
 	migrationPrepare        migrationAction = "prepare"
 	migrationPreflight      migrationAction = "preflight"
 	migrationExecute        migrationAction = "execute"
@@ -40,10 +41,14 @@ func runStateMigration(_ cmdEnv, args []string) error {
 	if err != nil {
 		return err
 	}
-	if migrationAction(args[0]) == migrationInspect {
+	action := migrationAction(args[0])
+	if action == migrationInspect || action == migrationInspectPlan {
 		loaded, err := loadSettings(settingsFile)
 		if err != nil {
 			return err
+		}
+		if action == migrationInspectPlan {
+			return inspectMigrationPlan(context.Background(), loaded, args[1], passwordFile, directory)
 		}
 		return inspectMigrationWorkspace(context.Background(), loaded, args[1], passwordFile, directory)
 	}
@@ -76,17 +81,14 @@ func runMigrationAction(ctx context.Context, engine statemigration.Engine, works
 	case migrationPreflight:
 		err = engine.Preflight(ctx, engine.Manifest.ConfigurationDirectory, workspacesDirectory)
 	case migrationExecute, migrationResume:
-		err = engine.Preflight(ctx, engine.Manifest.ConfigurationDirectory, workspacesDirectory)
-		if err == nil {
-			err = engine.Execute(ctx)
-		}
+		err = engine.Execute(ctx)
 	case migrationVerify:
 		err = engine.Verify(ctx)
 	case migrationRestore:
 		err = engine.Restore(ctx)
 	case migrationVerifyRestored:
 		err = engine.VerifyRestored(ctx)
-	case migrationInspect:
+	case migrationInspect, migrationInspectPlan:
 		return errors.New(migrationUsage)
 	default:
 		return errors.New(migrationUsage)
@@ -119,13 +121,17 @@ func bindMigrationEngine(ctx context.Context, manifest statemigration.Manifest, 
 	if err != nil {
 		return statemigration.Engine{}, "", err
 	}
+	originals, err := bindOriginalMigrationWorkspaces(ctx, loaded.Tofu.ProviderMirror, manifest, directory, passwordFile)
+	if err != nil {
+		return statemigration.Engine{}, "", err
+	}
 	pause, err := migrationPausePath()
 	if err != nil {
 		return statemigration.Engine{}, "", err
 	}
 	engine := statemigration.Engine{
 		Manifest: manifest, CurrentCommit: revision, Directory: directory, PauseFile: pause,
-		Workspaces: workspaces, RestoreWorkspaces: nil,
+		Workspaces: workspaces, OriginalWorkspaces: originals, RestoreWorkspaces: nil,
 	}
 	if action != migrationVerifyRestored {
 		return engine, workspacesDirectory, nil
@@ -143,7 +149,7 @@ func bindMigrationEngine(ctx context.Context, manifest statemigration.Manifest, 
 		slog.Error("migration.configuration.original_resolve_failed", "err", fmt.Sprintf("%T", err))
 		return statemigration.Engine{}, "", fmt.Errorf("resolve the original checkout directory: %w", err)
 	}
-	loaded, err = loadSettings(filepath.Join(original, settingsFile))
+	loaded, err = loadSettingsWithMirror(filepath.Join(original, settingsFile), loaded.Tofu.ProviderMirror)
 	if err != nil {
 		return statemigration.Engine{}, "", err
 	}
@@ -152,6 +158,36 @@ func bindMigrationEngine(ctx context.Context, manifest statemigration.Manifest, 
 		return statemigration.Engine{}, "", err
 	}
 	return engine, workspacesDirectory, nil
+}
+
+func bindOriginalMigrationWorkspaces(ctx context.Context, mirror *string, manifest statemigration.Manifest, directory, passwordFile string) (map[string]statemigration.Workspace, error) {
+	configuration, err := reviewedMigrationConfiguration(ctx, manifest.RestoreConfigurationDirectory, manifest.RestoreCommit)
+	if err != nil {
+		slog.ErrorContext(ctx, "migration.configuration.original_binding_failed", "err", fmt.Sprintf("%T", err))
+		return nil, fmt.Errorf("verify the retained original configuration checkout: %w", err)
+	}
+	if _, err := migrationDirectoryAt(directory, configuration); err != nil {
+		return nil, err
+	}
+	loaded, err := loadSettingsWithMirror(filepath.Join(configuration, settingsFile), mirror)
+	if err != nil {
+		return nil, err
+	}
+	workspaces := make(map[string]statemigration.Workspace)
+	for _, spec := range manifest.Workspaces {
+		if spec.Before.Lineage == "" {
+			continue
+		}
+		workspace, identity, err := migrationWorkspaceAt(configuration, loaded, spec.Selector, passwordFile)
+		if err != nil {
+			return nil, err
+		}
+		if identity != spec.Backend {
+			return nil, fmt.Errorf("original workspace %s does not match its reviewed backend identity", spec.Selector)
+		}
+		workspaces[spec.Selector] = workspace
+	}
+	return workspaces, nil
 }
 
 func bindMigrationWorkspaces(configuration string, loaded settings, manifest statemigration.Manifest, passwordFile string, originalOnly bool) (map[string]statemigration.Workspace, error) {

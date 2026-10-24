@@ -32,6 +32,12 @@ type planReportTarget struct {
 	Workspace string
 }
 
+type managedPlanChangesError struct{ address string }
+
+func (err managedPlanChangesError) Error() string {
+	return "the independent plan would change managed resource " + err.address
+}
+
 func newPlanReport(workspace string) planReport {
 	return planReport{Version: 1, Workspace: workspace, Status: "incomplete", Changes: []planChangeMetadata{}, Diagnostics: []planDiagnostic{}}
 }
@@ -41,17 +47,21 @@ func (target planReportTarget) path() string {
 }
 
 func (target planReportTarget) Write(report planReport) error {
-	slog.Info("migration.plan_metadata.write_started", "path", target.path())
-	root, err := privateDirectory(filepath.Dir(target.path()))
-	if err != nil {
-		return err
-	}
-	defer root.Close()
 	data, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		return planReportFailure("encode private plan metadata", err)
 	}
-	file, err := os.CreateTemp(filepath.Dir(target.path()), "report-next-")
+	return writePlanMetadata(target.path(), data)
+}
+
+func writePlanMetadata(path string, data []byte) error {
+	slog.Info("migration.plan_metadata.write_started", "path", path)
+	root, err := privateDirectory(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	file, err := os.CreateTemp(filepath.Dir(path), "report-next-")
 	if err != nil {
 		return planReportFailure("create private plan metadata", err)
 	}
@@ -63,19 +73,24 @@ func (target planReportTarget) Write(report planReport) error {
 	if err := errors.Join(file.Sync(), file.Close()); err != nil {
 		return planReportFailure("complete private plan metadata", err)
 	}
-	if err := root.Rename(filepath.Base(file.Name()), target.Name); err != nil {
+	if err := root.Rename(filepath.Base(file.Name()), filepath.Base(path)); err != nil {
 		return planReportFailure("replace private plan metadata", err)
 	}
-	return syncDirectory(filepath.Dir(target.path()))
+	return syncDirectory(filepath.Dir(path))
 }
 
 func (report *planReport) inspect(contents []byte) error {
 	var document struct {
 		Format  string            `json:"format_version"`
+		Errored bool              `json:"errored"`
 		Changes []json.RawMessage `json:"resource_changes"`
 	}
 	if err := json.Unmarshal(contents, &document); err != nil || document.Format != "1.2" {
 		return errors.New("the independent plan requires supported native JSON format 1.2")
+	}
+	if document.Errored {
+		report.Status = "native_plan_failed"
+		return errors.New("the native plan document reports an error")
 	}
 	var failures []error
 	for _, raw := range document.Changes {
@@ -96,7 +111,7 @@ func (report *planReport) inspect(contents []byte) error {
 	}
 	if len(report.Changes) != 0 {
 		report.Status = "managed_changes"
-		return fmt.Errorf("the independent plan would change managed resource %s", report.Changes[0].Address)
+		return managedPlanChangesError{address: report.Changes[0].Address}
 	}
 	report.Status = "passed"
 	return nil
@@ -104,13 +119,15 @@ func (report *planReport) inspect(contents []byte) error {
 
 func inspectPlanChange(raw json.RawMessage) (planChangeMetadata, bool, error) {
 	var change struct {
-		Address string `json:"address"`
-		Mode    string `json:"mode"`
-		Change  struct {
-			Actions []string        `json:"actions"`
-			Before  json.RawMessage `json:"before"`
-			After   json.RawMessage `json:"after"`
-			Unknown json.RawMessage `json:"after_unknown"`
+		Address  string `json:"address"`
+		Previous string `json:"previous_address"`
+		Mode     string `json:"mode"`
+		Change   struct {
+			Actions   []string        `json:"actions"`
+			Before    json.RawMessage `json:"before"`
+			After     json.RawMessage `json:"after"`
+			Unknown   json.RawMessage `json:"after_unknown"`
+			Importing json.RawMessage `json:"importing"`
 		} `json:"change"`
 	}
 	if err := json.Unmarshal(raw, &change); err != nil {
@@ -127,7 +144,8 @@ func inspectPlanChange(raw json.RawMessage) (planChangeMetadata, bool, error) {
 			return emptyPlanChange(), false, errors.New("the independent plan contains an unsupported resource action")
 		}
 	}
-	if !slices.ContainsFunc(change.Change.Actions, func(action string) bool { return action != "no-op" && action != "read" }) {
+	changed := slices.ContainsFunc(change.Change.Actions, func(action string) bool { return action != "no-op" && action != "read" })
+	if !changed && change.Previous == "" && (len(change.Change.Importing) == 0 || string(change.Change.Importing) == "null") {
 		return emptyPlanChange(), false, nil
 	}
 	canonical, err := canonicalJSON(raw)

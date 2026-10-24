@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
+	"slices"
 	"testing"
 
 	"goodkind.io/configsctl/internal/migrationpause"
@@ -23,10 +23,9 @@ func migrationFixture(t *testing.T) (statemigration.Engine, statemigration.State
 	if err != nil {
 		t.Fatal(err)
 	}
-	commit := strings.Repeat("a", 40)
 	engine := statemigration.Engine{
 		Manifest: statemigration.Manifest{
-			Version: 1, Commit: commit, RestoreCommit: strings.Repeat("b", 40), ConfigurationDirectory: source.Directory,
+			Version: 1,
 			Workspaces: []statemigration.WorkspaceSpec{
 				{Selector: "legacy", Backend: "local:legacy", Before: before},
 				{Selector: "application", Backend: "local:application"},
@@ -35,12 +34,12 @@ func migrationFixture(t *testing.T) (statemigration.Engine, statemigration.State
 				{Source: "legacy", Address: "terraform_data.original", Destination: "application", NewAddress: "terraform_data.renamed"},
 			},
 		},
-		CurrentCommit:     commit,
-		Directory:         filepath.Join(private, "migration"),
-		PauseFile:         filepath.Join(private, "pause.json"),
-		Workspaces:        map[string]statemigration.Workspace{"legacy": source, "application": destination},
-		RestoreWorkspaces: map[string]statemigration.Workspace{"legacy": source},
+		Directory:          filepath.Join(private, "migration"),
+		PauseFile:          filepath.Join(private, "pause.json"),
+		Workspaces:         map[string]statemigration.Workspace{"legacy": source, "application": destination},
+		OriginalWorkspaces: map[string]statemigration.Workspace{"legacy": source},
 	}
+	finalizeMigrationFixture(t, &engine)
 	return engine, before
 }
 
@@ -68,19 +67,18 @@ func TestCompleteMigrationKeepsNativeIdentityAndReleasesPauseAfterPlans(t *testi
 	if err := migrationpause.Guard(engine.PauseFile); err == nil {
 		t.Fatal("ordinary deployment passed during an unverified migration")
 	}
+	destination := engine.Workspaces["application"]
+	originalEnvironment := slices.Clone(destination.Environment)
+	destination.Environment = append(slices.Clone(originalEnvironment), "TF_VAR_fixture_value=synthetic-unapplied-destination-change")
+	engine.Workspaces["application"] = destination
 	if err := engine.Verify(ctx); err == nil {
-		t.Fatal("verification released the pause while the legacy root still declared the transferred resource")
+		t.Fatal("verification released the pause after the destination plan changed")
 	}
 	if err := migrationpause.Guard(engine.PauseFile); err == nil {
 		t.Fatal("a failed independent plan removed the durable write pause")
 	}
-	retired, err := os.ReadFile(filepath.Join("testdata", "retired.tf"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(engine.Workspaces["legacy"].Directory, "main.tf"), retired, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	destination.Environment = originalEnvironment
+	engine.Workspaces["application"] = destination
 	if err := engine.Verify(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -128,22 +126,17 @@ func TestDependentInstancesKeepIdentityAfterNativeDependencyInvalidation(t *test
 	}
 	engine.Workspaces["legacy"] = source
 	engine.Workspaces["application"] = destination
+	engine.OriginalWorkspaces["legacy"] = source
 	engine.Manifest.Workspaces[0].Before = before
 	engine.Manifest.Moves = []statemigration.Transfer{
 		{Source: "legacy", Address: "terraform_data.parent", Destination: "application", NewAddress: "terraform_data.new_parent"},
 		{Source: "legacy", Address: "terraform_data.child", Destination: "application", NewAddress: "terraform_data.new_child"},
 	}
+	finalizeMigrationFixture(t, &engine)
 	if err := engine.Prepare(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if err := engine.Execute(ctx); err != nil {
-		t.Fatal(err)
-	}
-	retired, err := os.ReadFile(filepath.Join("testdata", "retired.tf"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(source.Directory, "main.tf"), retired, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := engine.Verify(ctx); err != nil {
@@ -162,7 +155,7 @@ func TestMigrationRefusesAChangedSourceAndRetainsPause(t *testing.T) {
 	if err := engine.Prepare(ctx); err != nil {
 		t.Fatal(err)
 	}
-	source := engine.Workspaces["legacy"]
+	source := engine.OriginalWorkspaces["legacy"]
 	source.Environment = append(source.Environment, "TF_VAR_fixture_value=synthetic-concurrent-change")
 	nativeCommand(t, source, "apply", "-auto-approve", "-input=false", "-no-color")
 	if err := engine.Execute(ctx); err == nil {
@@ -174,6 +167,32 @@ func TestMigrationRefusesAChangedSourceAndRetainsPause(t *testing.T) {
 	private := privateFixtureDir(t)
 	if _, err := statemigration.Pull(ctx, engine.Workspaces["application"], filepath.Join(private, "destination.tfstate")); err == nil {
 		t.Fatal("a stale source migration wrote the destination backend")
+	}
+}
+
+func TestMigrationRefusesAnInvalidCutoverBeforeBackendWrites(t *testing.T) {
+	engine, _ := migrationFixture(t)
+	legacy := engine.Workspaces["legacy"]
+	original := engine.OriginalWorkspaces["legacy"]
+	configuration := readNativeTestBytes(t, filepath.Join(original.Directory, "main.tf"))
+	if err := os.WriteFile(filepath.Join(legacy.Directory, "main.tf"), configuration, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	engine.Manifest.Commit = commitFixtureConfiguration(t, engine.Manifest.ConfigurationDirectory)
+	engine.CurrentCommit = engine.Manifest.Commit
+	before := readNativeTestBytes(t, fixtureBackendPath(t, legacy))
+	if err := engine.Prepare(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Execute(t.Context()); err == nil {
+		t.Fatal("execution accepted a cutover that still declared the transferred resource in the source")
+	}
+	if !bytes.Equal(before, readNativeTestBytes(t, fixtureBackendPath(t, legacy))) {
+		t.Fatal("the invalid cutover changed the encrypted source state")
+	}
+	destination := fixtureBackendPath(t, engine.Workspaces["application"])
+	if _, err := os.Stat(destination); !os.IsNotExist(err) {
+		t.Fatal("the invalid cutover wrote the destination backend")
 	}
 }
 

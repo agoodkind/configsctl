@@ -13,12 +13,13 @@ import (
 
 // Engine coordinates a complete transfer while ordinary writers remain paused.
 type Engine struct {
-	Manifest          Manifest
-	CurrentCommit     string
-	Directory         string
-	PauseFile         string
-	Workspaces        map[string]Workspace
-	RestoreWorkspaces map[string]Workspace
+	Manifest           Manifest
+	CurrentCommit      string
+	Directory          string
+	PauseFile          string
+	Workspaces         map[string]Workspace
+	OriginalWorkspaces map[string]Workspace
+	RestoreWorkspaces  map[string]Workspace
 }
 
 type checkpoint struct {
@@ -34,6 +35,7 @@ type journal struct {
 	Written  []string              `json:"written"`
 	Restored []string              `json:"restored"`
 	Recovery map[string]checkpoint `json:"recovery"`
+	Baseline *planBaseline         `json:"plan_baseline"`
 }
 
 const (
@@ -77,7 +79,7 @@ func (e Engine) Prepare(ctx context.Context) (result error) {
 	}
 	prepared := journal{
 		Manifest: fingerprint, Phase: phasePrepared,
-		States: make(map[string]checkpoint), Written: nil, Restored: nil, Recovery: nil,
+		States: make(map[string]checkpoint), Written: nil, Restored: nil, Recovery: nil, Baseline: nil,
 	}
 	if err := e.captureBefore(ctx, scratch, &prepared); err != nil {
 		return err
@@ -241,6 +243,9 @@ func (e Engine) Execute(ctx context.Context) error {
 	if current.Phase != phasePrepared && current.Phase != phaseApplying && current.Phase != phaseTransferred {
 		return fmt.Errorf("cannot execute a migration in phase %s", current.Phase)
 	}
+	if err := e.establishBaseline(ctx, &current); err != nil {
+		return err
+	}
 	if err := e.pause(); err != nil {
 		return err
 	}
@@ -351,7 +356,7 @@ func (e Engine) checkSet(ctx context.Context, current journal, afterOnly bool) e
 	return nil
 }
 
-// Verify checks every final state and requires independent zero-change native plans.
+// Verify checks every final state and compares native plans with the frozen baseline.
 // It releases the pause only after every workspace passes both checks.
 func (e Engine) Verify(ctx context.Context) error {
 	slog.InfoContext(ctx, "migration.verify.started", "path", e.Directory)
@@ -378,11 +383,8 @@ func (e Engine) Verify(ctx context.Context) error {
 	if err := e.checkSet(ctx, current, true); err != nil {
 		return err
 	}
-	for _, spec := range e.Manifest.Workspaces {
-		if err := CheckPlan(ctx, e.Workspaces[spec.Selector], e.Directory); err != nil {
-			slog.ErrorContext(ctx, "migration.verify.plan_failed", "workspace", spec.Selector, "err", migrationErrorType(err))
-			return fmt.Errorf("workspace %s must pass its independent plan before releasing the pause: %w", spec.Selector, err)
-		}
+	if err := e.verifyPlanBaseline(ctx, &current, false); err != nil {
+		return err
 	}
 	if err := e.checkSet(ctx, current, true); err != nil {
 		return err

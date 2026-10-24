@@ -10,14 +10,16 @@ import (
 )
 
 type planDiagnostic struct {
-	Severity string `json:"severity"`
-	Category string `json:"category"`
-	Digest   string `json:"summary_digest"`
-	Filename string `json:"filename,omitempty"`
-	Line     int    `json:"line,omitempty"`
+	Severity   string `json:"severity"`
+	Category   string `json:"category"`
+	Digest     string `json:"summary_digest"`
+	Filename   string `json:"filename,omitempty"`
+	Line       int    `json:"line,omitempty"`
+	HTTPStatus int    `json:"http_status,omitempty"`
+	Transport  string `json:"transport_category,omitempty"`
 }
 
-// Only exact core summaries select a public category. Provider text remains private.
+// Only exact static summaries select a public category. Provider text remains private.
 var planDiagnosticCategories = map[string]string{
 	"No value for required variable":         "required_variable",
 	"Invalid value for input variable":       "invalid_input_variable",
@@ -37,6 +39,7 @@ var planDiagnosticCategories = map[string]string{
 	"Inconsistent dependency lock file":      "dependency_lock",
 	"Provider configuration not present":     "missing_provider_configuration",
 	"Invalid provider configuration":         "invalid_provider_configuration",
+	"failed to make http request":            "provider_http_request_failed",
 }
 
 func readPlanDiagnostics(path, workspace string) ([]planDiagnostic, error) {
@@ -53,6 +56,7 @@ func readPlanDiagnostics(path, workspace string) ([]planDiagnostic, error) {
 			Diagnostic struct {
 				Severity string `json:"severity"`
 				Summary  string `json:"summary"`
+				Detail   string `json:"detail"`
 				Range    struct {
 					Filename string `json:"filename"`
 					Start    struct {
@@ -78,7 +82,10 @@ func readPlanDiagnostics(path, workspace string) ([]planDiagnostic, error) {
 		if native.Severity == "error" || native.Severity == "warning" {
 			severity = native.Severity
 		}
-		diagnostic := planDiagnostic{Severity: severity, Category: category, Digest: digest([]byte(native.Summary)), Filename: "", Line: 0}
+		diagnostic := planDiagnostic{Severity: severity, Category: category, Digest: digest([]byte(native.Summary)), Filename: "", Line: 0, HTTPStatus: 0, Transport: ""}
+		if category == "provider_http_request_failed" {
+			diagnostic.HTTPStatus, diagnostic.Transport = providerHTTPDiagnostic(native.Detail)
+		}
 		diagnostic.Filename = diagnosticFilename(native.Range.Filename, workspace)
 		if diagnostic.Filename != "" && native.Range.Start.Line > 0 {
 			diagnostic.Line = native.Range.Start.Line

@@ -22,12 +22,13 @@ var commitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 // Manifest assigns every existing instance to exactly one reviewed destination.
 type Manifest struct {
-	Version                int             `json:"version"`
-	Commit                 string          `json:"commit"`
-	RestoreCommit          string          `json:"restore_commit"`
-	ConfigurationDirectory string          `json:"configuration_directory"`
-	Workspaces             []WorkspaceSpec `json:"workspaces"`
-	Moves                  []Transfer      `json:"moves"`
+	Version                       int             `json:"version"`
+	Commit                        string          `json:"commit"`
+	RestoreCommit                 string          `json:"restore_commit"`
+	ConfigurationDirectory        string          `json:"configuration_directory"`
+	RestoreConfigurationDirectory string          `json:"restore_configuration_directory"`
+	Workspaces                    []WorkspaceSpec `json:"workspaces"`
+	Moves                         []Transfer      `json:"moves"`
 }
 
 // WorkspaceSpec identifies a backend and the exact state expected before transfer.
@@ -73,6 +74,9 @@ func (m Manifest) validateConfiguration() error {
 	}
 	if !filepath.IsAbs(m.ConfigurationDirectory) || filepath.Clean(m.ConfigurationDirectory) != m.ConfigurationDirectory {
 		return errors.New("the migration manifest requires configuration_directory as a clean absolute path to the retained cutover checkout")
+	}
+	if !filepath.IsAbs(m.RestoreConfigurationDirectory) || filepath.Clean(m.RestoreConfigurationDirectory) != m.RestoreConfigurationDirectory {
+		return errors.New("the migration manifest requires restore_configuration_directory as a clean absolute path to the retained original checkout")
 	}
 	if len(m.Workspaces) == 0 || len(m.Moves) == 0 {
 		return errors.New("the migration manifest requires workspaces and a complete instance mapping")

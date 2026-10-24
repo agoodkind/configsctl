@@ -32,7 +32,7 @@ func TestVerifyRestoredRechecksOriginalPlansAfterItsTerminalCheckpoint(t *testin
 	originalEnvironment := workspace.Environment
 	workspace.Environment = append(slices.Clone(originalEnvironment), "TF_VAR_fixture_value=synthetic-unapplied-original-change")
 	engine.RestoreWorkspaces["legacy"] = workspace
-	if err := engine.VerifyRestored(t.Context()); err == nil || !strings.Contains(err.Error(), "would change managed resource") {
+	if err := engine.VerifyRestored(t.Context()); err == nil || !strings.Contains(err.Error(), "differs from the frozen original baseline") {
 		t.Fatalf("terminal restoration retry skipped the original native plan: %v", err)
 	}
 	if err := migrationpause.Guard(engine.PauseFile); err == nil {

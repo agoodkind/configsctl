@@ -18,7 +18,20 @@ func CheckPlan(ctx context.Context, workspace Workspace, directory string) (resu
 	return checkPlan(ctx, workspace, directory, target)
 }
 
-func checkPlan(ctx context.Context, workspace Workspace, directory string, target planReportTarget) (result error) {
+func checkPlan(ctx context.Context, workspace Workspace, directory string, target planReportTarget) error {
+	contents, err := readIndependentPlan(ctx, workspace, directory, target)
+	if err != nil {
+		return err
+	}
+	report := newPlanReport(target.Workspace)
+	if err := report.inspect(contents); err != nil {
+		slog.ErrorContext(ctx, "migration.independent_plan.refused", "workspace", workspace.Directory, "err", migrationErrorType(err))
+		return fmt.Errorf("%w; private plan metadata: %s", err, target.path())
+	}
+	return nil
+}
+
+func readIndependentPlan(ctx context.Context, workspace Workspace, directory string, target planReportTarget) (contents []byte, result error) {
 	slog.InfoContext(ctx, "migration.independent_plan.started", "workspace", workspace.Directory)
 	report := newPlanReport(target.Workspace)
 	defer func() {
@@ -32,7 +45,7 @@ func checkPlan(ctx context.Context, workspace Workspace, directory string, targe
 	scratch, err := os.MkdirTemp(directory, "inspect-plan-")
 	if err != nil {
 		slog.ErrorContext(ctx, "migration.independent_plan.directory_failed", "workspace", workspace.Directory, "err", migrationErrorType(err))
-		return fmt.Errorf("create private independent plan directory: %w", err)
+		return nil, fmt.Errorf("create private independent plan directory: %w", err)
 	}
 	defer func() {
 		if err := os.RemoveAll(scratch); err != nil {
@@ -42,31 +55,49 @@ func checkPlan(ctx context.Context, workspace Workspace, directory string, targe
 	}()
 	plan := filepath.Join(scratch, "verification.tfplan")
 	if err := writePrivate(plan, nil); err != nil {
-		return err
+		return nil, err
 	}
+	diagnostics, err := runNativePlan(ctx, workspace, scratch, plan)
+	report.Diagnostics = diagnostics
+	if err != nil {
+		report.Status = "native_plan_failed"
+		return nil, err
+	}
+	contents, err = readNativePlan(ctx, workspace, scratch, plan)
+	if err != nil {
+		return nil, err
+	}
+	inspectErr := report.inspect(contents)
+	var managed managedPlanChangesError
+	if inspectErr != nil && !errors.As(inspectErr, &managed) {
+		return nil, inspectErr
+	}
+	return contents, nil
+}
+
+func runNativePlan(ctx context.Context, workspace Workspace, scratch, plan string) ([]planDiagnostic, error) {
 	events, err := createPrivate(filepath.Join(scratch, "events.jsonl"))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	runErr := native(ctx, workspace, events, "plan", "-json", "-input=false", "-detailed-exitcode", "-out="+plan)
 	if err := errors.Join(events.Close(), protectNativeFiles(scratch)); err != nil {
-		return err
+		return nil, err
 	}
 	diagnostics, err := readPlanDiagnostics(events.Name(), workspace.Directory)
-	report.Diagnostics = diagnostics
 	if err != nil {
-		return err
+		return diagnostics, err
 	}
 	var exit *exec.ExitError
 	if runErr != nil && (!errors.As(runErr, &exit) || exit.ExitCode() != 2) {
-		report.Status = "native_plan_failed"
-		return runErr
+		return diagnostics, runErr
 	}
-	contents, err := readNativePlan(ctx, workspace, scratch, plan)
-	if err != nil {
-		return err
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Severity == "error" {
+			return diagnostics, errors.New("the native plan contains an error diagnostic; diagnostic values remain private")
+		}
 	}
-	return report.inspect(contents)
+	return diagnostics, nil
 }
 
 func readNativePlan(ctx context.Context, workspace Workspace, scratch, plan string) ([]byte, error) {

@@ -66,7 +66,7 @@ func TestMigrationPreflightReportsEveryManagedChangeWithoutValues(t *testing.T) 
 	requireSuccess(t, migration.run(t, "prepare"), "migrate-state", "prepare")
 	before := readPreflightSource(t, migration)
 	refused := migration.run(t, "preflight")
-	if refused.exitCode == 0 || !strings.Contains(refused.stderr, "would change managed resource") {
+	if refused.exitCode == 0 || !strings.Contains(refused.stderr, "unmapped managed instance terraform_data.alpha in application") {
 		t.Fatal("preflight accepted the native managed changes")
 	}
 	report := readCLIPlanReport(t, migration, "preflight-0001.json")
