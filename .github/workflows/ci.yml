@@ -32,3 +32,4 @@ jobs:
     # The lint oracle tests run the embedded jinja2 script and fail without it.
     with:
       apt_packages: python3-jinja2
+      pre_make_commands: bash .github/install-opentofu.sh
