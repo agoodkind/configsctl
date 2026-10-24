@@ -107,6 +107,9 @@ func contentDigest(data []byte) (string, error) {
 	delete(content, "serial")
 	delete(content, "lineage")
 	delete(content, "terraform_version")
+	if err := normalizeStateCheckResults(content); err != nil {
+		return "", err
+	}
 	encoded, err := json.Marshal(content)
 	if err != nil {
 		return "", errors.New("encode private state verification data")
