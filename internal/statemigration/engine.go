@@ -20,6 +20,7 @@ type Engine struct {
 	Workspaces         map[string]Workspace
 	OriginalWorkspaces map[string]Workspace
 	RestoreWorkspaces  map[string]Workspace
+	session            *engineSession
 }
 
 type checkpoint struct {
@@ -451,6 +452,9 @@ func (e Engine) acquire() (func(), error) {
 		if !exists || workspace.Directory == "" {
 			return nil, fmt.Errorf("workspace %s lacks its initialized native backend", spec.Selector)
 		}
+	}
+	if e.session != nil {
+		return e.session.acquire(e)
 	}
 	root, err := privateDirectory(e.Directory)
 	if err != nil {

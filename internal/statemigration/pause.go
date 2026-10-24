@@ -17,6 +17,12 @@ type pauseRecord struct {
 }
 
 func (e Engine) acquirePauseLease() (func(), error) {
+	if e.session != nil {
+		if err := e.session.validate(e); err != nil {
+			return nil, err
+		}
+		return func() {}, nil
+	}
 	release, err := migrationpause.AcquireExclusive(e.PauseFile)
 	if err != nil {
 		slog.Error("migration.pause.lease_failed", "path", e.PauseFile, "err", migrationErrorType(err))
