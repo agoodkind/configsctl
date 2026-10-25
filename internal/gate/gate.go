@@ -256,9 +256,16 @@ func (s Server) unlock(ctx context.Context, req Request) error {
 		slog.Error("gate.unlock.inventory_failed", "err", err)
 		return fmt.Errorf("load the inventory for unlock: %w", err)
 	}
-	targets, err := hostlock.Targets(inv, []string{req.Host})
-	if err != nil {
-		return fmt.Errorf("select host %s for lock removal: %w", req.Host, err)
+	var hostname string
+	if inv.Hosts[req.Host].AnsibleConnection == "local" {
+		hostname, err = os.Hostname()
+		if err != nil {
+			return fmt.Errorf("read the hostname for host %s lock removal: %w", req.Host, err)
+		}
+	}
+	targets, skipped := hostlock.Targets(inv, []string{req.Host}, hostname)
+	if len(skipped) > 0 {
+		slog.Info("hostlock.targets_skipped", "hosts", skipped)
 	}
 	if len(targets) == 0 {
 		return fmt.Errorf("host %s has no ssh lock target", req.Host)

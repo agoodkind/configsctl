@@ -20,9 +20,9 @@ func TestLocalInventoryHostLocksThisMachineUntilRelease(t *testing.T) {
 	inventory := ansible.Inventory{Hosts: map[string]ansible.HostVars{
 		hostname: {AnsibleConnection: "local", AnsibleHost: "192.0.2.1", AnsibleUser: "unused"},
 	}}
-	targets, err := hostlock.Targets(inventory, []string{hostname})
-	if err != nil {
-		t.Fatalf("select the local lock target: %v", err)
+	targets, skipped := hostlock.Targets(inventory, []string{hostname}, hostname)
+	if len(skipped) != 0 {
+		t.Fatalf("selection excluded the local host: %v", skipped)
 	}
 	if len(targets) != 1 {
 		t.Fatalf("local lock target count = %d, want 1", len(targets))
@@ -55,10 +55,7 @@ func TestLocalInventoryHostLocksThisMachineUntilRelease(t *testing.T) {
 }
 
 func TestTargetsExcludeOtherLocalHostsAndPreserveSSHTargets(t *testing.T) {
-	hostname, err := os.Hostname()
-	if err != nil {
-		t.Fatalf("read the hostname: %v", err)
-	}
+	const hostname = "local-host"
 	inventory := ansible.Inventory{Hosts: map[string]ansible.HostVars{
 		hostname: {AnsibleConnection: "local"},
 	}}
@@ -82,11 +79,12 @@ func TestTargetsExcludeOtherLocalHostsAndPreserveSSHTargets(t *testing.T) {
 	inventory.Hosts["remote-custom"] = ansible.HostVars{AnsibleConnection: "ssh", AnsibleHost: "192.0.2.2", AnsibleUser: "deploy"}
 	names = append(names, "remote-custom")
 	want = append(want, hostlock.Host{Name: "remote-custom", User: "deploy", Address: "192.0.2.2", Dir: hostlock.DefaultDir})
-	targets, err := hostlock.Targets(inventory, names)
-	if err != nil {
-		t.Fatalf("select the inventory lock targets: %v", err)
-	}
+	targets, skipped := hostlock.Targets(inventory, names, hostname)
 	if !slices.Equal(targets, want) {
 		t.Fatalf("inventory lock targets = %+v, want %+v", targets, want)
+	}
+	wantSkipped := []string{"localhost", "controller", "other-" + hostname, "container"}
+	if !slices.Equal(skipped, wantSkipped) {
+		t.Fatalf("excluded inventory hosts = %v, want %v", skipped, wantSkipped)
 	}
 }
