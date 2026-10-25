@@ -36,11 +36,15 @@ func archiveMigrationCommit(ctx context.Context, configurationDirectory, commit,
 		return migrationPreflightFailure(ctx, "start the reviewed Git archive", err)
 	}
 	extractErr := extractMigrationArchive(ctx, root, tar.NewReader(archive))
-	if extractErr != nil {
+	var drainErr error
+	if extractErr == nil {
+		_, drainErr = io.Copy(io.Discard, archive)
+	}
+	if extractErr != nil || drainErr != nil {
 		_ = archive.Close()
 	}
 	waitErr := command.Wait()
-	if err := errors.Join(extractErr, waitErr); err != nil {
+	if err := errors.Join(extractErr, drainErr, waitErr); err != nil {
 		return migrationPreflightFailure(ctx, "extract the reviewed Git archive", err)
 	}
 	return nil
