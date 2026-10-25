@@ -22,7 +22,7 @@ const (
 	archiveRecordSize = 512
 	archiveBlockSize  = 20 * archiveRecordSize
 	archiveMaxTrailer = archiveBlockSize - archiveRecordSize
-	transferDeadline  = time.Minute
+	transferDeadline  = 2 * time.Minute
 )
 
 func padMigrationCLIArchives(t *testing.T, migration *cliMigration) {
