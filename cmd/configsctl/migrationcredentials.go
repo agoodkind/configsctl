@@ -321,7 +321,11 @@ func migrationCredentialHosts(ctx context.Context, bindings []migrationCredentia
 		if err := requireLockTargets(inventory, []string{binding.settings.LockHost}); err != nil {
 			return nil, err
 		}
-		target := hostlock.Targets(inventory, []string{binding.settings.LockHost})[0]
+		targets, err := hostlock.Targets(inventory, []string{binding.settings.LockHost})
+		if err != nil {
+			return nil, fmt.Errorf("select migration credential host lock targets: %w", err)
+		}
+		target := targets[0]
 		if previous, exists := byName[target.Name]; exists {
 			if previous != target {
 				return nil, errors.New("the reviewed configurations disagree on the exact credential host lock target")

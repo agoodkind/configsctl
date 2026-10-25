@@ -1,7 +1,9 @@
 package hostlock
 
 import (
+	"fmt"
 	"log/slog"
+	"os"
 
 	"goodkind.io/configsctl/internal/ansible"
 )
@@ -12,14 +14,26 @@ type connection string
 // value is the Ansible default, ssh.
 var sshConnections = map[connection]bool{"": true, "ssh": true, "smart": true}
 
-// Targets returns a lock target for each named host that Ansible connects to
-// over ssh. A host with any other connection type, such as local, gets no
-// target.
-func Targets(inv ansible.Inventory, names []string) []Host {
+// Targets returns SSH lock targets and a local lock target when a local
+// inventory host matches this machine's hostname. It excludes other local
+// hosts and unsupported connection types.
+func Targets(inv ansible.Inventory, names []string) ([]Host, error) {
+	hostname, err := localHostname(inv, names)
+	if err != nil {
+		return nil, err
+	}
 	hosts := make([]Host, 0, len(names))
 	var skipped []string
 	for _, name := range names {
 		vars := inv.Hosts[name]
+		if vars.AnsibleConnection == "local" {
+			if name == hostname {
+				hosts = append(hosts, Host{Name: name, User: "", Address: "", Dir: DefaultDir})
+			} else {
+				skipped = append(skipped, name)
+			}
+			continue
+		}
 		if !sshConnections[connection(vars.AnsibleConnection)] {
 			skipped = append(skipped, name)
 			continue
@@ -37,5 +51,20 @@ func Targets(inv ansible.Inventory, names []string) []Host {
 	if len(skipped) > 0 {
 		slog.Info("hostlock.targets_skipped", "hosts", skipped)
 	}
-	return hosts
+	return hosts, nil
+}
+
+func localHostname(inv ansible.Inventory, names []string) (string, error) {
+	for _, name := range names {
+		if inv.Hosts[name].AnsibleConnection != "local" {
+			continue
+		}
+		hostname, err := os.Hostname()
+		if err != nil {
+			slog.Error("hostlock.hostname_unavailable", "err", err)
+			return "", fmt.Errorf("read the hostname for local host locks: %w", err)
+		}
+		return hostname, nil
+	}
+	return "", nil
 }

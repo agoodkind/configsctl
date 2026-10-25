@@ -111,8 +111,12 @@ func deployLockTargets(inv ansible.Inventory, playHosts, variables []string) ([]
 		slog.Error("deploy.lock.variable_read_failed", "variables", variables, "err", err)
 		return nil, fmt.Errorf("read the lock host variables %v: %w", variables, err)
 	}
+	extraTargets, err := hostlock.Targets(inv, extraHosts)
+	if err != nil {
+		return nil, fmt.Errorf("select lock host variable targets: %w", err)
+	}
 	targeted := map[string]bool{}
-	for _, target := range hostlock.Targets(inv, extraHosts) {
+	for _, target := range extraTargets {
 		targeted[target.Name] = true
 	}
 	for _, name := range extraHosts {
@@ -124,7 +128,11 @@ func deployLockTargets(inv ansible.Inventory, playHosts, variables []string) ([]
 	}
 	names := slices.Concat(playHosts, extraHosts)
 	slices.Sort(names)
-	return hostlock.Targets(inv, slices.Compact(names)), nil
+	targets, err := hostlock.Targets(inv, slices.Compact(names))
+	if err != nil {
+		return nil, fmt.Errorf("select deployment lock targets: %w", err)
+	}
+	return targets, nil
 }
 
 type tofuLockRequest struct {
@@ -163,7 +171,11 @@ func lockTofuHosts(
 		selection.cleanup()
 		return nil, nil, nil, err
 	}
-	targets := hostlock.Targets(inv, selection.names)
+	targets, err := hostlock.Targets(inv, selection.names)
+	if err != nil {
+		selection.cleanup()
+		return nil, nil, nil, fmt.Errorf("select OpenTofu lock targets: %w", err)
+	}
 	guestTargets, err := resolveGuestLocks(inv, selection.guestLocks)
 	if err != nil {
 		selection.cleanup()
@@ -282,7 +294,10 @@ func resolveGuestLocks(inv ansible.Inventory, guests []tofulock.GuestLock) ([]ho
 		if err := requireLockTargets(inv, []string{guest.Host}); err != nil {
 			return nil, err
 		}
-		hosts := hostlock.Targets(inv, []string{guest.Host})
+		hosts, err := hostlock.Targets(inv, []string{guest.Host})
+		if err != nil {
+			return nil, fmt.Errorf("select guest host lock targets: %w", err)
+		}
 		host, err := hostlock.ForGuest(hosts[0], guest.Node, guest.VMID)
 		if err != nil {
 			slog.Error("tofu.lock.guest_target_failed", "node", guest.Node, "err", err)
@@ -397,8 +412,12 @@ func showTofuPlan(ctx context.Context, request tofuLockRequest, planFile string)
 
 func requireLockTargets(inv ansible.Inventory, names []string) error {
 	inventoryHosts := inv.GroupHosts("all")
+	targets, err := hostlock.Targets(inv, names)
+	if err != nil {
+		return fmt.Errorf("select required host lock targets: %w", err)
+	}
 	targeted := map[string]bool{}
-	for _, target := range hostlock.Targets(inv, names) {
+	for _, target := range targets {
 		targeted[target.Name] = true
 	}
 	for _, name := range names {

@@ -256,7 +256,10 @@ func (s Server) unlock(ctx context.Context, req Request) error {
 		slog.Error("gate.unlock.inventory_failed", "err", err)
 		return fmt.Errorf("load the inventory for unlock: %w", err)
 	}
-	targets := hostlock.Targets(inv, []string{req.Host})
+	targets, err := hostlock.Targets(inv, []string{req.Host})
+	if err != nil {
+		return fmt.Errorf("select host %s for lock removal: %w", req.Host, err)
+	}
 	if len(targets) == 0 {
 		return fmt.Errorf("host %s has no ssh lock target", req.Host)
 	}

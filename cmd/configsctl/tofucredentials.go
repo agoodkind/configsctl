@@ -123,7 +123,11 @@ func lockCredentialHost(ctx context.Context, name string) (context.Context, func
 	if err := requireLockTargets(inv, []string{name}); err != nil {
 		return nil, nil, err
 	}
-	return takeLocks(ctx, hostlock.Targets(inv, []string{name}))
+	targets, err := hostlock.Targets(inv, []string{name})
+	if err != nil {
+		return nil, nil, fmt.Errorf("select credential host lock targets: %w", err)
+	}
+	return takeLocks(ctx, targets)
 }
 
 func environmentValue(environment []string, name string) string {
