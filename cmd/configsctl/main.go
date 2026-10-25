@@ -53,6 +53,7 @@ var handlers = map[string]func(cmdEnv, []string) error{
 	"keys":           runKeys,
 	"secret":         runSecret,
 	"set-secrets":    runSetSecrets,
+	"export-secrets": runExportSecrets,
 	"rename-secret":  runRenameSecret,
 	"delete-secrets": runDeleteSecrets,
 	"deploy":         runDeploy,
