@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"slices"
 
+	"go.yaml.in/yaml/v3"
 	"goodkind.io/configsctl/internal/tofulock"
-	"gopkg.in/yaml.v3"
 )
 
 const settingsFile = "configsctl.yml"

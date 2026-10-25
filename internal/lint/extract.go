@@ -4,7 +4,7 @@ import (
 	"regexp"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // templateExpr is a Jinja expression pulled from a file with its 1-based line.

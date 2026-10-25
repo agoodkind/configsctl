@@ -16,7 +16,7 @@ import (
 	"strings"
 
 	ansiblevault "github.com/sosedoff/ansible-vault-go"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // fingerprintHexLen is the number of hex characters of the keyed digest shown
