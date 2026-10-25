@@ -15,9 +15,10 @@ import (
 func TestMigrationCLITransferCompletesProtectedNativeStages(t *testing.T) {
 	t.Parallel()
 	migration := newCLIMigration(t)
+	padMigrationCLIArchives(t, &migration)
 	requireSuccess(t, migration.run(t, "prepare"), "migrate-state", "prepare")
 	args := []string{"migrate-state", "transfer", migration.file, migration.directory, "--parallelism=1"}
-	result := runConfigsctl(t, migration.tree, args...)
+	result := runBoundedMigrationTransfer(t, migration, args...)
 	requireSuccess(t, result, args...)
 	requireMigrationPrivateOutput(t, result)
 	if migrationCLIStateIdentity(t, migration.tree, "application", applicationInstance) != migration.identity {
