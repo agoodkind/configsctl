@@ -5,6 +5,8 @@ terraform {
   encryption {
     key_provider "pbkdf2" "state" {
       passphrase = "${var.vault_tofu_state_passphrase}"
+      iterations    = 200000
+      hash_function = "sha256"
     }
     method "aes_gcm" "state" {
       keys = key_provider.pbkdf2.state
