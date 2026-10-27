@@ -66,7 +66,7 @@ func requireProcessGone(t *testing.T, pid int) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the fake tofu child %d survived configsctl: state check error = %v", pid, err)
+			t.Fatalf("the child process %d survived configsctl: state check error = %v", pid, err)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

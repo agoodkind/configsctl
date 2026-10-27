@@ -1,0 +1,10 @@
+#!/bin/sh
+# Stand-in for tofu in the tofu signal test.
+# It starts a background worker, writes its own process ID and the worker
+# process ID to FIXTURE_PIDS, and waits for the worker.
+# SIGTERM stops the stand-in, as it stops tofu.
+trap 'exit 143' TERM
+sleep 300 </dev/null >/dev/null 2>&1 &
+echo "$$ $!" > "$FIXTURE_PIDS.partial"
+mv "$FIXTURE_PIDS.partial" "$FIXTURE_PIDS"
+wait

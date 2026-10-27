@@ -1,0 +1,18 @@
+#!/bin/sh
+# Stand-in for ansible-playbook in the deploy signal test.
+# With --list-hosts, it prints FIXTURE_PLAY_HOST as the only play host.
+# Otherwise it starts a background worker, writes its own process ID and the
+# worker process ID to FIXTURE_PIDS, and waits for the worker.
+# SIGINT stops the stand-in, as it stops ansible-playbook. The worker ignores
+# SIGINT, so only the process group SIGKILL from procgroup.Run stops it.
+trap 'exit 130' INT
+for argument in "$@"; do
+	if [ "$argument" = "--list-hosts" ]; then
+		printf '\nplaybook: fixture\n\n  play #1 (all): Fixture\tTAGS: []\n    pattern: [all]\n    hosts (1):\n      %s\n' "$FIXTURE_PLAY_HOST"
+		exit 0
+	fi
+done
+sleep 300 </dev/null >/dev/null 2>&1 &
+echo "$$ $!" > "$FIXTURE_PIDS.partial"
+mv "$FIXTURE_PIDS.partial" "$FIXTURE_PIDS"
+wait

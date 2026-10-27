@@ -8,9 +8,11 @@ import (
 	"maps"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 
 	"goodkind.io/configsctl/internal/ansible"
 	"goodkind.io/configsctl/internal/gate"
@@ -31,10 +33,20 @@ func allTofuLockHosts(inv ansible.Inventory) []string {
 }
 
 // Check-mode deployments do not acquire host locks.
-// Lock loss cancels the local command before lock release. Remote Ansible
-// modules may continue running.
+// Lock loss, SIGINT, and SIGTERM cancel the local command before lock release.
+// Remote Ansible modules may continue running.
 func lockedDeploy(opts ansible.DeployOptions) error {
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	err := deployWithLocks(ctx, opts)
+	if cause := context.Cause(ctx); err != nil && cause != nil {
+		slog.Error("deploy.stopped", "playbook", opts.Playbook, "err", cause)
+		return fmt.Errorf("deploy %s stopped on a signal: %w", opts.Playbook, cause)
+	}
+	return err
+}
+
+func deployWithLocks(ctx context.Context, opts ansible.DeployOptions) error {
 	loaded, err := loadSettings(settingsFile)
 	if err != nil {
 		return err

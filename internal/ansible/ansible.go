@@ -75,11 +75,12 @@ func Deploy(ctx context.Context, opts DeployOptions) error {
 }
 
 // SyntaxCheck validates a playbook's structure without connecting to a host.
-func SyntaxCheck(playbook string) error {
+// Context cancellation stops the local ansible-playbook command.
+func SyntaxCheck(ctx context.Context, playbook string) error {
 	args := []string{
 		"--syntax-check", "--vault-password-file", vaultPassPath(), playbookArg(playbook),
 	}
-	return runStreaming(context.Background(), "ansible-playbook", args, nil)
+	return runStreaming(ctx, "ansible-playbook", args, nil)
 }
 
 // InventoryDump prints the resolved inventory as YAML. Secret values in the
