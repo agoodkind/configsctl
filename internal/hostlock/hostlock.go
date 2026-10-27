@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -27,6 +28,21 @@ const TTL = 5 * time.Minute
 
 // RenewInterval is the time between two renewals of a held lock.
 const RenewInterval = time.Minute
+
+// sshOptions make ssh fail when the connection does not open in 10 seconds or
+// when the server leaves 3 keepalive requests, sent 5 seconds apart, without
+// an answer.
+var sshOptions = []string{
+	"-o", "BatchMode=yes",
+	"-o", "ConnectTimeout=10",
+	"-o", "ServerAliveInterval=5",
+	"-o", "ServerAliveCountMax=3",
+}
+
+// exitWait is the time that a stopped lock command has to close its output
+// before runScript returns. A child of ssh, such as a ProxyCommand, can keep
+// the output open after ssh ends.
+const exitWait = 5 * time.Second
 
 // Operation is one action of the lock script.
 type Operation string
@@ -122,13 +138,14 @@ func runScript(ctx context.Context, host Host, request command) (answer, error) 
 		}
 		cmd = exec.CommandContext(ctx, "bash", args...)
 	} else {
-		remote := append([]string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host.User + "@" + host.Address, "bash"}, script...)
+		remote := slices.Concat(sshOptions, []string{host.User + "@" + host.Address, "bash"}, script)
 		args, err := checkedArgs(remote)
 		if err != nil {
 			return noLease(), err
 		}
 		cmd = exec.CommandContext(ctx, "ssh", args...)
 	}
+	cmd.WaitDelay = exitWait
 	cmd.Stdin = bytes.NewReader(lockScript)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -139,6 +156,10 @@ func runScript(ctx context.Context, host Host, request command) (answer, error) 
 	}
 	if refusal := scriptRefusal(host.Name, request.op, err, stdout.String(), stderr.String()); refusal != nil {
 		return noLease(), refusal
+	}
+	// The caller logs a command that its context stopped.
+	if ctx.Err() != nil {
+		return noLease(), fmt.Errorf("%s lock on %s: %w", request.op, host.Name, context.Cause(ctx))
 	}
 	slog.Error("hostlock.operation_failed", "host", host.Name, "operation", string(request.op),
 		"stderr", strings.TrimSpace(stderr.String()), "err", err)
