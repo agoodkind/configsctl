@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
+	"go.yaml.in/yaml/v3"
 	"goodkind.io/configsctl/internal/oracle"
-	"gopkg.in/yaml.v3"
 )
 
 // Finding is one input-default or presence violation in a file.

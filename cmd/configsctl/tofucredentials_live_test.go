@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	ansiblevault "github.com/sosedoff/ansible-vault-go"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // This integration test changes only the configured deployment account password.
