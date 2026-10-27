@@ -28,6 +28,17 @@ func DefaultLease() Lease {
 	return Lease{TTL: TTL, RenewInterval: RenewInterval}
 }
 
+// RenewTimeout returns the time limit of one renewal attempt, three quarters
+// of RenewInterval. The default lease gives 45 seconds. That limit is longer
+// than the 10-second ssh connect timeout plus the 30-second guard wait of the
+// lock script, and it ends every renewal round before the next round starts.
+func (l Lease) RenewTimeout() time.Duration {
+	return l.RenewInterval * 3 / 4
+}
+
+// errNoAnswer reports a renewal attempt that did not finish in its time limit.
+var errNoAnswer = errors.New("the host did not answer")
+
 // Set is the locks of one run on its target hosts.
 type Set struct {
 	run        string
@@ -119,32 +130,80 @@ func (s *Set) deadline(name string) time.Time {
 	return s.deadlines[name]
 }
 
+// RenewAll renews every host at the same time and stops each attempt after
+// Lease.RenewTimeout.
 // RenewAll returns an error wrapping ErrLost when another run owns a lock
 // or a host has not answered before its loss deadline.
 func (s *Set) RenewAll(ctx context.Context) error {
 	s.mu.Lock()
 	hosts := append([]Host{}, s.held...)
 	s.mu.Unlock()
+	roundCtx, endRound := context.WithCancel(ctx)
+	defer endRound()
 	request := command{op: Renew, run: s.run, controller: s.controller, lease: s.lease.TTL}
+	results := make(chan renewal, len(hosts))
 	for _, host := range hosts {
-		asked := clock.NowUTC()
-		renewed, err := runScript(ctx, host, request)
-		if err == nil {
-			s.advance(host.Name, asked, renewed.remaining)
+		go func() {
+			asked := clock.NowUTC()
+			defer func() {
+				if r := recover(); r != nil {
+					err := fmt.Errorf("renew lock on %s panicked: %v", host.Name, r)
+					slog.Error("hostlock.renew_panicked", "host", host.Name, "run", s.run, "err", err)
+					results <- renewal{host: host, asked: asked, renewed: noLease(), err: err}
+				}
+			}()
+			renewed, err := s.renewHost(roundCtx, host, request)
+			results <- renewal{host: host, asked: asked, renewed: renewed, err: err}
+		}()
+	}
+	var lost error
+	for range hosts {
+		result := <-results
+		if lost != nil {
 			continue
 		}
-		if errors.Is(err, ErrNotHeld) {
-			slog.Error("hostlock.lost", "host", host.Name, "run", s.run, "err", err)
-			return fmt.Errorf("%w: %s: %w", ErrLost, host.Name, err)
+		if lost = s.record(result); lost != nil {
+			endRound()
 		}
-		deadline := s.deadline(host.Name)
-		if !clock.NowUTC().Before(deadline) {
-			slog.Error("hostlock.lost", "host", host.Name, "run", s.run, "deadline", deadline, "err", err)
-			return fmt.Errorf("%w: %s gave no answer until %s: %w",
-				ErrLost, host.Name, deadline.Format(time.RFC3339), err)
-		}
-		slog.Warn("hostlock.renew_failed", "host", host.Name, "run", s.run, "deadline", deadline, "err", err)
 	}
+	return lost
+}
+
+// renewal is the result of one renewal attempt sent at asked.
+type renewal struct {
+	host    Host
+	asked   time.Time
+	renewed answer
+	err     error
+}
+
+// renewHost runs one renewal of host and stops it after Lease.RenewTimeout.
+func (s *Set) renewHost(ctx context.Context, host Host, request command) (answer, error) {
+	timeout := s.lease.RenewTimeout()
+	attemptCtx, cancel := context.WithTimeoutCause(ctx, timeout, fmt.Errorf("%w within %s", errNoAnswer, timeout))
+	defer cancel()
+	return runScript(attemptCtx, host, request)
+}
+
+// record moves the loss deadline of a renewed host and logs a failed renewal
+// once. record returns an error wrapping ErrLost when the host lock is lost.
+func (s *Set) record(result renewal) error {
+	host, err := result.host.Name, result.err
+	if err == nil {
+		s.advance(host, result.asked, result.renewed.remaining)
+		return nil
+	}
+	if errors.Is(err, ErrNotHeld) {
+		slog.Error("hostlock.lost", "host", host, "run", s.run, "err", err)
+		return fmt.Errorf("%w: %s: %w", ErrLost, host, err)
+	}
+	deadline := s.deadline(host)
+	if !clock.NowUTC().Before(deadline) {
+		slog.Error("hostlock.lost", "host", host, "run", s.run, "deadline", deadline, "err", err)
+		return fmt.Errorf("%w: %s gave no answer until %s: %w",
+			ErrLost, host, deadline.Format(time.RFC3339), err)
+	}
+	slog.Warn("hostlock.renew_failed", "host", host, "run", s.run, "deadline", deadline, "err", err)
 	return nil
 }
 
