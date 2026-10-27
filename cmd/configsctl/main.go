@@ -10,10 +10,12 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 
 	"goodkind.io/configsctl/internal/ansible"
 	"goodkind.io/configsctl/internal/baseline"
@@ -343,7 +345,6 @@ func runTofu(env cmdEnv, args []string) error {
 		}
 		requiredHosts = []string{credential.LockHost}
 	}
-	ctx := context.Background()
 	independent := loaded.Tofu.GuestModules != nil
 	if needsIndependentPlan(independent, safeArgs) {
 		request := tofuLockRequest{
@@ -353,6 +354,8 @@ func runTofu(env cmdEnv, args []string) error {
 		}
 		return runIndependentMutation(env, request, credential, usesCredential, passwordFile)
 	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	commandArgs := safeArgs
 	release := func() {}
 	if tofuMutates(safeArgs) {
@@ -569,7 +572,13 @@ func runSyntaxCheck(_ cmdEnv, args []string) error {
 	if len(args) != 1 {
 		return errors.New("usage: configsctl syntax-check <playbook>")
 	}
-	if err := ansible.SyntaxCheck(args[0]); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := ansible.SyntaxCheck(ctx, args[0]); err != nil {
+		if cause := context.Cause(ctx); cause != nil {
+			slog.Error("syntax_check.stopped", "playbook", args[0], "err", cause)
+			return fmt.Errorf("syntax-check stopped on a signal: %w", cause)
+		}
 		return errors.New("syntax-check failed")
 	}
 	return nil
