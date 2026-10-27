@@ -1,0 +1,9 @@
+#!/bin/sh
+# Stand-in for ssh in the deploy signal test.
+# It skips the ssh options and the destination, then runs the lock script from
+# standard input on this machine with FIXTURE_LOCK_DIR as the lock directory.
+while [ "$#" -gt 0 ] && [ "$1" != "bash" ]; do
+	shift
+done
+# Argument 8 is the remote lock directory. The other arguments pass unchanged.
+exec bash "$2" "$3" "$4" "$5" "$6" "$7" "$FIXTURE_LOCK_DIR" "$9"
