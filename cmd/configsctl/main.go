@@ -9,19 +9,19 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 	"syscall"
 
 	"goodkind.io/configsctl/internal/ansible"
 	"goodkind.io/configsctl/internal/baseline"
 	"goodkind.io/configsctl/internal/lint"
-	"goodkind.io/configsctl/internal/procgroup"
 	"goodkind.io/configsctl/internal/redact"
+	"goodkind.io/configsctl/internal/runlog"
+	"goodkind.io/configsctl/internal/tofuargs"
+	"goodkind.io/configsctl/internal/tofurun"
 	"goodkind.io/configsctl/internal/vault"
 	"goodkind.io/configsctl/internal/version"
 )
@@ -279,15 +279,17 @@ func runDeployWith(env cmdEnv, args []string, deploy deployRunner) error {
 		}
 		defer release()
 	}
-	log, err := openRunLog(opts.Playbook, env.secrets)
+	log, err := runlog.Open(opts.Playbook, env.secrets)
 	if err != nil {
-		return err
+		slog.Error("deploy.log_open_failed", "playbook", opts.Playbook, "err", err)
+		return fmt.Errorf("open the play run log: %w", err)
 	}
 	opts.Output = log
 	log.Announce("Play")
 	deployErr := deploy(opts)
 	if closeErr := log.Close(); closeErr != nil {
-		return closeErr
+		slog.Error("deploy.log_close_failed", "playbook", opts.Playbook, "err", closeErr)
+		return fmt.Errorf("close the play run log: %w", closeErr)
 	}
 	var gateErr *planGateError
 	if errors.As(deployErr, &gateErr) {
@@ -303,7 +305,7 @@ func runDeployWith(env cmdEnv, args []string, deploy deployRunner) error {
 
 const tofuUsage = "usage: configsctl tofu [<workspace>] <tofu args...>"
 
-func runTofu(env cmdEnv, args []string) error {
+func runTofu(_ cmdEnv, args []string) error {
 	if len(args) == 0 {
 		return errors.New(tofuUsage)
 	}
@@ -352,7 +354,7 @@ func runTofu(env cmdEnv, args []string) error {
 			lockTargets: loaded.Tofu.LockTargets, requiredHosts: requiredHosts, independentWorkspaces: true,
 			guestModule: loaded.Tofu.lockGuestModule(workspaceDir),
 		}
-		return runIndependentMutation(env, request, credential, usesCredential, passwordFile)
+		return runIndependentMutation(request, credential, usesCredential, passwordFile)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -378,65 +380,43 @@ func runTofu(env cmdEnv, args []string) error {
 		if err != nil {
 			return err
 		}
-		env.secrets = append(env.secrets, patterns...)
 		restore, err := installRedaction(patterns)
 		if err != nil {
 			return err
 		}
 		defer restore()
 	}
-	return executeTofu(ctx, env, workspaceDir, safeArgs, commandArgs, childEnv)
+	return executeTofu(ctx, workspaceDir, safeArgs, commandArgs, childEnv)
 }
 
-func executeTofu(ctx context.Context, env cmdEnv, workspaceDir string, safeArgs, commandArgs, childEnv []string) error {
-	var err error
-	slog.Info("tofu.command_started", "workspace", workspaceDir, "subcommand", tofuSubcommand(safeArgs))
-	cmd := exec.CommandContext(ctx, "tofu", commandArgs...)
-	cmd.Dir = workspaceDir
-	cmd.Env = childEnv
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	var log *runLog
-	if tofuStreams(safeArgs) {
-		log, err = openRunLog("tofu-"+string(tofuSubcommand(safeArgs)), env.secrets)
-		if err != nil {
-			return err
-		}
-		cmd.Stdout = log
-		cmd.Stderr = log
-		log.Announce("Tofu")
+func executeTofu(ctx context.Context, workspaceDir string, safeArgs, commandArgs, childEnv []string) error {
+	request := tofurun.Request{Root: workspaceDir, Args: commandArgs, Environment: childEnv, DisplayArgs: safeArgs}
+	result, err := tofurun.Run(ctx, request)
+	if errors.Is(err, tofurun.ErrIncomplete) {
+		return tofuFailure(ctx, err, result.LogPath)
 	}
-
-	runErr := procgroup.RunGroup(cmd)
-	logPath := ""
-	var closeErr error
-	if log != nil {
-		logPath = log.Path()
-		closeErr = log.Close()
+	pendingPlan := tofuargs.Subcommand(commandArgs) == tofuargs.Plan &&
+		tofuargs.Subcommand(safeArgs) != tofuargs.Plan && result.ExitCode == tofuPendingExitCode
+	if result.ExitCode != 0 && !pendingPlan {
+		return tofuFailure(ctx, &exitCodeError{code: result.ExitCode}, result.LogPath)
 	}
-	if runErr != nil {
-		var exited *exec.ExitError
-		if tofuSubcommand(commandArgs) == tofuPlan && tofuSubcommand(safeArgs) != tofuPlan &&
-			context.Cause(ctx) == nil && errors.As(runErr, &exited) && exited.ExitCode() == tofuPendingExitCode {
-			if closeErr != nil {
-				return closeErr
-			}
-			return &exitCodeError{code: tofuPendingExitCode}
-		}
-		return tofuFailure(ctx, runErr, logPath)
+	if err != nil {
+		slog.Error("tofu.run_failed", "workspace", workspaceDir, "err", err)
+		return fmt.Errorf("run OpenTofu in %s: %w", workspaceDir, err)
 	}
-	return closeErr
+	if pendingPlan {
+		return &exitCodeError{code: tofuPendingExitCode}
+	}
+	return nil
 }
 
 const tofuCrashExitCode = 11
 
 func tofuFailure(ctx context.Context, runErr error, logPath string) error {
 	cause := context.Cause(ctx)
-	var exitErr *exec.ExitError
+	var exitErr *exitCodeError
 	exited := errors.As(runErr, &exitErr)
-	if cause == nil && exited && exitErr.ExitCode() == tofuCrashExitCode {
+	if cause == nil && exited && exitErr.code == tofuCrashExitCode {
 		return tofuCrashError(runErr, logPath)
 	}
 	slog.Error("tofu command failed", "err", runErr)
@@ -447,7 +427,7 @@ func tofuFailure(ctx context.Context, runErr error, logPath string) error {
 		return fmt.Errorf("tofu stopped: %w", cause)
 	}
 	if exited {
-		return &exitCodeError{code: exitErr.ExitCode()}
+		return exitErr
 	}
 	return errors.New("tofu failed")
 }
@@ -460,53 +440,6 @@ func tofuCrashError(runErr error, logPath string) error {
 	}
 	slog.Error("tofu.crashed", "exit_code", tofuCrashExitCode, "log", logPath, "err", runErr)
 	return fmt.Errorf("OpenTofu crashed; the tofu output is in %s: %w", logPath, crash)
-}
-
-// tofuCommand is the subcommand name a tofu invocation carries.
-type tofuCommand string
-
-// The tofu subcommands whose output destination this tool decides. Every other
-// subcommand keeps the terminal.
-const (
-	tofuPlan    tofuCommand = "plan"
-	tofuRefresh tofuCommand = "refresh"
-	tofuApply   tofuCommand = "apply"
-	tofuDestroy tofuCommand = "destroy"
-)
-
-// tofuSubcommand returns the first argument that is not a flag, which is the
-// subcommand tofu runs.
-func tofuSubcommand(args []string) tofuCommand {
-	for _, arg := range args {
-		if !strings.HasPrefix(arg, "-") {
-			return tofuCommand(arg)
-		}
-	}
-	return ""
-}
-
-// tofuStreams reports whether this invocation produces a long stream of progress
-// without stopping for an answer, which is what makes a run log the right
-// destination. A run that stops at an approval prompt keeps the terminal
-// instead: the prompt is the output, and an operator cannot answer a question
-// they cannot see. Unlisted subcommands keep the terminal, so a tofu command
-// that grows a prompt later does not silently break.
-func tofuStreams(args []string) bool {
-	switch tofuSubcommand(args) {
-	case tofuPlan, tofuRefresh:
-		return true
-	case tofuApply, tofuDestroy:
-		return hasTofuAutoApprove(args)
-	default:
-		return false
-	}
-}
-
-// hasTofuAutoApprove reports whether the arguments skip the approval prompt. It
-// accepts every spelling tofu does: one or two leading dashes, bare or with an
-// explicit value.
-func hasTofuAutoApprove(args []string) bool {
-	return tofuBooleanArgument(args, "auto-approve", false)
 }
 
 // exitCodeError carries a child process exit status to main, which exits with
@@ -663,6 +596,17 @@ func modeFlag(args []string) string {
 	return ""
 }
 
+// installRedaction invokes tofurun.InstallRedaction and logs and wraps any
+// error it returns.
+func installRedaction(patterns []redact.Pattern) (func(), error) {
+	restore, err := tofurun.InstallRedaction(patterns)
+	if err != nil {
+		slog.Error("redaction.install_failed", "err", err)
+		return nil, fmt.Errorf("install output redaction: %w", err)
+	}
+	return restore, nil
+}
+
 // shortSecretError marks a fail-closed validation failure. It names the key,
 // never the value.
 type shortSecretError struct{ key string }
@@ -705,82 +649,4 @@ func loadSecretPatterns() ([]redact.Pattern, error) {
 		return nil, &shortSecretError{key: badKey}
 	}
 	return patterns, nil
-}
-
-// lockedWriter serializes writes to a shared real descriptor under a mutex, so
-// the stdout and stderr redactors never interleave a partial write.
-type lockedWriter struct {
-	mu  *sync.Mutex
-	dst *os.File
-}
-
-func (l *lockedWriter) Write(p []byte) (int, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	n, err := l.dst.Write(p)
-	if err != nil {
-		return n, fmt.Errorf("locked write: %w", err)
-	}
-	return n, nil
-}
-
-// installRedaction routes [os.Stdout] and [os.Stderr] through redactors that
-// share one mutex, so writes to the two real streams never interleave mid-write.
-// With no patterns it is a no-op and leaves the real descriptors in place. It
-// returns a restore func to call on exit. A pipe-creation failure is fatal: with
-// secrets present and no way to filter, the tool must not run, so the error
-// propagates and no command dispatches.
-func installRedaction(patterns []redact.Pattern) (func(), error) {
-	realStdout, realStderr := os.Stdout, os.Stderr
-	if len(patterns) == 0 {
-		return func() {}, nil
-	}
-	outR, outW, err := os.Pipe()
-	if err != nil {
-		slog.Error("stdout pipe failed", "err", err)
-		return nil, fmt.Errorf("stdout pipe: %w", err)
-	}
-	errR, errW, err := os.Pipe()
-	if err != nil {
-		_ = outR.Close()
-		_ = outW.Close()
-		slog.Error("stderr pipe failed", "err", err)
-		return nil, fmt.Errorf("stderr pipe: %w", err)
-	}
-
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	drain := func(src *os.File, dst *os.File) {
-		defer wg.Done()
-		w := redact.New(&lockedWriter{mu: &mu, dst: dst}, patterns)
-		_, _ = io.Copy(w, src)
-		_ = w.Close()
-	}
-	launch := func(src *os.File, dst *os.File) {
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					slog.Error("redaction drain panicked", "err", fmt.Errorf("%v", r))
-				}
-			}()
-			drain(src, dst)
-		}()
-	}
-	wg.Add(2)
-	launch(outR, realStdout)
-	launch(errR, realStderr)
-
-	os.Stdout = outW
-	os.Stderr = errW
-
-	restore := func() {
-		os.Stdout = realStdout
-		os.Stderr = realStderr
-		_ = outW.Close()
-		_ = errW.Close()
-		wg.Wait()
-		_ = outR.Close()
-		_ = errR.Close()
-	}
-	return restore, nil
 }

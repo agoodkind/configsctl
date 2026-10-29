@@ -8,7 +8,7 @@ import (
 	"slices"
 	"strings"
 
-	"goodkind.io/configsctl/internal/hostlock"
+	"goodkind.io/configsctl/hostlock"
 )
 
 const (

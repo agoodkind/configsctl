@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"goodkind.io/configsctl/internal/hostlock"
+	"goodkind.io/configsctl/hostlock"
 	"goodkind.io/configsctl/internal/tofulock"
 )
 

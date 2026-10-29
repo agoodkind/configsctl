@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"goodkind.io/configsctl/internal/hostlock"
+	"goodkind.io/configsctl/hostlock"
 )
 
 const lockUsage = "usage: configsctl lock extend --host <inventory host> --seconds <seconds>"

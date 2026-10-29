@@ -10,10 +10,11 @@ import (
 	"github.com/hashicorp/hcl/v2"
 	"github.com/zclconf/go-cty/cty"
 
+	"goodkind.io/configsctl/hostlock"
 	"goodkind.io/configsctl/internal/ansible"
 	"goodkind.io/configsctl/internal/dellcredential"
-	"goodkind.io/configsctl/internal/hostlock"
 	"goodkind.io/configsctl/internal/redact"
+	"goodkind.io/configsctl/internal/tofuargs"
 )
 
 type tofuCredentialSettings struct {
@@ -43,10 +44,10 @@ func validateTofuCredentials(settings map[string]tofuCredentialSettings) error {
 }
 
 func credentialCommand(args []string) bool {
-	switch tofuSubcommand(args) {
-	case tofuApply, tofuDestroy:
+	switch tofuargs.Subcommand(args) {
+	case tofuargs.Apply, tofuargs.Destroy:
 		return true
-	case tofuPlan, tofuRefresh, "import":
+	case tofuargs.Plan, tofuargs.Refresh, "import":
 		return true
 	default:
 		return false

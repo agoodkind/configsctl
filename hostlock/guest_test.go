@@ -3,7 +3,7 @@ package hostlock_test
 import (
 	"testing"
 
-	"goodkind.io/configsctl/internal/hostlock"
+	"goodkind.io/configsctl/hostlock"
 )
 
 func TestGuestLockRefusesUnsafeVMID(t *testing.T) {

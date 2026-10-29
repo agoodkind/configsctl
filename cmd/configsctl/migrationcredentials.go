@@ -12,9 +12,9 @@ import (
 	"slices"
 	"strings"
 
+	"goodkind.io/configsctl/hostlock"
 	"goodkind.io/configsctl/internal/ansible"
 	"goodkind.io/configsctl/internal/dellcredential"
-	"goodkind.io/configsctl/internal/hostlock"
 	"goodkind.io/configsctl/internal/redact"
 	"goodkind.io/configsctl/internal/statemigration"
 	"goodkind.io/configsctl/internal/vault"

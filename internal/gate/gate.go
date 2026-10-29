@@ -13,9 +13,9 @@ import (
 	"regexp"
 	"strings"
 
+	"goodkind.io/configsctl/hostlock"
 	"goodkind.io/configsctl/internal/ansible"
 	"goodkind.io/configsctl/internal/clock"
-	"goodkind.io/configsctl/internal/hostlock"
 	"goodkind.io/configsctl/internal/runid"
 )
 
