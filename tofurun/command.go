@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -19,8 +20,18 @@ const (
 	applyCommand     = "apply"
 )
 
-// flagRule lists the flags of one subcommand. allowed is nil when the
-// subcommand accepts any flag. required maps a flag to its required value.
+// Run checks these flags beyond the flag rules.
+const (
+	jsonFlag        = "json"
+	lockFlag        = "lock"
+	outFlag         = "out"
+	parallelismFlag = "parallelism"
+	trueValue       = "true"
+	falseValue      = "false"
+)
+
+// flagRule lists the flags that one subcommand accepts. required maps a flag
+// to its required value.
 type flagRule struct {
 	allowed  []string
 	required map[string]string
@@ -29,19 +40,24 @@ type flagRule struct {
 var flagRules = map[string]flagRule{
 	initCommand: {
 		allowed:  []string{"input", "lockfile", "backend-config", "backend", "no-color", "reconfigure"},
-		required: map[string]string{"input": "false", "lockfile": "readonly"},
+		required: map[string]string{"input": falseValue, "lockfile": "readonly"},
 	},
 	workspaceCommand: {allowed: []string{"no-color"}, required: nil},
-	planCommand:      {allowed: nil, required: map[string]string{"input": "false"}},
-	showCommand:      {allowed: []string{"no-color", "json"}, required: nil},
-	validateCommand:  {allowed: []string{"no-color", "json"}, required: nil},
+	planCommand: {
+		allowed: []string{
+			"input", "no-color", "detailed-exitcode", parallelismFlag, outFlag, "var-file", lockFlag, "lock-timeout",
+		},
+		required: map[string]string{"input": falseValue, "no-color": trueValue, "detailed-exitcode": trueValue},
+	},
+	showCommand:     {allowed: []string{"no-color", jsonFlag}, required: nil},
+	validateCommand: {allowed: []string{"no-color", jsonFlag}, required: nil},
 	fmtCommand: {
 		allowed:  []string{"check", "diff", "recursive", "no-color", "list"},
-		required: map[string]string{"check": "true"},
+		required: map[string]string{"check": trueValue},
 	},
 	applyCommand: {
-		allowed:  []string{"input", "parallelism", "no-color", "lock-timeout", "compact-warnings", "auto-approve"},
-		required: map[string]string{"input": "false"},
+		allowed:  []string{"input", parallelismFlag, "no-color", "lock-timeout"},
+		required: map[string]string{"input": falseValue},
 	},
 }
 
@@ -86,7 +102,7 @@ func parseCommand(args []string) (command, error) {
 		}
 		name, value, found := strings.Cut(strings.TrimLeft(argument, "-"), "=")
 		if !found {
-			value = "true"
+			value = trueValue
 		}
 		parsed.flags = append(parsed.flags, flag{name: name, value: value})
 	}
@@ -126,7 +142,7 @@ func (c command) value(name string) (string, bool) {
 func (c command) check(request Request, scoped bool) error {
 	rule := flagRules[c.name]
 	for _, item := range c.flags {
-		if rule.allowed != nil && !slices.Contains(rule.allowed, item.name) {
+		if !slices.Contains(rule.allowed, item.name) {
 			return rejection("tofurun.flag_refused", fmt.Sprintf("OpenTofu %s does not accept -%s here", c.name, item.name))
 		}
 	}
@@ -141,17 +157,17 @@ func (c command) check(request Request, scoped bool) error {
 			return rejection("tofurun.workspace_refused", fmt.Sprintf("workspace select requires exactly the workspace %q", request.Workspace))
 		}
 	case planCommand:
-		if lock, _ := c.value("lock"); scoped && lock == "false" {
-			return rejection("tofurun.lock_refused", "a plan with a host lock scope requires backend locking")
-		}
-		if len(c.positionals) != 0 {
-			return rejection("tofurun.positional_refused", "OpenTofu plan does not accept a positional argument")
+		if err := c.checkPlan(scoped); err != nil {
+			return err
 		}
 	case showCommand:
 		return c.checkShow(request.OutputMode)
 	case applyCommand:
 		if len(c.positionals) != 1 {
 			return rejection("tofurun.saved_plan_missing", "OpenTofu apply requires exactly one saved plan")
+		}
+		if err := c.checkParallelism(); err != nil {
+			return err
 		}
 	default:
 		if len(c.positionals) != 0 {
@@ -168,14 +184,49 @@ func (c command) check(request Request, scoped bool) error {
 	}
 }
 
+// checkPlan requires a positive -parallelism and an -out path, and it refuses
+// -lock=false with a host lock scope.
+func (c command) checkPlan(scoped bool) error {
+	if lock, _ := c.value(lockFlag); scoped && lock == falseValue {
+		return rejection("tofurun.lock_refused", "a plan with a host lock scope requires backend locking")
+	}
+	if len(c.positionals) != 0 {
+		return rejection("tofurun.positional_refused", "OpenTofu plan does not accept a positional argument")
+	}
+	if out, _ := c.value(outFlag); out == "" || out == trueValue {
+		return rejection("tofurun.flag_missing", "OpenTofu plan requires -out=<private-plan>")
+	}
+	return c.checkParallelism()
+}
+
+// checkParallelism requires -parallelism with a positive integer.
+func (c command) checkParallelism() error {
+	text, _ := c.value(parallelismFlag)
+	parallelism, err := strconv.Atoi(text)
+	if err != nil || parallelism < 1 {
+		return rejection("tofurun.flag_missing", fmt.Sprintf("OpenTofu %s requires -parallelism=N with a positive integer N", c.name))
+	}
+	return nil
+}
+
+// savedPlanOutput returns the -out path of a plan, or an empty string for
+// another command.
+func (c command) savedPlanOutput() string {
+	if c.name != planCommand {
+		return ""
+	}
+	out, _ := c.value(outFlag)
+	return out
+}
+
 func (c command) checkShow(mode OutputMode) error {
 	if len(c.positionals) > 1 {
 		return rejection("tofurun.positional_refused", "OpenTofu show accepts at most one saved plan")
 	}
-	_, isJSON := c.value("json")
+	jsonValue, isJSON := c.value(jsonFlag)
 	switch mode {
 	case PrivateJSON:
-		if !isJSON || len(c.positionals) != 1 || len(c.flags) != 1 {
+		if jsonValue != trueValue || len(c.positionals) != 1 || len(c.flags) != 1 {
 			return rejection("tofurun.output_refused", "private_json output requires show -json <saved-plan>")
 		}
 	case RedactedProgress:

@@ -24,7 +24,8 @@ type output struct {
 // openOutput opens the private run log and, for PrivateJSON, creates
 // JSONPath with mode 0600. RedactedProgress uses one writer for standard
 // output and standard error. The writer records their writes in order.
-func openOutput(request Request, parsed command, patterns []redact.Pattern) (*output, error) {
+func openOutput(request Request, parsed command, built environment) (*output, error) {
+	patterns := built.patterns
 	log, err := runlog.Open("tofu-"+runlog.Name(parsed.name), patterns)
 	if err != nil {
 		slog.Error("tofurun.log_open_failed", "root", request.Root, "err", err)
@@ -44,7 +45,7 @@ func openOutput(request Request, parsed command, patterns []redact.Pattern) (*ou
 	if request.OutputMode != PrivateJSON {
 		return sink, nil
 	}
-	file, err := createPrivateFile(request.JSONPath)
+	file, err := createPrivateFile(built.tmpdir, request.JSONPath)
 	if err != nil {
 		closeErr := sink.close(false)
 		return nil, errors.Join(err, closeErr)
@@ -53,8 +54,20 @@ func openOutput(request Request, parsed command, patterns []redact.Pattern) (*ou
 	return sink, nil
 }
 
-func createPrivateFile(path string) (*os.File, error) {
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, privateFileMode)
+// createPrivateFile checks path again with privateOutputPath, opens an
+// [os.Root] at tmpdir, and creates the file through that root.
+func createPrivateFile(tmpdir, path string) (*os.File, error) {
+	relative, err := privateOutputPath("JSONPath", tmpdir, path)
+	if err != nil {
+		return nil, err
+	}
+	root, err := os.OpenRoot(tmpdir)
+	if err != nil {
+		slog.Error("tofurun.json_create_failed", "path", path, "err", err)
+		return nil, fmt.Errorf("open TMPDIR for the private JSON file: %w", err)
+	}
+	defer closeRoot(root)
+	file, err := root.OpenFile(relative, os.O_WRONLY|os.O_CREATE|os.O_EXCL, privateFileMode)
 	if err != nil {
 		slog.Error("tofurun.json_create_failed", "path", path, "err", err)
 		return nil, fmt.Errorf("create the private JSON file: %w", err)

@@ -58,9 +58,16 @@ func checkPrivateDirectory(label, path string) error {
 		return rejection("tofurun.directory_refused", label+" must be a clean absolute path")
 	}
 	info, err := os.Lstat(path)
-	switch {
-	case err != nil:
+	if err != nil {
 		return rejection("tofurun.directory_refused", fmt.Sprintf("%s: %v", label, err))
+	}
+	return checkPrivateDirectoryInfo(label, path, info)
+}
+
+// checkPrivateDirectoryInfo applies the checkPrivateDirectory rules to info
+// from Lstat.
+func checkPrivateDirectoryInfo(label, path string, info fs.FileInfo) error {
+	switch {
 	case !info.IsDir():
 		return rejection("tofurun.directory_refused", fmt.Sprintf("%s %s is not a directory", label, path))
 	case info.Mode().Perm()&groupOrOtherAccess != 0:
@@ -140,17 +147,51 @@ func checkOutput(request Request, parsed command, built environment) error {
 	if parsed.name != showCommand {
 		return rejection("tofurun.output_refused", "private_json output requires show -json <saved-plan>")
 	}
-	path := request.JSONPath
-	if !cleanAbsolute(path) || !within(built.tmpdir, path) || path == built.tmpdir {
-		return rejection("tofurun.json_path_refused", "JSONPath must be a clean absolute path below TMPDIR")
+	_, err := privateOutputPath("JSONPath", built.tmpdir, request.JSONPath)
+	return err
+}
+
+// privateOutputPath returns path relative to tmpdir for a new output file.
+// It opens an [os.Root] at tmpdir and checks each directory between tmpdir and
+// the file. Each directory must be private and must not be a symbolic link.
+// The file must not exist.
+func privateOutputPath(label, tmpdir, path string) (string, error) {
+	if !cleanAbsolute(path) || !within(tmpdir, path) || path == tmpdir {
+		return "", rejection("tofurun.output_path_refused", label+" must be a clean absolute path below TMPDIR")
 	}
-	if err := checkPrivateDirectory("the JSONPath directory", filepath.Dir(path)); err != nil {
-		return err
+	relative, err := filepath.Rel(tmpdir, path)
+	if err != nil {
+		return "", rejection("tofurun.output_path_refused", fmt.Sprintf("%s: %v", label, err))
 	}
-	if _, err := os.Lstat(path); !errors.Is(err, fs.ErrNotExist) {
-		return rejection("tofurun.json_path_refused", fmt.Sprintf("JSONPath %s already exists", path))
+	root, err := os.OpenRoot(tmpdir)
+	if err != nil {
+		return "", rejection("tofurun.output_path_refused", fmt.Sprintf("open TMPDIR for %s: %v", label, err))
 	}
-	return nil
+	defer closeRoot(root)
+	directory := ""
+	for part := range strings.SplitSeq(filepath.Dir(relative), string(filepath.Separator)) {
+		if part == "." {
+			break
+		}
+		directory = filepath.Join(directory, part)
+		info, err := root.Lstat(directory)
+		if err != nil {
+			return "", rejection("tofurun.output_path_refused", fmt.Sprintf("%s directory %s: %v", label, directory, err))
+		}
+		if err := checkPrivateDirectoryInfo(label+" directory", filepath.Join(tmpdir, directory), info); err != nil {
+			return "", err
+		}
+	}
+	if _, err := root.Lstat(relative); !errors.Is(err, fs.ErrNotExist) {
+		return "", rejection("tofurun.output_path_refused", fmt.Sprintf("cannot use %s %s: the output file must not exist", label, path))
+	}
+	return relative, nil
+}
+
+func closeRoot(root *os.Root) {
+	if err := root.Close(); err != nil {
+		slog.Warn("tofurun.close_failed", "path", root.Name(), "err", err)
+	}
 }
 
 // copySavedPlan copies the saved plan of show or apply to a new private

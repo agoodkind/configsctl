@@ -146,7 +146,7 @@ func (c ciCheckout) prepare(t *testing.T, config string) string {
 	}
 	requireCIExit(t, c.tofu(t, config, "workspace", "select", "-no-color", ciWorkspace), 0, "ci tofu workspace select")
 	planPath := filepath.Join(c.tmpdir, "ci.tfplan")
-	planned := c.tofu(t, config, "plan", "-input=false", "-no-color", "-detailed-exitcode", "-out="+planPath)
+	planned := c.tofu(t, config, "plan", "-input=false", "-no-color", "-detailed-exitcode", "-parallelism=1", "-out="+planPath)
 	requireCIExit(t, planned, 2, "ci tofu plan")
 	if strings.Contains(planned.stdout, ciPassphraseValue) || !strings.Contains(planned.stdout, "<redacted:"+ciPassphraseName+">") {
 		t.Fatalf("ci tofu plan did not redact the passphrase in stdout:\n%s", planned.stdout)
@@ -189,7 +189,7 @@ func TestCITofuRejectsMutationCommands(t *testing.T) {
 	config := checkout.writeConfig(t, "config.json", ciProgressConfig)
 	planPath := checkout.prepare(t, config)
 	commands := map[string][]string{
-		"apply":            {"apply", "-input=false", planPath},
+		"apply":            {"apply", "-input=false", "-parallelism=1", planPath},
 		"auto apply":       {"apply", "-input=false", "-auto-approve"},
 		"destroy":          {"destroy", "-auto-approve"},
 		"import":           {"import", "terraform_data.item", "id"},

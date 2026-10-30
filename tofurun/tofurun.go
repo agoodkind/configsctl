@@ -100,6 +100,7 @@ type prepared struct {
 	args        []string
 	environment environment
 	removals    []string
+	scope       *hostlock.Scope
 }
 
 func prepare(request Request, scope *hostlock.Scope) (*prepared, error) {
@@ -114,11 +115,8 @@ func prepare(request Request, scope *hostlock.Scope) (*prepared, error) {
 	if err := parsed.check(request, scope != nil); err != nil {
 		return nil, err
 	}
-	if parsed.mutates() {
-		if err := scope.Check(request.RequiredHosts); err != nil {
-			slog.Error("tofurun.mutation_refused", "subcommand", parsed.name, "err", err)
-			return nil, fmt.Errorf("start OpenTofu %s: %w", parsed.name, err)
-		}
+	if err := checkScope(parsed, scope, request.RequiredHosts); err != nil {
+		return nil, err
 	}
 	if err := checkLocations(request); err != nil {
 		return nil, err
@@ -130,23 +128,47 @@ func prepare(request Request, scope *hostlock.Scope) (*prepared, error) {
 	if err := checkSecretArguments(request.Args, built.patterns); err != nil {
 		return nil, err
 	}
-	if err := checkOutput(request, parsed, built); err != nil {
+	if err := checkFiles(request, parsed, built); err != nil {
 		return nil, err
-	}
-	if parsed.usesWorkspace() {
-		if err := checkSelectedWorkspace(request.Root, request.Workspace); err != nil {
-			return nil, err
-		}
 	}
 	result := &prepared{
 		request: request, command: parsed, binary: binary, args: args,
-		environment: built, removals: nil,
+		environment: built, removals: nil, scope: scope,
 	}
 	if err := result.copySavedPlan(); err != nil {
 		result.cleanup()
 		return nil, err
 	}
 	return result, nil
+}
+
+// checkScope checks scope for a mutation. prepare and execute both run this
+// check, and execute runs it immediately before starting OpenTofu.
+func checkScope(parsed command, scope *hostlock.Scope, requiredHosts []string) error {
+	if !parsed.mutates() {
+		return nil
+	}
+	if err := scope.Check(requiredHosts); err != nil {
+		slog.Error("tofurun.mutation_refused", "subcommand", parsed.name, "err", err)
+		return fmt.Errorf("start OpenTofu %s: %w", parsed.name, err)
+	}
+	return nil
+}
+
+// checkFiles checks JSONPath, the plan -out path, and the selected workspace.
+func checkFiles(request Request, parsed command, built environment) error {
+	if err := checkOutput(request, parsed, built); err != nil {
+		return err
+	}
+	if out := parsed.savedPlanOutput(); out != "" {
+		if _, err := privateOutputPath("the plan -out path", built.tmpdir, out); err != nil {
+			return err
+		}
+	}
+	if parsed.usesWorkspace() {
+		return checkSelectedWorkspace(request.Root, request.Workspace)
+	}
+	return nil
 }
 
 // cleanup removes the private saved plan copies.
@@ -163,9 +185,12 @@ func (p *prepared) execute(ctx context.Context) (Result, error) {
 	if err != nil {
 		return Result{ExitCode: 0, LogPath: ""}, err
 	}
-	sink, err := openOutput(p.request, p.command, p.environment.patterns)
+	sink, err := openOutput(p.request, p.command, p.environment)
 	if err != nil {
 		return Result{ExitCode: 0, LogPath: ""}, err
+	}
+	if err := checkScope(p.command, p.scope, p.request.RequiredHosts); err != nil {
+		return Result{ExitCode: 0, LogPath: sink.logPath}, errors.Join(err, sink.close(false))
 	}
 	binary, args := p.binary, p.args
 	cmd := exec.CommandContext(ctx, binary, args...)

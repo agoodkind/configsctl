@@ -228,10 +228,10 @@ tofu:
 Run `configsctl ci tofu` from the configuration checkout root. The OpenTofu root must be inside that checkout. The command finds `tofu` in `PATH` and does not read the vault or its password file.
 
 ```sh
-configsctl ci tofu --config <file> --root <root> --workspace <workspace> -- plan -input=false
+configsctl ci tofu --config <file> --root <root> --workspace <workspace> -- plan -input=false -no-color -detailed-exitcode -parallelism=<n> -out=<private-plan>
 ```
 
-Set `TF_IN_AUTOMATION=1` and use private directories for `HOME` and `TMPDIR`. The command accepts `init`, `workspace select`, `plan`, `show`, `validate`, and `fmt -check`. It refuses `apply` because the CI command does not acquire host locks. Select the declared workspace before running `plan` or `show` without a saved plan. Use `-name=value` for flags with values. The command returns the OpenTofu exit status.
+Set `TF_IN_AUTOMATION=1` and use private directories for `HOME` and `TMPDIR`. `plan` accepts only `-input`, `-no-color`, `-detailed-exitcode`, `-parallelism`, `-out`, `-var-file`, `-lock`, and `-lock-timeout` and requires `-input=false`, `-no-color`, `-detailed-exitcode`, a positive `-parallelism`, and an `-out` path for a new file in a private directory below `TMPDIR`; `apply` accepts only `-input`, `-parallelism`, `-no-color`, and `-lock-timeout` and requires `-input=false` and a positive `-parallelism`. The command accepts `init`, `workspace select`, `plan`, `show`, `validate`, and `fmt -check`. It refuses `apply` because the CI command does not acquire host locks. Select the declared workspace before running `plan` or `show` without a saved plan. Use `-name=value` for flags with values. The command returns the OpenTofu exit status.
 
 The configuration is a JSON object with these keys:
 
