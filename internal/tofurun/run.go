@@ -60,7 +60,9 @@ func Run(ctx context.Context, request Request) (Result, error) {
 	if len(display) == 0 {
 		display = request.Args
 	}
-	cmd := command(ctx, request.Root, display, request.Args)
+	slog.Info("tofu.command_started", "workspace", request.Root, "subcommand", tofuargs.Subcommand(display))
+	args := request.Args
+	cmd := exec.CommandContext(ctx, "tofu", args...)
 	cmd.Dir = request.Root
 	cmd.Env = environment
 	cmd.Stdin = os.Stdin
@@ -93,12 +95,5 @@ func Run(ctx context.Context, request Request) (Result, error) {
 		return result, closeErr
 	}
 	slog.Error("tofu.command_incomplete", "workspace", request.Root, "err", runErr)
-	return result, fmt.Errorf("%w: %w", ErrIncomplete, runErr)
-}
-
-// command logs the root and subcommand from display at command start.
-// It builds an [exec.Cmd] for tofu with args.
-func command(ctx context.Context, root string, display, args []string) *exec.Cmd {
-	slog.Info("tofu.command_started", "workspace", root, "subcommand", tofuargs.Subcommand(display))
-	return exec.CommandContext(ctx, "tofu", args...)
+	return result, fmt.Errorf("%w: %w", ErrIncomplete, errors.Join(runErr, closeErr))
 }
