@@ -41,20 +41,20 @@ func needsIndependentPlan(independent bool, args []string) bool {
 	return independent && tofuMutates(args) && savedPlanCandidate(args) == ""
 }
 
-func runIndependentMutation(request tofuLockRequest, credential tofuCredentialSettings, usesCredential bool, passwordFile string) error {
+func runIndependentMutation(env cmdEnv, request tofuLockRequest, credential tofuCredentialSettings, usesCredential bool, passwordFile string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if tofuargs.BooleanArgument(request.args, "help", false) || tofuargs.BooleanArgument(request.args, "h", false) {
-		return executeTofu(ctx, request.workspaceDir, request.args, request.args, request.env)
+		return executeTofu(ctx, env, request.workspaceDir, request.args, request.args, request.env)
 	}
 	targets, err := mutationLockTargets(ctx, request)
 	if err != nil {
 		return err
 	}
 	if usesCredential {
-		return runCredentialMutation(ctx, request, targets, credential, passwordFile)
+		return runCredentialMutation(ctx, env, request, targets, credential, passwordFile)
 	}
-	return applyIndependentPlan(ctx, request, targets)
+	return applyIndependentPlan(ctx, env, request, targets)
 }
 
 func mutationLockTargets(ctx context.Context, request tofuLockRequest) (tofulock.Targets, error) {
@@ -70,7 +70,7 @@ func mutationLockTargets(ctx context.Context, request tofuLockRequest) (tofulock
 	return guestLockTargets(inv, request, targets)
 }
 
-func runCredentialMutation(ctx context.Context, request tofuLockRequest, targets tofulock.Targets, credential tofuCredentialSettings, passwordFile string) error {
+func runCredentialMutation(ctx context.Context, env cmdEnv, request tofuLockRequest, targets tofulock.Targets, credential tofuCredentialSettings, passwordFile string) error {
 	if os.Getenv(runid.EnvVar) == "" {
 		identifier, err := runid.New()
 		if err != nil {
@@ -93,15 +93,16 @@ func runCredentialMutation(ctx context.Context, request tofuLockRequest, targets
 	if err != nil {
 		return err
 	}
+	env.secrets = append(env.secrets, patterns...)
 	restore, err := installRedaction(patterns)
 	if err != nil {
 		return err
 	}
 	defer restore()
-	return applyIndependentPlan(locked, request, targets)
+	return applyIndependentPlan(locked, env, request, targets)
 }
 
-func applyIndependentPlan(ctx context.Context, request tofuLockRequest, targets tofulock.Targets) error {
+func applyIndependentPlan(ctx context.Context, env cmdEnv, request tofuLockRequest, targets tofulock.Targets) error {
 	dir, err := os.MkdirTemp("", "configsctl-mutation-*")
 	if err != nil {
 		slog.Error("tofu.mutation.plan_directory_failed", "err", err)
@@ -113,7 +114,7 @@ func applyIndependentPlan(ctx context.Context, request tofuLockRequest, targets 
 	if err != nil {
 		return err
 	}
-	planErr := executeTofu(ctx, request.workspaceDir, request.args, planArgs, request.env)
+	planErr := executeTofu(ctx, env, request.workspaceDir, request.args, planArgs, request.env)
 	changed := false
 	if planErr != nil {
 		var status *exitCodeError
@@ -142,7 +143,7 @@ func applyIndependentPlan(ctx context.Context, request tofuLockRequest, targets 
 		return err
 	}
 	defer release()
-	return executeTofu(locked, request.workspaceDir, displayArgs, commandArgs, request.env)
+	return executeTofu(locked, env, request.workspaceDir, displayArgs, commandArgs, request.env)
 }
 
 func (t tofuSettings) lockGuestModule(workspaceDir string) string {

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"syscall"
 
 	"goodkind.io/configsctl/internal/ansible"
@@ -305,7 +306,7 @@ func runDeployWith(env cmdEnv, args []string, deploy deployRunner) error {
 
 const tofuUsage = "usage: configsctl tofu [<workspace>] <tofu args...>"
 
-func runTofu(_ cmdEnv, args []string) error {
+func runTofu(env cmdEnv, args []string) error {
 	if len(args) == 0 {
 		return errors.New(tofuUsage)
 	}
@@ -354,7 +355,7 @@ func runTofu(_ cmdEnv, args []string) error {
 			lockTargets: loaded.Tofu.LockTargets, requiredHosts: requiredHosts, independentWorkspaces: true,
 			guestModule: loaded.Tofu.lockGuestModule(workspaceDir),
 		}
-		return runIndependentMutation(request, credential, usesCredential, passwordFile)
+		return runIndependentMutation(env, request, credential, usesCredential, passwordFile)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -380,17 +381,20 @@ func runTofu(_ cmdEnv, args []string) error {
 		if err != nil {
 			return err
 		}
+		env.secrets = append(env.secrets, patterns...)
 		restore, err := installRedaction(patterns)
 		if err != nil {
 			return err
 		}
 		defer restore()
 	}
-	return executeTofu(ctx, workspaceDir, safeArgs, commandArgs, childEnv)
+	return executeTofu(ctx, env, workspaceDir, safeArgs, commandArgs, childEnv)
 }
 
-func executeTofu(ctx context.Context, workspaceDir string, safeArgs, commandArgs, childEnv []string) error {
-	request := tofurun.Request{Root: workspaceDir, Args: commandArgs, Environment: childEnv, DisplayArgs: safeArgs}
+func executeTofu(ctx context.Context, env cmdEnv, workspaceDir string, safeArgs, commandArgs, childEnv []string) error {
+	request := tofurun.Request{
+		Root: workspaceDir, Args: commandArgs, Environment: childEnv, DisplayArgs: safeArgs, Patterns: env.secrets,
+	}
 	result, err := tofurun.Run(ctx, request)
 	if errors.Is(err, tofurun.ErrIncomplete) {
 		return tofuFailure(ctx, err, result.LogPath)
@@ -596,17 +600,6 @@ func modeFlag(args []string) string {
 	return ""
 }
 
-// installRedaction invokes tofurun.InstallRedaction and logs and wraps any
-// error it returns.
-func installRedaction(patterns []redact.Pattern) (func(), error) {
-	restore, err := tofurun.InstallRedaction(patterns)
-	if err != nil {
-		slog.Error("redaction.install_failed", "err", err)
-		return nil, fmt.Errorf("install output redaction: %w", err)
-	}
-	return restore, nil
-}
-
 // shortSecretError marks a fail-closed validation failure. It names the key,
 // never the value.
 type shortSecretError struct{ key string }
@@ -649,4 +642,77 @@ func loadSecretPatterns() ([]redact.Pattern, error) {
 		return nil, &shortSecretError{key: badKey}
 	}
 	return patterns, nil
+}
+
+// lockedWriter serializes writes to a descriptor with a shared mutex.
+type lockedWriter struct {
+	mu  *sync.Mutex
+	dst *os.File
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n, err := l.dst.Write(p)
+	if err != nil {
+		return n, fmt.Errorf("locked write: %w", err)
+	}
+	return n, nil
+}
+
+// installRedaction filters [os.Stdout] and [os.Stderr] and returns a function
+// that restores their original descriptors after both redactors finish.
+func installRedaction(patterns []redact.Pattern) (func(), error) {
+	realStdout, realStderr := os.Stdout, os.Stderr
+	if len(patterns) == 0 {
+		return func() {}, nil
+	}
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		slog.Error("stdout pipe failed", "err", err)
+		return nil, fmt.Errorf("stdout pipe: %w", err)
+	}
+	errR, errW, err := os.Pipe()
+	if err != nil {
+		_ = outR.Close()
+		_ = outW.Close()
+		slog.Error("stderr pipe failed", "err", err)
+		return nil, fmt.Errorf("stderr pipe: %w", err)
+	}
+
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	drain := func(src *os.File, dst *os.File) {
+		defer wg.Done()
+		w := redact.New(&lockedWriter{mu: &mu, dst: dst}, patterns)
+		_, _ = io.Copy(w, src)
+		_ = w.Close()
+	}
+	launch := func(src *os.File, dst *os.File) {
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("redaction drain panicked", "err", fmt.Errorf("%v", r))
+				}
+			}()
+			drain(src, dst)
+		}()
+	}
+	wg.Add(2)
+	launch(outR, realStdout)
+	launch(errR, realStderr)
+
+	os.Stdout = outW
+	os.Stderr = errW
+
+	restore := func() {
+		os.Stdout = realStdout
+		os.Stderr = realStderr
+		_ = outW.Close()
+		_ = errW.Close()
+		wg.Wait()
+		_ = outR.Close()
+		_ = errR.Close()
+	}
+	return restore, nil
 }

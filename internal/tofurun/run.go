@@ -13,6 +13,7 @@ import (
 	"os/exec"
 
 	"goodkind.io/configsctl/internal/procgroup"
+	"goodkind.io/configsctl/internal/redact"
 	"goodkind.io/configsctl/internal/runlog"
 	"goodkind.io/configsctl/internal/tofuargs"
 )
@@ -34,6 +35,8 @@ type Request struct {
 	// selects Args. The local command sets DisplayArgs for a private plan or
 	// saved plan that replaces the operator's apply.
 	DisplayArgs []string
+	// Patterns supplies the caller's secret values for run log redaction.
+	Patterns []redact.Pattern
 }
 
 // Result reports the OpenTofu exit status in ExitCode and the run log path in
@@ -66,14 +69,12 @@ func Run(ctx context.Context, request Request) (Result, error) {
 
 	var log *runlog.Log
 	if tofuargs.Streams(display) {
-		log, err = runlog.Open("tofu-"+string(tofuargs.Subcommand(display)), activePatterns())
+		log, err = openOutput(request, display)
 		if err != nil {
-			slog.Error("tofu.log_open_failed", "workspace", request.Root, "err", err)
-			return Result{ExitCode: 0, LogPath: ""}, fmt.Errorf("open the OpenTofu run log: %w", err)
+			return Result{ExitCode: 0, LogPath: ""}, err
 		}
 		cmd.Stdout = log
 		cmd.Stderr = log
-		log.Announce("Tofu")
 	}
 
 	runErr := procgroup.RunGroup(cmd)
@@ -81,10 +82,7 @@ func Run(ctx context.Context, request Request) (Result, error) {
 	var closeErr error
 	if log != nil {
 		result.LogPath = log.Path()
-		if err := log.Close(); err != nil {
-			slog.Error("tofu.log_close_failed", "log", result.LogPath, "err", err)
-			closeErr = fmt.Errorf("close the OpenTofu run log: %w", err)
-		}
+		closeErr = closeOutput(log)
 	}
 	if runErr == nil {
 		return result, closeErr

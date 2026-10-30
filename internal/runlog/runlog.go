@@ -18,17 +18,8 @@ import (
 	"goodkind.io/configsctl/internal/redact"
 )
 
-// A run log holds the output of a command that talks to a service over time,
-// such as a play walking a fleet of hosts or a tofu run walking a provider API.
-// That output arrives in pieces over minutes, and it is the record an operator
-// needs when something goes wrong. Sending it to stdout puts it at the mercy of
-// whatever consumes stdout, which may truncate it, buffer it, or pipe it into
-// something that keeps only a tail. A file does not have that problem: the whole
-// stream lands on disk as it is produced, and the command prints the path.
-
-// runLogDirName holds one file per run. It sits in the host's temp directory
-// rather than the repository, so a run leaves no artifact in the working tree
-// and the host's own cleanup reclaims old logs.
+// runLogDirName identifies the directory for command logs under the host temporary
+// directory. The host cleanup can remove old logs without changing the repository.
 const runLogDirName = "configs-runs"
 
 // DirPerm restricts the directory listing to the operator. Some systems share
@@ -82,18 +73,9 @@ func Open(label string, secrets []redact.Pattern) (*Log, error) {
 	return &Log{path: path, dir: dir, file: file, redactor: redact.New(file, secrets)}, nil
 }
 
-// openRunLogDir returns a handle to the run log directory, creating it when it
-// is absent. The host temp directory is world-writable on many systems, so a
-// predictable name inside it is something another local user can create first.
-// Creating the directory outright is the safe case, because it either succeeds
-// and we own what we made, or it reports that something is already there.
-//
-// An existing entry is checked and never adjusted. Adjusting it would mean
-// acting on whatever it points at: a symlink planted under this name would send
-// a mode change to the symlink's target rather than to a directory of ours.
-//
-// The returned handle confines every later open to this directory, so a symlink
-// planted inside it after the check cannot redirect a write elsewhere.
+// openRunLogDir creates the log directory or checks its existing mode and owner.
+// It rejects an existing symlink without changing the target's permissions.
+// The returned handle restricts later file creation to this directory.
 func openRunLogDir() (*os.Root, error) {
 	path := Root()
 	err := os.Mkdir(path, DirPerm)
@@ -176,16 +158,13 @@ func Create(dir *os.Root, stem, stamp string) (*os.File, error) {
 // Path is the absolute path the operator reads and tails.
 func (l *Log) Path() string { return l.path }
 
-// Announce tells the operator where the output went, before the command starts
-// producing it. Nothing else about the run reaches stdout, so this is the only
-// pointer they get.
+// Announce prints the log path and a command for reading output during the run.
 func (l *Log) Announce(what string) {
 	fmt.Fprintf(os.Stdout, "%s output streams to %s\n", what, l.path)
 	fmt.Fprintf(os.Stdout, "Follow it with: tail -f %s\n", l.path)
 }
 
-// Write redacts and appends. Each call reaches the file as it happens, so a
-// reader tailing the path sees the run progress rather than a batch at exit.
+// Write replaces secrets and appends output as the command produces it.
 func (l *Log) Write(p []byte) (int, error) {
 	n, err := l.redactor.Write(p)
 	if err != nil {
