@@ -12,7 +12,7 @@ To run a deploy from the root of a configs checkout:
 go run goodkind.io/configsctl/cmd/configsctl@latest deploy <playbook>
 ```
 
-The commands are `lint`, `baseline`, `keys`, `secret`, `set-secrets`, `rename-secret`, `delete-secrets`, `deploy`, `tofu`, `migrate-state`, `syntax-check`, `inventory-dump`, and `version`. `version` prints the commit the binary was built from, whether that tree was dirty, and a hash of the binary. A deploy lints the files its playbook reads and refuses to run on a new finding. The playbooks pin and pull the releases they install; configsctl stages nothing.
+The commands are `lint`, `baseline`, `keys`, `secret`, `set-secrets`, `rename-secret`, `delete-secrets`, `deploy`, `tofu`, `ci`, `migrate-state`, `syntax-check`, `inventory-dump`, and `version`. `version` prints the commit the binary was built from, whether that tree was dirty, and a hash of the binary. A deploy lints the files its playbook reads and refuses to run on a new finding. The playbooks pin and pull the releases they install; configsctl stages nothing.
 
 ## Select an OpenTofu workspace
 
@@ -222,6 +222,31 @@ tofu:
       guest_hosts:
         suburban/217: tack-qa.suburban.goodkind.io
 ```
+
+## Run OpenTofu in CI
+
+Run `configsctl ci tofu` from the configuration checkout root. The OpenTofu root must be inside that checkout. The command finds `tofu` in `PATH` and does not read the vault or its password file.
+
+```sh
+configsctl ci tofu --config <file> --root <root> --workspace <workspace> -- plan -input=false
+```
+
+Set `TF_IN_AUTOMATION=1` and use private directories for `HOME` and `TMPDIR`. The command accepts `init`, `workspace select`, `plan`, `show`, `validate`, and `fmt -check`. It refuses `apply` because the CI command does not acquire host locks. Select the declared workspace before running `plan` or `show` without a saved plan. Use `-name=value` for flags with values. The command returns the OpenTofu exit status.
+
+The configuration is a JSON object with these keys:
+
+| Key | Value |
+| --- | --- |
+| `version` | `1`. |
+| `required_environment` | Array of required environment variable names. |
+| `secret_environment` | Array of environment variable names. `Run` redacts their values from console output and the private run log. Each value must contain at least 16 bytes. |
+| `secret_files` | Object mapping environment variable names to absolute paths of private files. Each variable must contain its mapped path. |
+| `output_mode` | `redacted_progress` or `private_json`. |
+| `json_path` | Path to a new file in a private directory below `TMPDIR`. The configuration requires this key for `private_json` and forbids it for `redacted_progress`. |
+
+The command rejects configurations with unknown or duplicate keys, missing required keys, null values, or trailing data. Keep secret values out of command arguments. `private_json` accepts only `show -json` with one saved plan and writes unredacted JSON to `json_path` with mode `0600`.
+
+Go callers can use `goodkind.io/configsctl/tofurun` and call `Run(ctx, request, scope)` with a `tofurun.Request`. `Run` returns a `tofurun.Result` and an error. A saved-plan `apply` requires a `*hostlock.Scope` from `(*hostlock.Set).Scope`; the scope must cover every host in `Request.RequiredHosts`. `Scope.Check` verifies the scope and its required hosts.
 
 ## Deploy behavior for hosts without Proxmox guests
 
