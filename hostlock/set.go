@@ -48,6 +48,10 @@ type Set struct {
 	mu         sync.Mutex
 	held       []Host
 	deadlines  map[string]time.Time
+	// released, lost, and renewalDone record conditions that invalidate a Scope.
+	released    bool
+	lost        error
+	renewalDone <-chan struct{}
 }
 
 // AcquireAll requires a lock on every host. On failure, it attempts to release
@@ -63,6 +67,7 @@ func AcquireAll(ctx context.Context, hosts []Host, run, controller string, lease
 	set := &Set{
 		run: run, controller: controller, lease: lease, stateDir: stateDir,
 		mu: sync.Mutex{}, held: nil, deadlines: map[string]time.Time{},
+		released: false, lost: nil, renewalDone: nil,
 	}
 	request := command{op: Acquire, run: run, controller: controller, lease: lease.TTL}
 	for _, host := range hosts {
@@ -166,7 +171,19 @@ func (s *Set) RenewAll(ctx context.Context) error {
 			endRound()
 		}
 	}
+	if lost != nil {
+		s.markLost(lost)
+	}
 	return lost
+}
+
+// markLost records the first lock loss for Scope.
+func (s *Set) markLost(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lost == nil {
+		s.lost = err
+	}
 }
 
 // renewal is the result of one renewal attempt sent at asked.
@@ -213,8 +230,12 @@ func (s *Set) record(result renewal) error {
 // renewing when RenewAll returns ErrLost or a host's loss deadline passes.
 func (s *Set) KeepRenewed(ctx context.Context, lost func(error)) (stop func()) {
 	renewCtx, cancel := context.WithCancel(ctx)
+	s.mu.Lock()
+	s.renewalDone = renewCtx.Done()
+	s.mu.Unlock()
 	var once sync.Once
 	report := func(err error) {
+		s.markLost(err)
 		if renewCtx.Err() == nil {
 			once.Do(func() { lost(err) })
 		}
@@ -283,6 +304,7 @@ func (s *Set) ReleaseAll(ctx context.Context) {
 	s.mu.Lock()
 	hosts := s.held
 	s.held = nil
+	s.released = true
 	s.mu.Unlock()
 	for _, host := range hosts {
 		if err := Do(ctx, host, Release, s.run, s.controller); err != nil {
