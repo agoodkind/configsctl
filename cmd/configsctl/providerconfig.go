@@ -16,6 +16,8 @@ import (
 
 	"github.com/hashicorp/hcl/v2/hclwrite"
 	"github.com/zclconf/go-cty/cty"
+
+	"goodkind.io/configsctl/internal/fileowner"
 )
 
 const (
@@ -213,7 +215,7 @@ func openProviderConfigDirectory(parent *os.Root, name string) (*os.Root, error)
 }
 
 func checkProviderConfigOwner(info fs.FileInfo) error {
-	owned, err := ownedByCurrentUser(info)
+	owned, err := fileowner.CurrentUser(info)
 	if err != nil {
 		slog.Error("provider configuration ownership inspection failed", "err", err)
 		return fmt.Errorf("check the provider configuration owner: %w", err)

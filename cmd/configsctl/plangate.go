@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"goodkind.io/configsctl/internal/procgroup"
+	"goodkind.io/configsctl/internal/tofuargs"
 	"goodkind.io/configsctl/internal/tofulock"
 )
 
@@ -137,7 +138,7 @@ func gateGuestPlan(ctx context.Context, request guestPlanRequest, guest gatedGue
 	planPath := filepath.Join(planDir, gatePlanFileName)
 	target := request.module + "[" + strconv.Quote(guest.serviceName) + "]"
 	args, err := sanitizeTofuArgs([]string{
-		string(tofuPlan), "-detailed-exitcode", "-input=false", "-target=" + target, "-out=" + planPath,
+		string(tofuargs.Plan), "-detailed-exitcode", "-input=false", "-target=" + target, "-out=" + planPath,
 	})
 	if err != nil {
 		return err

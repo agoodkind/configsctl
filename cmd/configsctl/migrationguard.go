@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"goodkind.io/configsctl/internal/migrationpause"
+	"goodkind.io/configsctl/internal/tofuargs"
 )
 
 func migrationPausePath() (string, error) {
@@ -39,7 +40,7 @@ func leaseTofuMigration(args []string, usesCredential bool) (func(), error) {
 }
 
 func tofuWritesState(args []string) bool {
-	command := string(tofuSubcommand(args))
+	command := string(tofuargs.Subcommand(args))
 	if slices.Contains([]string{"apply", "destroy", "refresh", "import", "test", "taint", "untaint"}, command) {
 		return true
 	}

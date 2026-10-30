@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,11 +9,12 @@ import (
 
 	"goodkind.io/configsctl/internal/ansible"
 	"goodkind.io/configsctl/internal/redact"
+	"goodkind.io/configsctl/internal/runlog"
 )
 
-// privateTempDir points the host temp directory at one this test owns, so the
-// run logs it creates are isolated from the operator's and from other tests.
-// runLogRoot resolves os.TempDir on every call, which reads TMPDIR first.
+// privateTempDir assigns a test-owned host temp directory. runlog.Root reads
+// os.TempDir on every invocation, and os.TempDir reads TMPDIR first. Each test
+// uses its own run logs instead of the operator's logs.
 func privateTempDir(t *testing.T) {
 	t.Helper()
 	t.Setenv("TMPDIR", t.TempDir())
@@ -25,7 +25,7 @@ func privateTempDir(t *testing.T) {
 // expects one run cannot pass against a stray second file.
 func readOnlyRunLog(t *testing.T) (path, contents string) {
 	t.Helper()
-	root := runLogRoot()
+	root := runlog.Root()
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		t.Fatalf("ReadDir(%s): %v", root, err)
@@ -66,188 +66,6 @@ func TestRunDeployLeavesNoLogInTheWorkingDirectory(t *testing.T) {
 	path, _ := readOnlyRunLog(t)
 	if !strings.HasPrefix(path, os.TempDir()) {
 		t.Fatalf("run log %q is not under the host temp dir %q", path, os.TempDir())
-	}
-}
-
-// TestOpenRunLogCreatesAPrivateDirectory pins the mode of a directory this tool
-// creates. The host temp directory is world-writable on many systems, so a
-// listing of what an operator deployed and when must not be readable by others.
-func TestOpenRunLogCreatesAPrivateDirectory(t *testing.T) {
-	privateTempDir(t)
-	log, err := openRunLog("deploy-mwan", nil)
-	if err != nil {
-		t.Fatalf("openRunLog: %v", err)
-	}
-	if err := log.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-
-	info, err := os.Stat(runLogRoot())
-	if err != nil {
-		t.Fatalf("Stat: %v", err)
-	}
-	if got := info.Mode().Perm(); got != fs.FileMode(runLogDirPerm) {
-		t.Fatalf("run log dir mode = %v, want %v", got, fs.FileMode(runLogDirPerm))
-	}
-}
-
-// TestOpenRunLogRefusesASymlinkedDirectory is the reason this code does not
-// simply create-or-adjust the directory. Another local user can plant a symlink
-// under the predictable name before a run starts. Acting on it would send the
-// mode change, and every log write, to whatever that link points at.
-func TestOpenRunLogRefusesASymlinkedDirectory(t *testing.T) {
-	privateTempDir(t)
-	victim := filepath.Join(t.TempDir(), "victim")
-	if err := os.Mkdir(victim, 0o755); err != nil {
-		t.Fatalf("Mkdir: %v", err)
-	}
-	if err := os.Symlink(victim, runLogRoot()); err != nil {
-		t.Fatalf("Symlink: %v", err)
-	}
-
-	log, err := openRunLog("deploy-mwan", nil)
-	if err == nil {
-		_ = log.Close()
-		t.Fatal("openRunLog accepted a symlinked run log directory")
-	}
-	if !strings.Contains(err.Error(), "symlink") {
-		t.Fatalf("error = %v, want it to name the symlink", err)
-	}
-
-	info, err := os.Stat(victim)
-	if err != nil {
-		t.Fatalf("Stat: %v", err)
-	}
-	if got := info.Mode().Perm(); got != 0o755 {
-		t.Fatalf("the symlink target's mode changed to %v, want it untouched at %v", got, fs.FileMode(0o755))
-	}
-	entries, err := os.ReadDir(victim)
-	if err != nil {
-		t.Fatalf("ReadDir: %v", err)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("the symlink target received %d entries, want none", len(entries))
-	}
-}
-
-// TestOpenRunLogRefusesAWorldReadableDirectory pins that a loose directory left
-// under this name is refused rather than tightened. Tightening means chmod on a
-// path somebody else may control, which is the operation this code avoids.
-func TestOpenRunLogRefusesAWorldReadableDirectory(t *testing.T) {
-	privateTempDir(t)
-	root := runLogRoot()
-	if err := os.Mkdir(root, 0o777); err != nil {
-		t.Fatalf("Mkdir: %v", err)
-	}
-	if err := os.Chmod(root, 0o777); err != nil {
-		t.Fatalf("Chmod: %v", err)
-	}
-
-	log, err := openRunLog("deploy-mwan", nil)
-	if err == nil {
-		_ = log.Close()
-		t.Fatal("openRunLog accepted a world-readable run log directory")
-	}
-	if !strings.Contains(err.Error(), "mode") {
-		t.Fatalf("error = %v, want it to name the mode", err)
-	}
-}
-
-// TestOpenRunLogRefusesAFileUnderTheDirectoryName pins that a plain file planted
-// under the name is refused, rather than reported as some later open failure the
-// operator has to decode.
-func TestOpenRunLogRefusesAFileUnderTheDirectoryName(t *testing.T) {
-	privateTempDir(t)
-	if err := os.WriteFile(runLogRoot(), []byte("not a directory\n"), 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	log, err := openRunLog("deploy-mwan", nil)
-	if err == nil {
-		_ = log.Close()
-		t.Fatal("openRunLog accepted a file as the run log directory")
-	}
-	if !strings.Contains(err.Error(), "not a directory") {
-		t.Fatalf("error = %v, want it to say the path is not a directory", err)
-	}
-}
-
-// TestOpenRunLogReusesItsOwnDirectory pins that the check does not reject the
-// directory this tool made on an earlier run. Every deploy after the first one
-// takes that path.
-func TestOpenRunLogReusesItsOwnDirectory(t *testing.T) {
-	privateTempDir(t)
-	first, err := openRunLog("deploy-mwan", nil)
-	if err != nil {
-		t.Fatalf("openRunLog first: %v", err)
-	}
-	if err := first.Close(); err != nil {
-		t.Fatalf("Close first: %v", err)
-	}
-
-	second, err := openRunLog("deploy-proxmox", nil)
-	if err != nil {
-		t.Fatalf("openRunLog second: %v", err)
-	}
-	if err := second.Close(); err != nil {
-		t.Fatalf("Close second: %v", err)
-	}
-
-	entries, err := os.ReadDir(runLogRoot())
-	if err != nil {
-		t.Fatalf("ReadDir: %v", err)
-	}
-	if len(entries) != 2 {
-		t.Fatalf("run log dir holds %d files after two runs, want 2", len(entries))
-	}
-}
-
-// TestCreateRunLogFileStaysInsideTheDirectory pins that opening happens through
-// the directory handle. A symlink planted inside the directory after the check
-// must not redirect a log write to the file it points at.
-func TestCreateRunLogFileStaysInsideTheDirectory(t *testing.T) {
-	privateTempDir(t)
-	root := runLogRoot()
-	if err := os.Mkdir(root, runLogDirPerm); err != nil {
-		t.Fatalf("Mkdir: %v", err)
-	}
-	outside := filepath.Join(t.TempDir(), "outside.txt")
-	if err := os.WriteFile(outside, []byte("original\n"), 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	const stamp = "20260821T000000Z"
-	planted := "deploy-mwan-" + stamp + ".log"
-	if err := os.Symlink(outside, filepath.Join(root, planted)); err != nil {
-		t.Fatalf("Symlink: %v", err)
-	}
-
-	dir, err := os.OpenRoot(root)
-	if err != nil {
-		t.Fatalf("OpenRoot: %v", err)
-	}
-	t.Cleanup(func() { _ = dir.Close() })
-
-	file, err := createRunLogFile(dir, "deploy-mwan", stamp)
-	if err != nil {
-		t.Fatalf("createRunLogFile: %v", err)
-	}
-	if _, err := file.WriteString("run output\n"); err != nil {
-		t.Fatalf("WriteString: %v", err)
-	}
-	if err := file.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-
-	body, err := os.ReadFile(outside)
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	if string(body) != "original\n" {
-		t.Fatalf("the file outside the directory was written through the symlink: %q", body)
-	}
-	if filepath.Base(file.Name()) == planted {
-		t.Fatalf("createRunLogFile reused the planted name %q", planted)
 	}
 }
 
@@ -333,146 +151,5 @@ func TestRunDeployFlushesTheLogWhenThePlayFails(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), absolute) {
 		t.Fatalf("error = %v, want it to name %s", err, absolute)
-	}
-}
-
-// TestOpenRunLogPermissions pins that a log is readable only by the operator who
-// ran the command. A diffing run prints file contents into it.
-func TestOpenRunLogPermissions(t *testing.T) {
-	privateTempDir(t)
-	log, err := openRunLog("deploy-mwan", nil)
-	if err != nil {
-		t.Fatalf("openRunLog: %v", err)
-	}
-	if err := log.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	info, err := os.Stat(log.Path())
-	if err != nil {
-		t.Fatalf("Stat: %v", err)
-	}
-	if got := info.Mode().Perm(); got != fs.FileMode(runLogPerm) {
-		t.Fatalf("log mode = %v, want %v", got, fs.FileMode(runLogPerm))
-	}
-}
-
-// TestCreateRunLogFileNeverOverwrites pins that two runs started within the same
-// second get two files. The timestamp resolves to one second, so without the
-// counter the second run would either fail or clobber the first run's output
-// while an operator was still reading it.
-func TestCreateRunLogFileNeverOverwrites(t *testing.T) {
-	privateTempDir(t)
-	if err := os.Mkdir(runLogRoot(), runLogDirPerm); err != nil {
-		t.Fatalf("Mkdir: %v", err)
-	}
-	dir, err := os.OpenRoot(runLogRoot())
-	if err != nil {
-		t.Fatalf("OpenRoot: %v", err)
-	}
-	t.Cleanup(func() { _ = dir.Close() })
-
-	const stamp = "20260819T151126Z"
-	names := map[string]bool{}
-	for run := 1; run <= 3; run++ {
-		file, err := createRunLogFile(dir, "deploy-mwan", stamp)
-		if err != nil {
-			t.Fatalf("createRunLogFile run %d: %v", run, err)
-		}
-		if _, err := file.WriteString("run\n"); err != nil {
-			t.Fatalf("write run %d: %v", run, err)
-		}
-		if err := file.Close(); err != nil {
-			t.Fatalf("close run %d: %v", run, err)
-		}
-		if names[file.Name()] {
-			t.Fatalf("run %d reused the name %s", run, file.Name())
-		}
-		names[file.Name()] = true
-	}
-
-	entries, err := os.ReadDir(runLogRoot())
-	if err != nil {
-		t.Fatalf("ReadDir: %v", err)
-	}
-	if len(entries) != 3 {
-		t.Fatalf("run log dir holds %d files after 3 runs, want 3", len(entries))
-	}
-}
-
-// TestRunLogName pins that every accepted label, stem or path, reduces to the
-// same filename-safe name.
-func TestRunLogName(t *testing.T) {
-	tests := []struct {
-		arg  string
-		want string
-	}{
-		{arg: "deploy-mwan", want: "deploy-mwan"},
-		{arg: "playbooks/deploy-mwan.yml", want: "deploy-mwan"},
-		{arg: "ansible/playbooks/deploy-testbed.yaml", want: "deploy-testbed"},
-		{arg: "tofu-plan", want: "tofu-plan"},
-		{arg: "deploy mwan", want: "deploy-mwan"},
-		{arg: "../../etc/passwd", want: "passwd"},
-		{arg: "/", want: "run"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.arg, func(t *testing.T) {
-			if got := runLogName(tc.arg); got != tc.want {
-				t.Fatalf("runLogName(%q) = %q, want %q", tc.arg, got, tc.want)
-			}
-		})
-	}
-}
-
-// TestTofuStreams pins which tofu invocations write to a run log. A run that
-// stops at an approval prompt must keep the terminal, because the prompt is the
-// output and an operator cannot answer a question they cannot see.
-func TestTofuStreams(t *testing.T) {
-	tests := []struct {
-		name string
-		args []string
-		want bool
-	}{
-		{name: "plan streams", args: []string{"plan"}, want: true},
-		{name: "plan with flags streams", args: []string{"-chdir=x", "plan", "-detailed-exitcode"}, want: true},
-		{name: "refresh streams", args: []string{"refresh"}, want: true},
-		{name: "apply prompts", args: []string{"apply"}, want: false},
-		{name: "apply auto-approve streams", args: []string{"apply", "-auto-approve"}, want: true},
-		{name: "apply double dash auto-approve streams", args: []string{"apply", "--auto-approve"}, want: true},
-		{name: "apply auto-approve with value streams", args: []string{"apply", "-auto-approve=true"}, want: true},
-		{name: "destroy prompts", args: []string{"destroy"}, want: false},
-		{name: "destroy auto-approve streams", args: []string{"destroy", "-auto-approve"}, want: true},
-		{name: "console keeps the terminal", args: []string{"console"}, want: false},
-		{name: "init keeps the terminal", args: []string{"init"}, want: false},
-		{name: "output keeps the terminal", args: []string{"output", "-json"}, want: false},
-		{name: "unknown subcommand keeps the terminal", args: []string{"whatever"}, want: false},
-		{name: "no subcommand keeps the terminal", args: []string{"-help"}, want: false},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := tofuStreams(tc.args); got != tc.want {
-				t.Fatalf("tofuStreams(%v) = %v, want %v", tc.args, got, tc.want)
-			}
-		})
-	}
-}
-
-// TestTofuSubcommand pins that the run log name comes from the subcommand, not
-// from a leading global flag.
-func TestTofuSubcommand(t *testing.T) {
-	tests := []struct {
-		args []string
-		want tofuCommand
-	}{
-		{args: []string{"plan"}, want: tofuPlan},
-		{args: []string{"-chdir=opentofu", "apply"}, want: tofuApply},
-		{args: []string{"-help"}, want: ""},
-		{args: nil, want: ""},
-	}
-	for _, tc := range tests {
-		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
-			if got := tofuSubcommand(tc.args); got != tc.want {
-				t.Fatalf("tofuSubcommand(%v) = %q, want %q", tc.args, got, tc.want)
-			}
-		})
 	}
 }

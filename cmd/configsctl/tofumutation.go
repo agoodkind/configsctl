@@ -16,6 +16,7 @@ import (
 	"goodkind.io/configsctl/internal/ansible"
 	"goodkind.io/configsctl/internal/redact"
 	"goodkind.io/configsctl/internal/runid"
+	"goodkind.io/configsctl/internal/tofuargs"
 	"goodkind.io/configsctl/internal/tofulock"
 	"goodkind.io/configsctl/internal/vault"
 )
@@ -32,8 +33,8 @@ var mutationSharedFlags = map[string]bool{
 }
 
 func tofuMutates(args []string) bool {
-	command := tofuSubcommand(args)
-	return command == tofuApply || command == tofuDestroy
+	command := tofuargs.Subcommand(args)
+	return command == tofuargs.Apply || command == tofuargs.Destroy
 }
 
 func needsIndependentPlan(independent bool, args []string) bool {
@@ -43,7 +44,7 @@ func needsIndependentPlan(independent bool, args []string) bool {
 func runIndependentMutation(env cmdEnv, request tofuLockRequest, credential tofuCredentialSettings, usesCredential bool, passwordFile string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if tofuBooleanArgument(request.args, "help", false) || tofuBooleanArgument(request.args, "h", false) {
+	if tofuargs.BooleanArgument(request.args, "help", false) || tofuargs.BooleanArgument(request.args, "h", false) {
 		return executeTofu(ctx, env, request.workspaceDir, request.args, request.args, request.env)
 	}
 	targets, err := mutationLockTargets(ctx, request)
@@ -130,7 +131,7 @@ func applyIndependentPlan(ctx context.Context, env cmdEnv, request tofuLockReque
 	if decision.AllHosts {
 		return fmt.Errorf("workspace %s has unknown lock ownership: %s", request.workspaceDir, decision.Reason)
 	}
-	if changed && !hasTofuAutoApprove(request.args) {
+	if changed && !tofuargs.AutoApprove(request.args) {
 		if err := confirmMutation(ctx, request.args, request.env); err != nil {
 			return err
 		}
@@ -164,9 +165,9 @@ func prepareMutationCredential(ctx context.Context, credential tofuCredentialSet
 }
 
 func mutationArguments(args []string, planPath string) ([]string, []string, error) {
-	plan := []string{string(tofuPlan)}
-	apply := []string{string(tofuApply)}
-	if tofuSubcommand(args) == tofuDestroy {
+	plan := []string{string(tofuargs.Plan)}
+	apply := []string{string(tofuargs.Apply)}
+	if tofuargs.Subcommand(args) == tofuargs.Destroy {
 		plan = append(plan, "-destroy")
 	}
 	for index := 1; index < len(args); index++ {
@@ -182,7 +183,7 @@ func mutationArguments(args []string, planPath string) ([]string, []string, erro
 			continue
 		}
 		arguments := []string{argument}
-		if consumesTofuValue(argument) {
+		if tofuargs.ConsumesValue(argument) {
 			index++
 			if index >= len(args) {
 				return nil, nil, fmt.Errorf("OpenTofu option %s requires a value", argument)
@@ -204,35 +205,9 @@ func mutationArguments(args []string, planPath string) ([]string, []string, erro
 	return plan, apply, nil
 }
 
-func tofuBooleanArgument(args []string, name string, defaultValue bool) bool {
-	value := defaultValue
-	for index := 0; index < len(args); index++ {
-		argument := args[index]
-		if !strings.HasPrefix(argument, "-") {
-			continue
-		}
-		flag, text, found := strings.Cut(strings.TrimLeft(argument, "-"), "=")
-		if flag != name {
-			if consumesTofuValue(argument) {
-				index++
-			}
-			continue
-		}
-		if !found {
-			value = true
-			continue
-		}
-		parsed, err := strconv.ParseBool(text)
-		if err == nil {
-			value = parsed
-		}
-	}
-	return value
-}
-
 func confirmMutation(ctx context.Context, args, environment []string) error {
 	input := environmentValue(environment, "TF_INPUT")
-	if !tofuBooleanArgument(args, "input", input != "false" && input != "0") || tofuBooleanArgument(args, "json", false) {
+	if !tofuargs.BooleanArgument(args, "input", input != "false" && input != "0") || tofuargs.BooleanArgument(args, "json", false) {
 		return errors.New("OpenTofu requires -auto-approve for a noninteractive apply with pending changes")
 	}
 	fmt.Fprint(os.Stdout, "\nApprove these planned actions by entering 'yes'.\n\n  Enter a value: ")

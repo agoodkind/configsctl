@@ -14,10 +14,11 @@ import (
 	"strings"
 	"syscall"
 
+	"goodkind.io/configsctl/hostlock"
 	"goodkind.io/configsctl/internal/ansible"
 	"goodkind.io/configsctl/internal/gate"
-	"goodkind.io/configsctl/internal/hostlock"
 	"goodkind.io/configsctl/internal/runid"
+	"goodkind.io/configsctl/internal/tofuargs"
 	"goodkind.io/configsctl/internal/tofulock"
 )
 
@@ -215,7 +216,7 @@ func requireLockOnlyTargets(inv ansible.Inventory, names []string, targets []hos
 
 func selectTofuLockHosts(ctx context.Context, inv ansible.Inventory, request tofuLockRequest) (tofuHostSelection, error) {
 	everyHost := tofuHostSelection{names: allTofuLockHosts(inv), args: request.args, cleanup: func() {}, guestLocks: nil}
-	if tofuSubcommand(request.args) != tofuApply {
+	if tofuargs.Subcommand(request.args) != tofuargs.Apply {
 		return everyHost, nil
 	}
 	workspace := tofuWorkspaceKey(request.workspaceDir)
