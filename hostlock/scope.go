@@ -26,9 +26,9 @@ type Scope struct {
 }
 
 // Scope returns a Scope for the hosts that s locked. It returns an error
-// wrapping ErrScope after s releases its locks, loses a lock, ends its
-// renewal, or passes a loss deadline. A Set without hosts returns a valid
-// Scope.
+// wrapping ErrScope when s is not acquired, releases its locks, loses a lock,
+// ends its renewal, or passes a loss deadline. An acquired Set without hosts
+// returns a valid Scope.
 func (s *Set) Scope() (*Scope, error) {
 	if err := s.usable(); err != nil {
 		return nil, err
@@ -44,11 +44,14 @@ func (s *Set) Scope() (*Scope, error) {
 
 // Check returns nil when scope permits mutation on every host in
 // requiredHosts. Check returns an error wrapping ErrScope for a nil scope, a
-// scope from another process, a Set that Scope would refuse, or a required
-// host without a lock in the scope.
+// zero-value scope, a scope from another process, a Set that Scope would
+// refuse, or a required host without a lock in the scope.
 func (s *Scope) Check(requiredHosts []string) error {
 	if s == nil {
 		return scopeRefusal("", "the request does not supply a host lock scope")
+	}
+	if s.set == nil {
+		return scopeRefusal("", "Set.Scope did not create the scope")
 	}
 	if process := os.Getpid(); s.process != process {
 		return scopeRefusal(s.run, fmt.Sprintf("process %d created the scope, not process %d", s.process, process))
@@ -64,13 +67,15 @@ func (s *Scope) Check(requiredHosts []string) error {
 	return nil
 }
 
-// usable returns an error wrapping ErrScope when s released its locks, lost
-// a lock, ended its renewal, or passed a loss deadline.
+// usable returns an error wrapping ErrScope when s is not acquired, released
+// its locks, lost a lock, ended its renewal, or passed a loss deadline.
 func (s *Set) usable() error {
 	s.mu.Lock()
-	released, lost, renewalDone := s.released, s.lost, s.renewalDone
+	acquired, released, lost, renewalDone := s.acquired, s.released, s.lost, s.renewalDone
 	s.mu.Unlock()
 	switch {
+	case !acquired:
+		return scopeRefusal(s.run, "AcquireAll did not acquire the Set")
 	case released:
 		return scopeRefusal(s.run, "the run released its host locks")
 	case lost != nil:

@@ -48,6 +48,8 @@ type Set struct {
 	mu         sync.Mutex
 	held       []Host
 	deadlines  map[string]time.Time
+	// acquired records that AcquireAll locked every host and wrote the state file.
+	acquired bool
 	// released, lost, and renewalDone record conditions that invalidate a Scope.
 	released    bool
 	lost        error
@@ -67,7 +69,7 @@ func AcquireAll(ctx context.Context, hosts []Host, run, controller string, lease
 	set := &Set{
 		run: run, controller: controller, lease: lease, stateDir: stateDir,
 		mu: sync.Mutex{}, held: nil, deadlines: map[string]time.Time{},
-		released: false, lost: nil, renewalDone: nil,
+		acquired: false, released: false, lost: nil, renewalDone: nil,
 	}
 	request := command{op: Acquire, run: run, controller: controller, lease: lease.TTL}
 	for _, host := range hosts {
@@ -85,6 +87,9 @@ func AcquireAll(ctx context.Context, hosts []Host, run, controller string, lease
 		set.ReleaseAll(context.WithoutCancel(ctx))
 		return nil, err
 	}
+	set.mu.Lock()
+	set.acquired = true
+	set.mu.Unlock()
 	slog.Info("hostlock.acquired", "run", run, "hosts", len(set.held))
 	return set, nil
 }
