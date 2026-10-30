@@ -12,6 +12,7 @@ import (
 type Command string
 
 // These subcommands determine the output destination, locks, and credentials.
+// Apply and destroy keep terminal output unless auto-approval is enabled.
 // Other subcommands use the terminal.
 const (
 	Plan    Command = "plan"
@@ -52,8 +53,9 @@ func Subcommand(args []string) Command {
 }
 
 // Streams reports whether an invocation writes progress to a run log. Plan and
-// refresh return true. Apply and destroy require -auto-approve. Other
-// subcommands return false. Approval prompts require the terminal.
+// refresh return true. Apply and destroy return true when AutoApprove returns
+// true and otherwise keep terminal output for approval prompts. Other
+// subcommands return false.
 func Streams(args []string) bool {
 	switch Subcommand(args) {
 	case Plan, Refresh:
@@ -74,8 +76,8 @@ func AutoApprove(args []string) bool {
 
 // BooleanArgument returns the last valid value for name or defaultValue when
 // absent. It accepts one or two dashes, treats a bare flag as true, parses
-// values with [strconv.ParseBool], ignores invalid values, and skips values of
-// other flags that consume an argument.
+// values with [strconv.ParseBool], retains the current result for invalid values,
+// and skips values of other flags that consume an argument.
 func BooleanArgument(args []string, name string, defaultValue bool) bool {
 	value := defaultValue
 	for index := 0; index < len(args); index++ {

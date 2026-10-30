@@ -75,7 +75,7 @@ func Open(label string, secrets []redact.Pattern) (*Log, error) {
 
 // openRunLogDir creates the log directory or checks its existing mode and owner.
 // It rejects an existing symlink without changing the target's permissions.
-// The returned handle restricts later file creation to this directory.
+// The returned handle rejects file operations outside the opened directory.
 func openRunLogDir() (*os.Root, error) {
 	path := Root()
 	err := os.Mkdir(path, DirPerm)
@@ -201,8 +201,7 @@ func (l *Log) Close() error {
 // built from a command argument, which may be a bare stem or a path.
 var runLogNameUnsafe = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 
-// Name converts a label to a filename-safe stem. Both deploy-mwan and
-// playbooks/deploy-mwan.yml produce the same stem.
+// Name converts a label to a filename-safe stem.
 func Name(label string) string {
 	stem := filepath.Base(label)
 	stem = strings.TrimSuffix(strings.TrimSuffix(stem, ".yml"), ".yaml")
