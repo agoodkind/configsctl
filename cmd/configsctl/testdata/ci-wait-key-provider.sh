@@ -3,7 +3,7 @@
 # The script writes the OpenTofu process ID and its own process ID to the path
 # in its first argument, then replaces itself with sleep for 300 seconds.
 set -eu
-pid_file=$1
-printf '%s %s\n' "$PPID" "$$" > "$pid_file.partial"
-mv "$pid_file.partial" "$pid_file"
+PID_FILE=$1
+printf '%s %s\n' "$PPID" "$$" > "$PID_FILE.partial"
+mv "$PID_FILE.partial" "$PID_FILE"
 exec sleep 300
