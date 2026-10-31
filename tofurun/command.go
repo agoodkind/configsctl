@@ -66,6 +66,8 @@ var flagRules = map[string]flagRule{
 type flag struct {
 	name  string
 	value string
+	// index is the position of the flag in Request.Args.
+	index int
 }
 
 // command is a parsed OpenTofu invocation.
@@ -90,8 +92,11 @@ func parseCommand(args []string) (command, error) {
 		}
 		parsed.name, first = workspaceCommand, 2
 	}
+	// The rejection identifies argument 0 without including its text. Run checks
+	// the subcommand before registering declared secrets, and the argument
+	// can contain a secret.
 	if _, ok := flagRules[parsed.name]; !ok {
-		return parsed, rejection("tofurun.command_unsupported", fmt.Sprintf("the OpenTofu subcommand %q is not supported", parsed.name))
+		return parsed, rejection("tofurun.command_unsupported", "argument 0 is not a supported OpenTofu subcommand")
 	}
 	for index := first; index < len(args); index++ {
 		argument := args[index]
@@ -104,7 +109,7 @@ func parseCommand(args []string) (command, error) {
 		if !found {
 			value = trueValue
 		}
-		parsed.flags = append(parsed.flags, flag{name: name, value: value})
+		parsed.flags = append(parsed.flags, flag{name: name, value: value, index: index})
 	}
 	return parsed, nil
 }
@@ -143,7 +148,7 @@ func (c command) check(request Request, scoped bool) error {
 	rule := flagRules[c.name]
 	for _, item := range c.flags {
 		if !slices.Contains(rule.allowed, item.name) {
-			return rejection("tofurun.flag_refused", fmt.Sprintf("OpenTofu %s does not accept -%s here", c.name, item.name))
+			return rejection("tofurun.flag_refused", fmt.Sprintf("OpenTofu %s does not accept the flag in argument %d", c.name, item.index))
 		}
 	}
 	for name, want := range rule.required {
@@ -184,11 +189,15 @@ func (c command) check(request Request, scoped bool) error {
 	}
 }
 
-// checkPlan requires a positive -parallelism and an -out path, and it refuses
-// -lock=false with a host lock scope.
+// checkPlan requires a positive -parallelism and an -out path. When a host
+// lock scope and -lock are present, checkPlan requires the -lock value to
+// parse as true with [strconv.ParseBool]. OpenTofu uses [strconv.ParseBool]
+// for boolean flags.
 func (c command) checkPlan(scoped bool) error {
-	if lock, _ := c.value(lockFlag); scoped && lock == falseValue {
-		return rejection("tofurun.lock_refused", "a plan with a host lock scope requires backend locking")
+	if lock, found := c.value(lockFlag); scoped && found {
+		if enabled, err := strconv.ParseBool(lock); err != nil || !enabled {
+			return rejection("tofurun.lock_refused", "a plan with a host lock scope requires backend locking")
+		}
 	}
 	if len(c.positionals) != 0 {
 		return rejection("tofurun.positional_refused", "OpenTofu plan does not accept a positional argument")

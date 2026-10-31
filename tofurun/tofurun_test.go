@@ -1,9 +1,15 @@
 package tofurun_test
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"log"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -102,6 +108,27 @@ resource "terraform_data" "wait" {
   }
 }
 `
+
+const remoteModuleRoot = `
+terraform {
+  backend "local" {}
+}
+
+module "remote" {
+  source = "%s/module.zip"
+}
+`
+
+const remoteModule = `
+output "value" {
+  value = "module"
+}
+`
+
+const (
+	initialLock = "# initial provider lock file\n"
+	changedLock = "# changed provider lock file\n"
+)
 
 const brokenRoot = `
 output "missing" {
@@ -692,6 +719,16 @@ func TestRunRefusesUnsafeRequestsBeforeStartingOpenTofu(t *testing.T) {
 		{name: "private JSON through a link", request: modify(privateJSON(linkedJSON), "show", "-json", savedPlan)},
 		{name: "show JSON to progress", request: modify(keep, "show", "-json", savedPlan)},
 	}
+	refusedPlans := []string{planPath}
+	for position, spelling := range []string{"0", "f", "F", "FALSE", "False", "false"} {
+		spellingPlan := filepath.Join(f.tmpdir, "plan-lock-"+strconv.Itoa(position))
+		refusedPlans = append(refusedPlans, spellingPlan)
+		cases = append(cases, struct {
+			name    string
+			request tofurun.Request
+			scope   *hostlock.Scope
+		}{name: "scoped plan with lock " + spelling, request: modify(keep, planArgs(spellingPlan, "-lock="+spelling)...), scope: scope})
+	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			result, err := tofurun.Run(t.Context(), tc.request, tc.scope)
@@ -706,7 +743,97 @@ func TestRunRefusesUnsafeRequestsBeforeStartingOpenTofu(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(outside, "report", "plan.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("check that the JSON file outside TMPDIR does not exist: %v", err)
 	}
+	for _, path := range refusedPlans {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("check that the refused plan %s does not exist: %v", path, err)
+		}
+	}
 	requireNoState(t, f)
+}
+
+// TestRunRejectionDoesNotDiscloseDeclaredSecrets places declared secret values
+// in the subcommand and flag-name positions that Run checks before it
+// registers the secrets.
+func TestRunRejectionDoesNotDiscloseDeclaredSecrets(t *testing.T) {
+	f := newFixture(t, encryptedRoot)
+	var logs bytes.Buffer
+	previous, previousWriter, previousFlags := slog.Default(), log.Writer(), log.Flags()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() {
+		slog.SetDefault(previous)
+		log.SetOutput(previousWriter)
+		log.SetFlags(previousFlags)
+	})
+	requests := [][]string{
+		{passphraseValue},
+		{tokenValue, "-input=false"},
+		planArgs(filepath.Join(f.tmpdir, "plan"), "-"+passphraseValue),
+		planArgs(filepath.Join(f.tmpdir, "plan"), "--"+tokenValue+"=1"),
+		{"validate", "-" + passphraseValue + "=true"},
+	}
+	for _, args := range requests {
+		_, err := tofurun.Run(t.Context(), f.request(args...), nil)
+		if !errors.Is(err, tofurun.ErrRejected) {
+			t.Fatalf("Run with a secret argument at a checked position: err = %v, want ErrRejected", err)
+		}
+		for _, secret := range []string{passphraseValue, tokenValue} {
+			if strings.Contains(err.Error(), secret) || strings.Contains(logs.String(), secret) {
+				t.Fatal("the rejection error or log contains a declared secret value")
+			}
+		}
+	}
+}
+
+// TestRunReportsAProviderLockChangedDuringInit serves a module archive from a
+// local HTTP server. In the changed case, the server rewrites the provider lock
+// file before returning the archive.
+func TestRunReportsAProviderLockChangedDuringInit(t *testing.T) {
+	initArgs := []string{"init", "-input=false", "-lockfile=readonly", "-no-color"}
+	for _, change := range []bool{false, true} {
+		archive := moduleArchive(t)
+		f := newFixture(t, "")
+		lockFile := filepath.Join(f.root, ".terraform.lock.hcl")
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			if change {
+				if err := os.WriteFile(lockFile, []byte(changedLock), 0o600); err != nil {
+					http.Error(writer, err.Error(), http.StatusInternalServerError)
+					return
+				}
+			}
+			_, _ = writer.Write(archive)
+		}))
+		t.Cleanup(server.Close)
+		writeFile(t, filepath.Join(f.root, "main.tf"), fmt.Sprintf(remoteModuleRoot, server.URL))
+		writeFile(t, lockFile, initialLock)
+		result, err := tofurun.Run(t.Context(), f.request(initArgs...), nil)
+		if result.ExitCode != 0 {
+			t.Fatalf("OpenTofu init exited with %d; log %s", result.ExitCode, result.LogPath)
+		}
+		if change && !errors.Is(err, tofurun.ErrProviderLockChanged) {
+			t.Fatalf("Run init with a changed lock file: err = %v, want ErrProviderLockChanged", err)
+		}
+		if !change && err != nil {
+			t.Fatalf("Run init with an unchanged lock file: %v", err)
+		}
+	}
+}
+
+// moduleArchive returns a zip archive with one OpenTofu module file.
+func moduleArchive(t *testing.T) []byte {
+	t.Helper()
+	var archive bytes.Buffer
+	writer := zip.NewWriter(&archive)
+	file, err := writer.Create("main.tf")
+	if err != nil {
+		t.Fatalf("create the module archive entry: %v", err)
+	}
+	if _, err := file.Write([]byte(remoteModule)); err != nil {
+		t.Fatalf("write the module archive entry: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close the module archive: %v", err)
+	}
+	return archive.Bytes()
 }
 
 func slicesWithout(values []string, removed string) []string {
