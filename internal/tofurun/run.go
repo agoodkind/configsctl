@@ -79,8 +79,8 @@ func Run(ctx context.Context, request Request) (Result, error) {
 		cmd.Stderr = log
 	}
 
-	runErr := procgroup.RunGroup(cmd)
-	result := Result{ExitCode: 0, LogPath: ""}
+	exitCode, runErr := Execute(ctx, cmd)
+	result := Result{ExitCode: exitCode, LogPath: ""}
 	var closeErr error
 	if log != nil {
 		result.LogPath = log.Path()
@@ -89,11 +89,26 @@ func Run(ctx context.Context, request Request) (Result, error) {
 	if runErr == nil {
 		return result, closeErr
 	}
+	if closeErr == nil {
+		return result, runErr
+	}
+	slog.Error("tofu.command_incomplete", "workspace", request.Root, "err", closeErr)
+	return result, errors.Join(runErr, closeErr)
+}
+
+// Execute runs cmd with procgroup.RunGroup. cmd must come from
+// [exec.CommandContext] with ctx. Execute returns the exit status and a nil
+// error when the process exits before ctx ends. Otherwise it returns an error
+// wrapping ErrIncomplete.
+func Execute(ctx context.Context, cmd *exec.Cmd) (int, error) {
+	runErr := procgroup.RunGroup(cmd)
+	if runErr == nil {
+		return 0, nil
+	}
 	var exited *exec.ExitError
 	if context.Cause(ctx) == nil && errors.As(runErr, &exited) {
-		result.ExitCode = exited.ExitCode()
-		return result, closeErr
+		return exited.ExitCode(), nil
 	}
-	slog.Error("tofu.command_incomplete", "workspace", request.Root, "err", runErr)
-	return result, fmt.Errorf("%w: %w", ErrIncomplete, errors.Join(runErr, closeErr))
+	slog.Error("tofu.command_incomplete", "workspace", cmd.Dir, "err", runErr)
+	return 0, fmt.Errorf("%w: %w", ErrIncomplete, runErr)
 }

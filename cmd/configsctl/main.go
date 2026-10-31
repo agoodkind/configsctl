@@ -81,6 +81,9 @@ func run(args []string) error {
 		return errors.New("usage: configsctl <command>")
 	}
 	command := args[0]
+	if command == "ci" {
+		return runCI(args[1:])
+	}
 	handler, ok := handlers[command]
 	if !ok {
 		return fmt.Errorf("unknown command: %q", command)
