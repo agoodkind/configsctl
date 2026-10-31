@@ -19,45 +19,7 @@ const (
 	ciSettingName     = "TF_VAR_setting"
 	ciSettingValue    = "visible-setting"
 	ciProgressConfig  = `{"version": 1, "required_environment": ["TF_VAR_setting"], "secret_environment": ["TF_VAR_state_passphrase"], "secret_files": {}, "output_mode": "redacted_progress"}`
-	ciEncryptedModule = `
-variable "state_passphrase" {
-  type      = string
-  sensitive = true
-}
-
-variable "setting" {
-  type = string
-}
-
-terraform {
-  backend "local" {}
-
-  encryption {
-    key_provider "pbkdf2" "main" {
-      passphrase = "${var.state_passphrase}"
-    }
-    method "aes_gcm" "main" {
-      keys = key_provider.pbkdf2.main
-    }
-    state {
-      method   = method.aes_gcm.main
-      enforced = true
-    }
-    plan {
-      method   = method.aes_gcm.main
-      enforced = true
-    }
-  }
-}
-
-resource "terraform_data" "item" {
-  input = var.setting
-}
-
-output "passphrase_echo" {
-  value = nonsensitive(var.state_passphrase)
-}
-`
+	ciEncryptedModule = "testdata/ci-encrypted-root.tf"
 )
 
 // ciCheckout is a checkout directory with one OpenTofu root and private HOME
@@ -76,7 +38,11 @@ func newCICheckout(t *testing.T) ciCheckout {
 			t.Fatalf("restrict %s: %v", directory, err)
 		}
 	}
-	writeFixtureFile(t, filepath.Join(checkout.dir, ciRootName, "main.tf"), ciEncryptedModule)
+	module, err := os.ReadFile(ciEncryptedModule)
+	if err != nil {
+		t.Fatalf("the test cannot read %s: %v", ciEncryptedModule, err)
+	}
+	writeFixtureFile(t, filepath.Join(checkout.dir, ciRootName, "main.tf"), string(module))
 	return checkout
 }
 

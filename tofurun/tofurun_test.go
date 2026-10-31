@@ -40,76 +40,12 @@ const (
 	lockRun            = "20261030T000000Z-tofurun1"
 )
 
-const encryptedRoot = `
-variable "state_passphrase" {
-  type      = string
-  sensitive = true
-}
-
-variable "token_file" {
-  type = string
-}
-
-variable "label" {
-  type    = string
-  default = "first"
-}
-
-terraform {
-  backend "local" {}
-
-  encryption {
-    key_provider "pbkdf2" "main" {
-      passphrase = "${var.state_passphrase}"
-    }
-    method "aes_gcm" "main" {
-      keys = key_provider.pbkdf2.main
-    }
-    state {
-      method   = method.aes_gcm.main
-      enforced = true
-    }
-    plan {
-      method   = method.aes_gcm.main
-      enforced = true
-    }
-  }
-}
-
-resource "terraform_data" "item" {
-  input = var.label
-}
-
-output "label" {
-  value = terraform_data.item.output
-}
-
-output "passphrase_echo" {
-  value = nonsensitive(var.state_passphrase)
-}
-
-output "token_echo" {
-  value = file(var.token_file)
-}
-`
-
-const waitingRoot = `
-variable "pid_file" {
-  type = string
-}
-
-terraform {
-  backend "local" {}
-}
-
-resource "terraform_data" "wait" {
-  provisioner "local-exec" {
-    command = "sleep 300 & echo $! > ${var.pid_file}; wait"
-  }
-}
-`
-
 const (
+	encryptedRoot    = "testdata/encrypted-root/main.tf"
+	waitingRoot      = "testdata/waiting-root/main.tf"
+	waitScript       = "testdata/wait-provisioner.sh"
+	waitVariable     = "TF_VAR_wait_script"
+	brokenRoot       = "testdata/broken-root/main.tf"
 	remoteModuleRoot = "testdata/remote-module-root.tf.tmpl"
 	remoteModule     = "testdata/remote-module/main.tf"
 )
@@ -119,23 +55,20 @@ const (
 	changedLock = "# changed provider lock file\n"
 )
 
-const brokenRoot = `
-output "missing" {
-  value = var.missing
-}
-`
-
 // fixture is one OpenTofu root with private HOME, TMPDIR, and credential
 // directories.
 type fixture struct {
-	binary  string
-	root    string
-	tmpdir  string
-	home    string
-	token   string
-	pidFile string
+	binary     string
+	root       string
+	tmpdir     string
+	home       string
+	token      string
+	pidFile    string
+	waitScript string
 }
 
+// newFixture copies the module file to main.tf in a new root. An empty module
+// path leaves the root without main.tf.
 func newFixture(t *testing.T, module string) fixture {
 	t.Helper()
 	t.Setenv("TMPDIR", t.TempDir())
@@ -149,12 +82,27 @@ func newFixture(t *testing.T, module string) fixture {
 	}
 	built := fixture{
 		binary: binary, root: t.TempDir(), tmpdir: privateDirectory(t), home: privateDirectory(t),
-		token: filepath.Join(privateDirectory(t), "token"), pidFile: "",
+		token: filepath.Join(privateDirectory(t), "token"), pidFile: "", waitScript: "",
 	}
 	built.pidFile = filepath.Join(built.tmpdir, "sleep.pid")
-	writeFile(t, filepath.Join(built.root, "main.tf"), module)
+	built.waitScript = filepath.Join(privateDirectory(t), filepath.Base(waitScript))
+	if module != "" {
+		writeFile(t, filepath.Join(built.root, "main.tf"), readTestdata(t, module))
+	}
 	writeFile(t, built.token, tokenValue)
+	if err := os.WriteFile(built.waitScript, []byte(readTestdata(t, waitScript)), 0o700); err != nil {
+		t.Fatalf("the test cannot write the local-exec script: %v", err)
+	}
 	return built
+}
+
+func readTestdata(t *testing.T, path string) string {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("the test cannot read %s: %v", path, err)
+	}
+	return string(body)
 }
 
 func privateDirectory(t *testing.T) string {
@@ -183,6 +131,7 @@ func (f fixture) environment() []string {
 		tokenVariable + "=" + f.token,
 		pidVariable + "=" + f.pidFile,
 		"GITHUB_TOKEN=synthetic-github-token-0003",
+		waitVariable + "=" + f.waitScript,
 	}
 }
 
@@ -432,6 +381,7 @@ func TestRunStopsTheProcessGroupWhenTheContextEnds(t *testing.T) {
 	f := newFixture(t, waitingRoot)
 	request := f.request()
 	request.SecretEnvironment, request.SecretFiles = nil, nil
+	request.RequiredEnvironment = append(request.RequiredEnvironment, waitVariable)
 	initArgs := []string{"init", "-input=false", "-lockfile=readonly", "-no-color"}
 	request.Args = initArgs
 	requireExit(t, run(t, request, nil), 0, initArgs)
