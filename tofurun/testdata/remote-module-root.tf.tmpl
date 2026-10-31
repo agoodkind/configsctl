@@ -1,0 +1,7 @@
+terraform {
+  backend "local" {}
+}
+
+module "remote" {
+  source = "{{ .ServerURL }}/module.zip"
+}

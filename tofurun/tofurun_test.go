@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"log/slog"
 	"net/http"
@@ -17,6 +16,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"text/template"
 	"time"
 
 	"goodkind.io/configsctl/hostlock"
@@ -109,21 +109,10 @@ resource "terraform_data" "wait" {
 }
 `
 
-const remoteModuleRoot = `
-terraform {
-  backend "local" {}
-}
-
-module "remote" {
-  source = "%s/module.zip"
-}
-`
-
-const remoteModule = `
-output "value" {
-  value = "module"
-}
-`
+const (
+	remoteModuleRoot = "testdata/remote-module-root.tf.tmpl"
+	remoteModule     = "testdata/remote-module/main.tf"
+)
 
 const (
 	initialLock = "# initial provider lock file\n"
@@ -803,7 +792,7 @@ func TestRunReportsAProviderLockChangedDuringInit(t *testing.T) {
 			_, _ = writer.Write(archive)
 		}))
 		t.Cleanup(server.Close)
-		writeFile(t, filepath.Join(f.root, "main.tf"), fmt.Sprintf(remoteModuleRoot, server.URL))
+		writeFile(t, filepath.Join(f.root, "main.tf"), renderRemoteModuleRoot(t, server.URL))
 		writeFile(t, lockFile, initialLock)
 		result, err := tofurun.Run(t.Context(), f.request(initArgs...), nil)
 		if result.ExitCode != 0 {
@@ -818,16 +807,35 @@ func TestRunReportsAProviderLockChangedDuringInit(t *testing.T) {
 	}
 }
 
+// renderRemoteModuleRoot fills the root module template with the module
+// server URL.
+func renderRemoteModuleRoot(t *testing.T, serverURL string) string {
+	t.Helper()
+	parsed, err := template.ParseFiles(remoteModuleRoot)
+	if err != nil {
+		t.Fatalf("the test cannot parse %s: %v", remoteModuleRoot, err)
+	}
+	var rendered strings.Builder
+	if err := parsed.Execute(&rendered, struct{ ServerURL string }{ServerURL: serverURL}); err != nil {
+		t.Fatalf("the test cannot render %s: %v", remoteModuleRoot, err)
+	}
+	return rendered.String()
+}
+
 // moduleArchive returns a zip archive with one OpenTofu module file.
 func moduleArchive(t *testing.T) []byte {
 	t.Helper()
 	var archive bytes.Buffer
 	writer := zip.NewWriter(&archive)
+	module, err := os.ReadFile(remoteModule)
+	if err != nil {
+		t.Fatalf("the test cannot read %s: %v", remoteModule, err)
+	}
 	file, err := writer.Create("main.tf")
 	if err != nil {
 		t.Fatalf("create the module archive entry: %v", err)
 	}
-	if _, err := file.Write([]byte(remoteModule)); err != nil {
+	if _, err := file.Write(module); err != nil {
 		t.Fatalf("write the module archive entry: %v", err)
 	}
 	if err := writer.Close(); err != nil {

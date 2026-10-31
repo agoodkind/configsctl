@@ -15,36 +15,35 @@ import (
 	"time"
 )
 
-// ciWaitingModule configures an external key provider that records the
-// OpenTofu process ID and its own process ID, then waits. OpenTofu init runs
-// the key provider and waits for its answer.
-const ciWaitingModule = `
-variable "pid_file" {
-  type = string
-}
-
-terraform {
-  backend "local" {}
-
-  encryption {
-    key_provider "external" "wait" {
-      command = ["/bin/sh", "-c", "echo \"$PPID $$\" > ${var.pid_file}.tmp; mv ${var.pid_file}.tmp ${var.pid_file}; exec sleep 300"]
-    }
-    method "aes_gcm" "main" {
-      keys = key_provider.external.wait
-    }
-    state {
-      method = method.aes_gcm.main
-    }
-  }
-}
-`
-
 const (
+	ciWaitingModule = "testdata/ci-wait-key-provider.tf"
+	ciWaitingScript = "testdata/ci-wait-key-provider.sh"
 	ciPIDName       = "TF_VAR_pid_file"
-	ciWaitingConfig = `{"version": 1, "required_environment": ["TF_VAR_pid_file"], "secret_environment": [], "secret_files": {}, "output_mode": "redacted_progress"}`
+	ciScriptName    = "TF_VAR_provider_script"
+	ciWaitingConfig = `{"version": 1, "required_environment": ["TF_VAR_pid_file", "TF_VAR_provider_script"], "secret_environment": [], "secret_files": {}, "output_mode": "redacted_progress"}`
 	ciSignalWait    = 60 * time.Second
 )
+
+// installWaitingProvider copies the waiting module to the OpenTofu root and
+// the key provider script to an executable file in TMPDIR. It returns the
+// script path.
+func installWaitingProvider(t *testing.T, checkout ciCheckout) string {
+	t.Helper()
+	module, err := os.ReadFile(ciWaitingModule)
+	if err != nil {
+		t.Fatalf("the test cannot read %s: %v", ciWaitingModule, err)
+	}
+	writeFixtureFile(t, filepath.Join(checkout.dir, ciRootName, "main.tf"), string(module))
+	script, err := os.ReadFile(ciWaitingScript)
+	if err != nil {
+		t.Fatalf("the test cannot read %s: %v", ciWaitingScript, err)
+	}
+	path := filepath.Join(checkout.tmpdir, filepath.Base(ciWaitingScript))
+	if err := os.WriteFile(path, script, 0o700); err != nil {
+		t.Fatalf("the test cannot write the key provider script: %v", err)
+	}
+	return path
+}
 
 // TestCITofuStopsOpenTofuOnSignals sends SIGINT and SIGTERM to the built
 // configsctl binary while OpenTofu init waits for the key provider. The binary
@@ -54,7 +53,7 @@ func TestCITofuStopsOpenTofuOnSignals(t *testing.T) {
 	for _, signal := range []syscall.Signal{syscall.SIGINT, syscall.SIGTERM} {
 		t.Run(signal.String(), func(t *testing.T) {
 			checkout := newCICheckout(t)
-			writeFixtureFile(t, filepath.Join(checkout.dir, ciRootName, "main.tf"), ciWaitingModule)
+			script := installWaitingProvider(t, checkout)
 			config := checkout.writeConfig(t, "config.json", ciWaitingConfig)
 			pidFile := filepath.Join(checkout.tmpdir, "provider.pid")
 			args := []string{
@@ -63,7 +62,7 @@ func TestCITofuStopsOpenTofuOnSignals(t *testing.T) {
 			}
 			command := exec.CommandContext(context.Background(), configsctlBinary, args...)
 			command.Dir = checkout.dir
-			command.Env = append(checkout.environment(), ciPIDName+"="+pidFile)
+			command.Env = append(checkout.environment(), ciPIDName+"="+pidFile, ciScriptName+"="+script)
 			if err := command.Start(); err != nil {
 				t.Fatalf("start configsctl ci tofu init: %v", err)
 			}
