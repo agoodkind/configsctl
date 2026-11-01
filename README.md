@@ -40,8 +40,19 @@ directory. OpenTofu installs those sources from the mirror and uses the public
 registries for other sources. The generated configuration uses private
 directories and files and takes precedence over `TF_CLI_CONFIG_FILE` when this
 setting is present. For every `configsctl tofu` command except an `apply` on
-the explicit lock path, configsctl passes its complete process environment and
-the vault values to OpenTofu. When the configuration does not set
+the explicit lock path, configsctl passes the process environment and the
+vault values to OpenTofu with these changes:
+
+- configsctl expands `TF_CLI_ARGS` and every `TF_CLI_ARGS_*` variable into
+  OpenTofu arguments and removes those variables from the environment.
+- When a command uses a `tofu.credentials` entry, configsctl removes the
+  `TF_VAR_` entries for these items:
+  - The username variable
+  - The password variable
+  - The rotator password key
+
+For commands that use a `tofu.credentials` entry, configsctl then adds the
+generated username and password. When the configuration does not set
 `tofu.provider_mirror`, these commands keep `TF_CLI_CONFIG_FILE` and the other
 native CLI configuration variables from the process. The explicit lock path
 passes only the variables listed in the Declare lock endpoints section.
@@ -105,7 +116,14 @@ Endpoint fields:
 | `user` | configsctl uses this optional field as the SSH user. configsctl defaults to `root`. |
 | `address` | configsctl requires a nonempty address. An empty address means a local lock. configsctl refuses the settings with an error stating that configsctl does not support a local lock. |
 
-configsctl locks each host by running `ssh` as `user@address`. configsctl uses `/var/lib/configs` as the lock directory on every host.
+configsctl locks each host by running `ssh` as `user@address`. configsctl uses these lock directories:
+
+| Lock | Host | Directory |
+|---|---|---|
+| Host lock | The lock host | `/var/lib/configs` |
+| Guest lock | The declared hypervisor | `/var/lib/configs/guests/<vmid>` |
+
+The plan decision selects a guest lock for a node and VMID without deployment enrollment. The guest lock uses the host name `guest:<node>/<vmid>`.
 
 configsctl checks these rules when it reads the settings and refuses invalid settings before it starts OpenTofu:
 
@@ -137,9 +155,9 @@ Accepted options:
 
 | Option | Accepted form |
 | --- | --- |
-| `-auto-approve` | configsctl accepts `-auto-approve`, `-auto-approve=true`, and `-auto-approve=false`. |
-| `-no-color` | configsctl accepts `-no-color`, `-no-color=true`, and `-no-color=false`. configsctl rejects any other value. The accepted value does not change command behavior. The plan command and the apply command always run with `-no-color`. |
-| `-input=false` | configsctl accepts only `false` for `-input`. |
+| `-auto-approve` | On the explicit lock path, configsctl accepts the bare option as true or accepts any of these values: `1`, `t`, `T`, `true`, `True`, `TRUE`, `0`, `f`, `F`, `false`, `False`, `FALSE`. configsctl rejects any other value with an invalid value error. A false value requires the same operator confirmation as an absent option. |
+| `-no-color` | On the explicit lock path, configsctl accepts the bare option as true or accepts any of these values: `1`, `t`, `T`, `true`, `True`, `TRUE`, `0`, `f`, `F`, `false`, `False`, `FALSE`. configsctl rejects any other value with an invalid value error. The accepted value does not change command behavior. The plan command and the apply command always run with `-no-color`, even when the value is false. |
+| `-input=false` | On the explicit lock path, configsctl accepts `-input` only with one of these false values: `0`, `f`, `F`, `false`, `False`, `FALSE`. configsctl rejects a bare `-input` and all other values with an error stating that the explicit lock path requires `-input=false`. |
 | `-parallelism=N` | configsctl accepts a positive integer for `N` and defaults to `10`. |
 | `-lock-timeout=DURATION` | configsctl accepts the value in the `-lock-timeout=DURATION` form. |
 
@@ -158,12 +176,12 @@ The explicit lock path runs these steps:
 1. OpenTofu creates a plan with `-detailed-exitcode` in a private file. configsctl records the SHA-256 digest of the plan file immediately after planning.
 2. OpenTofu shows the plan as JSON.
 3. configsctl selects the hosts to lock from the declared `lock_targets` and endpoints. configsctl refuses a plan with unknown lock ownership before it takes any lock.
-4. When the plan has changes and the arguments do not include `-auto-approve`, configsctl requires confirmation. configsctl treats input as disabled when either condition applies:
+4. When the plan has changes and the effective arguments do not enable `-auto-approve`, configsctl requires confirmation. An argument `-auto-approve=false` does not enable automatic approval. configsctl treats input as disabled when either condition applies:
 
-   1. The arguments include `-input=false`.
+   1. The arguments include `-input` with an accepted false value.
    2. The arguments do not include an `-input` option, and `TF_INPUT` has the value `false` or `0`.
 
-   When either condition applies, configsctl refuses the apply before taking any lock and before OpenTofu applies. The error states that OpenTofu requires `-auto-approve` for a noninteractive apply with pending changes. Otherwise, configsctl asks the operator to enter `yes` on standard input. configsctl cancels the apply with the error "OpenTofu apply canceled" for any other answer.
+   When input is disabled and confirmation is required, configsctl refuses the apply before taking any lock and before OpenTofu applies. The error states that OpenTofu requires `-auto-approve` for a noninteractive apply with pending changes. When confirmation is required and input is enabled, configsctl asks the operator to enter `yes` on standard input. configsctl cancels the apply with the error "OpenTofu apply canceled" for any other answer.
 5. configsctl acquires locks on all selected hosts.
 6. configsctl compares the current SHA-256 digest of the plan file with the recorded digest and refuses to apply a changed file.
 7. OpenTofu applies that exact plan.
@@ -185,6 +203,12 @@ Environment variables:
 | `<NAME>` | configsctl passes a vault value when the vault key uses `<env_key_prefix><NAME>`. configsctl redacts the value. |
 
 When the configuration does not set `tofu.provider_mirror`, the explicit lock path does not pass `TF_CLI_CONFIG_FILE` or any native CLI configuration variable from the process environment.
+
+The explicit lock path uses the saved workspace selection in the OpenTofu root, or `default` when the root does not store a workspace selection. The explicit lock path does not pass `TF_WORKSPACE` to OpenTofu. When the configsctl process sets `TF_WORKSPACE` to a value that differs from the selected workspace, configsctl refuses the apply before OpenTofu starts. configsctl logs the refusal and returns an error that states both values. The apply proceeds when the process does not set `TF_WORKSPACE` or sets it to the selected workspace.
+
+The explicit apply fails when the vault stores an empty value for a key that the explicit lock path would pass. This rule covers keys that match declared workspace variable names or use the form `<env_key_prefix><NAME>`. The runner rejects empty secret values, and the error states that the environment does not set the secret. The other `configsctl tofu` commands export an empty value without an error.
+
+The explicit lock path sets `HOME` to a private directory and passes only the environment variables in the table above. A provider that needs the real `HOME` or `SSH_AUTH_SOCK` does not work on the explicit lock path.
 
 The automated controller tests for the explicit lock path run the real lock script and real OpenTofu but replace the ssh program with a local stand-in. The stand-in discards the ssh destination and runs the lock script on the test machine with one fixed lock directory for every lock host; the tests do not start an SSH server or open an SSH connection. These tests do not prove that the declared endpoint owns the lock or that the remote host uses the lock path and releases the lock. Acceptance with a real SSH endpoint must confirm endpoint ownership, lock path ownership, and release before adoption of the explicit lock path.
 

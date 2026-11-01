@@ -330,6 +330,9 @@ func newExplicitRunner(request tofuLockRequest, passwordFile string) (explicitRu
 	if err != nil {
 		return runner, nil, err
 	}
+	if err := requireWorkspaceMatch(request.env, workspace); err != nil {
+		return runner, nil, err
+	}
 	directory, err := os.MkdirTemp("", explicitDirectoryPattern)
 	if err != nil {
 		slog.Error("tofu.mutation.explicit_directory_failed", "err", err)
@@ -376,6 +379,19 @@ func splitExplicitAssignments(assignments []string) (required, redacted []string
 		redacted = append(redacted, name)
 	}
 	return required, redacted
+}
+
+// requireWorkspaceMatch refuses a TF_WORKSPACE value that differs from the
+// selected workspace. tofurun does not pass TF_WORKSPACE to OpenTofu, and
+// without this check the apply would use the selected workspace silently.
+func requireWorkspaceMatch(environment []string, selected string) error {
+	requested := environmentValue(environment, "TF_WORKSPACE")
+	if requested == "" || requested == selected {
+		return nil
+	}
+	err := fmt.Errorf("TF_WORKSPACE is %q, but the explicit lock path applies in the selected workspace %q", requested, selected)
+	slog.Error("tofu.mutation.explicit_workspace_mismatch", "requested", requested, "selected", selected, "err", err)
+	return err
 }
 
 func removePrivateDirectory(path string) {

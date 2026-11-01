@@ -9,8 +9,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"goodkind.io/configsctl/hostlock"
 )
 
 // explicitSettings declares an ssh endpoint for every lock host of the
@@ -120,6 +123,9 @@ func (f explicitFixture) installStandIns(t *testing.T) {
 	} else if err := os.Symlink(absolute, filepath.Join(f.binDir, "tofu")); err != nil {
 		t.Fatal(err)
 	}
+	for _, name := range ansibleProgramNames {
+		sources[name] = filepath.Join("testdata", "explicit", "ansible")
+	}
 	for name, source := range sources {
 		script, err := os.ReadFile(source)
 		if err != nil {
@@ -132,7 +138,7 @@ func (f explicitFixture) installStandIns(t *testing.T) {
 }
 
 // apply runs "configsctl tofu suburban/tack apply" with a PATH that lists the
-// stand-ins and the system programs, and lists no Ansible program.
+// stand-ins, including the Ansible sentinels, before the system programs.
 func (f explicitFixture) apply(t *testing.T, args ...string) commandResult {
 	t.Helper()
 	return f.mutate(t, append([]string{"apply"}, args...)...)
@@ -142,7 +148,6 @@ func (f explicitFixture) apply(t *testing.T, args ...string) commandResult {
 func (f explicitFixture) mutate(t *testing.T, args ...string) commandResult {
 	t.Helper()
 	path := f.binDir + string(os.PathListSeparator) + "/usr/bin" + string(os.PathListSeparator) + "/bin"
-	requireNoAnsibleProgram(t, path)
 	tempDir := filepath.Join(f.tree.root, "tmp")
 	if err := os.MkdirAll(tempDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -166,17 +171,19 @@ func (f explicitFixture) mutate(t *testing.T, args ...string) commandResult {
 		t.Fatalf("run configsctl %v: %v", commandArgs, runErr)
 	}
 	appendFailedRunLogs(t, &result, tempDir)
+	f.requireNoAnsibleCall(t)
 	return result
 }
 
-func requireNoAnsibleProgram(t *testing.T, path string) {
+// requireNoAnsibleCall fails when a sentinel Ansible program ran. The sentinels
+// come first on PATH, which keeps the check valid on a machine with Ansible installed.
+func (f explicitFixture) requireNoAnsibleCall(t *testing.T) {
 	t.Helper()
-	for _, directory := range filepath.SplitList(path) {
-		for _, name := range ansibleProgramNames {
-			if _, err := os.Stat(filepath.Join(directory, name)); err == nil {
-				t.Skipf("%s contains %s; the test needs a PATH without Ansible programs", directory, name)
-			}
-		}
+	marker := filepath.Join(f.binDir, "ansible-marker")
+	if body, err := os.ReadFile(marker); err == nil {
+		t.Fatalf("configsctl ran an Ansible program: %s", body)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
 	}
 }
 
@@ -277,6 +284,7 @@ func TestTofuMutationAppliesTheExactSavedPlan(t *testing.T) {
 			t.Fatalf("the apply ran %q, want one saved plan", last)
 		}
 		requireFile(t, fixture.stateFile())
+		requireOnlyRequestVariables(t, filepath.Join(fixture.binDir, "apply-env-names"))
 	})
 	t.Run("changed plan", func(t *testing.T) {
 		fixture := newExplicitFixture(t, explicitSettings)
@@ -297,6 +305,27 @@ func TestTofuMutationAppliesTheExactSavedPlan(t *testing.T) {
 		requireNoFile(t, filepath.Join(fixture.lockDir, "deploy.lock"))
 		requireNoExplicitDirectories(t, fixture.tree)
 	})
+}
+
+// requireOnlyRequestVariables reads the sorted variable names in the environment
+// of the apply command. Only the request variables and the variables that the
+// shell of the stand-in program adds may appear. The configsctl process
+// variables and the lock state variable may not appear.
+func requireOnlyRequestVariables(t *testing.T, path string) {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := []string{"PATH", "HOME", "TMPDIR", "TF_IN_AUTOMATION", "TF_VAR_prefixed", "LANG", "PWD", "SHLVL", "OLDPWD", "_"}
+	for _, name := range strings.Fields(string(body)) {
+		if !slices.Contains(allowed, name) {
+			t.Fatalf("the apply command received the variable %s", name)
+		}
+	}
+	if strings.Contains(string(body), hostlock.StateEnvVar) {
+		t.Fatalf("the apply command received %s", hostlock.StateEnvVar)
+	}
 }
 
 func TestTofuMutationReleasesItsLock(t *testing.T) {
@@ -476,20 +505,22 @@ func TestHelpRunsWithoutLocksInEndpointWorkspaces(t *testing.T) {
 	cases := map[string]struct {
 		settings string
 		args     []string
-		// OpenTofu rejects a saved plan argument next to -help with exit status 1.
+		// OpenTofu rejects a saved plan argument next to -help with a nonzero exit status.
 		opentofuRejects bool
 	}{
-		"apply with guest modules unset":   {withoutGuestModules, []string{"apply", "-help"}, false},
-		"destroy with guest modules unset": {withoutGuestModules, []string{"destroy", "-help"}, false},
-		"apply with a saved plan":          {explicitSettings, []string{"apply", "-help", "-input=false", "saved.plan"}, true},
+		"apply with guest modules unset":      {withoutGuestModules, []string{"apply", "-help"}, false},
+		"destroy with guest modules unset":    {withoutGuestModules, []string{"destroy", "-help"}, false},
+		"apply -h with guest modules unset":   {withoutGuestModules, []string{"apply", "-h"}, false},
+		"destroy -h with guest modules unset": {withoutGuestModules, []string{"destroy", "-h"}, false},
+		"apply with a saved plan":             {explicitSettings, []string{"apply", "-help", "-input=false", "saved.plan"}, true},
 	}
 	for name, test := range cases {
 		t.Run(name, func(t *testing.T) {
 			fixture := newDirectFixture(t, test.settings)
 			result := fixture.mutate(t, test.args...)
 			if test.opentofuRejects {
-				if result.exitCode != 1 || !strings.Contains(result.stderr, "No help topic for 'saved.plan'") {
-					t.Fatalf("OpenTofu did not report the help argument error: %d %s", result.exitCode, result.stderr)
+				if result.exitCode == 0 {
+					t.Fatalf("OpenTofu accepted a saved plan next to -help: %s", result.stdout)
 				}
 			} else {
 				requireSuccess(t, result, test.args...)
@@ -545,5 +576,28 @@ func TestTofuMutationConfirmation(t *testing.T) {
 			t.Fatalf("the canceled apply took a lock: %s", result.stderr)
 		}
 		requireNoFile(t, fixture.stateFile())
+	})
+}
+
+func TestTofuMutationChecksTheWorkspaceOverride(t *testing.T) {
+	t.Run("refuses a different workspace", func(t *testing.T) {
+		fixture := newDirectFixture(t, explicitSettings)
+		fixture.extraEnv = []string{"TF_WORKSPACE=prod"}
+		result := fixture.apply(t, "-auto-approve", "-input=false")
+		if result.exitCode == 0 || !strings.Contains(result.stderr, "requested=prod") || !strings.Contains(result.stderr, "selected=default") {
+			t.Fatalf("the apply did not refuse the workspace override: %s", result.stderr)
+		}
+		requireOpenTofuNotStarted(t, result)
+		if strings.Contains(result.stderr, "hostlock.acquired") {
+			t.Fatalf("the refused apply took a lock: %s", result.stderr)
+		}
+		requireNoFile(t, fixture.stateFile())
+	})
+	t.Run("accepts the selected workspace", func(t *testing.T) {
+		fixture := newDirectFixture(t, explicitSettings)
+		fixture.extraEnv = []string{"TF_WORKSPACE=default"}
+		args := []string{"-auto-approve", "-input=false"}
+		requireSuccess(t, fixture.apply(t, args...), args...)
+		requireFile(t, fixture.stateFile())
 	})
 }
