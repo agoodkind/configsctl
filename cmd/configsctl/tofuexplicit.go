@@ -97,7 +97,6 @@ func credentialOrRefusal(tofu tofuSettings, workspaceDir string, args []string) 
 	return credential, usesCredential, requireExplicitLockPath(tofu, workspaceDir, args)
 }
 
-// requiredCredentialHosts validates a credential workspace and returns its lock host.
 func requiredCredentialHosts(credential tofuCredentialSettings, usesCredential bool, workspaceDir string, childEnv []string) ([]string, error) {
 	if !usesCredential {
 		return nil, nil
@@ -292,8 +291,6 @@ func lockHostNames(hosts []hostlock.Host) []string {
 	return names
 }
 
-// explicitRunner runs the OpenTofu commands of one mutation in one private
-// directory.
 type explicitRunner struct {
 	base     tofurun.Request
 	planPath string
@@ -446,7 +443,6 @@ func (r explicitRunner) run(
 	return result, nil
 }
 
-// showPlan returns the JSON of the recorded plan.
 func (r explicitRunner) showPlan(ctx context.Context) ([]byte, error) {
 	args := []string{"show", "-json", r.planPath}
 	result, err := r.run(ctx, "show", args, tofurun.PrivateJSON, r.jsonPath, nil, nil)
