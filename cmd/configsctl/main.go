@@ -336,9 +336,12 @@ func runTofu(env cmdEnv, args []string) error {
 	if err != nil {
 		return err
 	}
-	credential, usesCredential, err := credentialForCommand(loaded.Tofu, workspaceDir, safeArgs)
+	credential, usesCredential, err := credentialOrRefusal(loaded.Tofu, workspaceDir, safeArgs)
 	if err != nil {
 		return err
+	}
+	if handled, helpErr := runEndpointHelp(env, loaded.Tofu, workspaceDir, safeArgs, childEnv); handled {
+		return helpErr
 	}
 	releaseMigration, err := leaseTofuMigration(safeArgs, usesCredential)
 	if err != nil {
@@ -346,12 +349,9 @@ func runTofu(env cmdEnv, args []string) error {
 	}
 	defer releaseMigration()
 	slog.Info("tofu run", "dir", workspaceDir, "args", strings.Join(safeArgs, " "))
-	var requiredHosts []string
-	if usesCredential {
-		if err := credential.validateWorkspace(workspaceDir, childEnv); err != nil {
-			return err
-		}
-		requiredHosts = []string{credential.LockHost}
+	requiredHosts, err := requiredCredentialHosts(credential, usesCredential, workspaceDir, childEnv)
+	if err != nil {
+		return err
 	}
 	independent := loaded.Tofu.GuestModules != nil
 	if needsIndependentPlan(independent, safeArgs) {

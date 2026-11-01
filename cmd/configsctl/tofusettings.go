@@ -102,6 +102,9 @@ func loadSettingsWithMirror(path string, mirror *string) (settings, error) {
 	if err := validateTofuCredentials(loaded.Tofu.Credentials); err != nil {
 		return loaded, err
 	}
+	if err := validateEndpointCredentials(loaded.Tofu); err != nil {
+		return loaded, err
+	}
 	if loaded.Tofu.GuestModule != "" && loaded.Tofu.guestHosts() == nil {
 		return loaded, fmt.Errorf(
 			"%s: tofu.guest_module requires tofu.lock_targets.%s.guest_hosts",

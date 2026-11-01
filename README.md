@@ -39,7 +39,12 @@ writes a credential-free CLI configuration in the standard user cache
 directory. OpenTofu installs those sources from the mirror and uses the public
 registries for other sources. The generated configuration uses private
 directories and files and takes precedence over `TF_CLI_CONFIG_FILE` when this
-setting is present. Without this setting, configsctl preserves the native CLI configuration environment for other commands. The explicit lock path passes only the variables listed in the Declare lock endpoints section.
+setting is present. For every `configsctl tofu` command except an `apply` on
+the explicit lock path, configsctl passes its complete process environment and
+the vault values to OpenTofu. When the configuration does not set
+`tofu.provider_mirror`, these commands keep `TF_CLI_CONFIG_FILE` and the other
+native CLI configuration variables from the process. The explicit lock path
+passes only the variables listed in the Declare lock endpoints section.
 
 To run OpenTofu in a nested workspace, pass its selector as the first argument:
 
@@ -109,19 +114,22 @@ configsctl checks these rules when it reads the settings and refuses invalid set
 - Each lock host name must match a host value in `module_hosts`, `module_key_hosts`, `node_hosts`, or `guest_hosts` in the same workspace.
 - When the workspace declares any endpoint, every host value in those four mappings must have an endpoint. configsctl checks host names in sorted order and reports the first host without an endpoint, together with the first mapping entry that uses that host.
 
-configsctl uses the explicit lock path for supported `apply` commands in workspaces that declare `lock_endpoints`. configsctl refuses an `apply` or `destroy` command instead of using the inventory lock path when any condition below applies.
+configsctl uses the explicit lock path for supported `apply` commands in workspaces that declare `lock_endpoints`. Except for the help requests below, configsctl refuses an `apply` or `destroy` command instead of using the inventory lock path when any condition in the table applies.
 
 Refusal reasons:
 
 | Condition | Reason |
 | --- | --- |
-| The command is `destroy`. | The explicit lock path does not run `destroy`. |
-| The workspace has a `tofu.credentials` entry. | The explicit lock path does not support a workspace that uses a credential. |
-| The configuration does not set `tofu.guest_modules`. | The explicit lock path requires `tofu.guest_modules`. |
-| The command line does not start with `apply`. | The explicit lock path requires the command line to start with `apply`. |
-| The command line includes a saved plan. | The explicit lock path does not accept a saved plan. |
+| The command is `destroy`. | The explicit lock path does not support `destroy`. |
+| The workspace does not set `tofu.guest_modules`. | The explicit lock path requires `tofu.guest_modules`. |
+| The command line does not start with `apply`. | The explicit lock path requires a command line that starts with `apply`. |
+| The command line includes a saved plan. | The explicit lock path does not accept saved plans. |
 
-configsctl logs each refusal. The error states the workspace, its declared `lock_endpoints`, and the reason. Workspaces that do not declare `lock_endpoints` keep their current behavior.
+configsctl logs each refusal. Each error identifies the workspace and its declared `lock_endpoints` and states the reason. Workspaces that do not declare `lock_endpoints` keep their current behavior.
+
+When configsctl reads the settings, it refuses any workspace that declares both `lock_endpoints` and a `tofu.credentials` entry before starting OpenTofu. The error identifies the workspace and states that the credential path locks through the inventory. A workspace that declares `lock_endpoints` does not use the credential path.
+
+In a workspace that declares `lock_endpoints`, configsctl runs OpenTofu help directly when an `apply` or `destroy` command includes `-help` or `-h`. For these requests, configsctl does not take a lock, read Ansible inventory, or run an Ansible program. The workspace does not need `tofu.guest_modules`. OpenTofu itself rejects `-help` combined with another positional argument, such as a saved plan, with exit status 1 and a message stating that the help topic does not exist.
 
 The explicit lock path accepts only the following apply options. Each option with a value must use the `-name=value` form.
 
@@ -130,7 +138,7 @@ Accepted options:
 | Option | Accepted form |
 | --- | --- |
 | `-auto-approve` | configsctl accepts `-auto-approve`, `-auto-approve=true`, and `-auto-approve=false`. |
-| `-no-color` | configsctl accepts `-no-color`. |
+| `-no-color` | configsctl accepts `-no-color`, `-no-color=true`, and `-no-color=false`. configsctl rejects any other value. The accepted value does not change command behavior. The plan command and the apply command always run with `-no-color`. |
 | `-input=false` | configsctl accepts only `false` for `-input`. |
 | `-parallelism=N` | configsctl accepts a positive integer for `N` and defaults to `10`. |
 | `-lock-timeout=DURATION` | configsctl accepts the value in the `-lock-timeout=DURATION` form. |
@@ -150,7 +158,12 @@ The explicit lock path runs these steps:
 1. OpenTofu creates a plan with `-detailed-exitcode` in a private file. configsctl records the SHA-256 digest of the plan file immediately after planning.
 2. OpenTofu shows the plan as JSON.
 3. configsctl selects the hosts to lock from the declared `lock_targets` and endpoints. configsctl refuses a plan with unknown lock ownership before it takes any lock.
-4. When the plan has changes and `-auto-approve` is absent, configsctl asks the operator to enter `yes` on standard input unless `-input=false` or the environment variable `TF_INPUT=false` disables input, in which case configsctl refuses the apply with an error stating that OpenTofu requires `-auto-approve` for a noninteractive apply.
+4. When the plan has changes and the arguments do not include `-auto-approve`, configsctl requires confirmation. configsctl treats input as disabled when either condition applies:
+
+   1. The arguments include `-input=false`.
+   2. The arguments do not include an `-input` option, and `TF_INPUT` has the value `false` or `0`.
+
+   When either condition applies, configsctl refuses the apply before taking any lock and before OpenTofu applies. The error states that OpenTofu requires `-auto-approve` for a noninteractive apply with pending changes. Otherwise, configsctl asks the operator to enter `yes` on standard input. configsctl cancels the apply with the error "OpenTofu apply canceled" for any other answer.
 5. configsctl acquires locks on all selected hosts.
 6. configsctl compares the current SHA-256 digest of the plan file with the recorded digest and refuses to apply a changed file.
 7. OpenTofu applies that exact plan.
@@ -172,6 +185,8 @@ Environment variables:
 | `<NAME>` | configsctl passes a vault value when the vault key uses `<env_key_prefix><NAME>`. configsctl redacts the value. |
 
 When the configuration does not set `tofu.provider_mirror`, the explicit lock path does not pass `TF_CLI_CONFIG_FILE` or any native CLI configuration variable from the process environment.
+
+The automated controller tests for the explicit lock path run the real lock script and real OpenTofu but replace the ssh program with a local stand-in. The stand-in discards the ssh destination and runs the lock script on the test machine with one fixed lock directory for every lock host; the tests do not start an SSH server or open an SSH connection. These tests do not prove that the declared endpoint owns the lock or that the remote host uses the lock path and releases the lock. Acceptance with a real SSH endpoint must confirm endpoint ownership, lock path ownership, and release before adoption of the explicit lock path.
 
 ## Transfer existing OpenTofu state
 

@@ -9,13 +9,14 @@ import (
 	"log/slog"
 	"maps"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"goodkind.io/configsctl/hostlock"
-	"goodkind.io/configsctl/internal/runid"
 	"goodkind.io/configsctl/internal/tofuargs"
 	"goodkind.io/configsctl/internal/tofulock"
 	"goodkind.io/configsctl/tofurun"
@@ -32,7 +33,6 @@ const (
 	defaultTofuWorkspace       = "default"
 )
 
-// explicitOption is the name of an apply option that the explicit lock path accepts.
 type explicitOption string
 
 const (
@@ -43,7 +43,6 @@ const (
 	optionLockTimeout explicitOption = "lock-timeout"
 )
 
-// explicitOptions are the apply options that the explicit lock path accepts.
 type explicitOptions struct {
 	parallelism int
 	lockTimeout string
@@ -67,7 +66,7 @@ func explicitLockTargets(request tofuLockRequest) (tofulock.Targets, bool) {
 // declares lock_endpoints when the explicit path cannot run the command. The
 // inventory lock path reads the Ansible inventory for these commands. This
 // check stops the command before it starts that path.
-func requireExplicitLockPath(tofu tofuSettings, workspaceDir string, args []string, usesCredential bool) error {
+func requireExplicitLockPath(tofu tofuSettings, workspaceDir string, args []string) error {
 	command := tofuargs.Subcommand(args)
 	if command != tofuargs.Apply && command != tofuargs.Destroy {
 		return nil
@@ -80,7 +79,7 @@ func requireExplicitLockPath(tofu tofuSettings, workspaceDir string, args []stri
 	if len(targets.LockEndpoints) == 0 {
 		return nil
 	}
-	reason := explicitRefusalReason(tofu, args, command, usesCredential)
+	reason := explicitRefusalReason(tofu, args, command)
 	if reason == "" {
 		return nil
 	}
@@ -92,20 +91,61 @@ func requireExplicitLockPath(tofu tofuSettings, workspaceDir string, args []stri
 	return err
 }
 
-// credentialForCommand returns the credential settings of the workspace and
-// whether the command uses them. It refuses a command that requireExplicitLockPath rejects.
-func credentialForCommand(tofu tofuSettings, workspaceDir string, args []string) (tofuCredentialSettings, bool, error) {
+func credentialOrRefusal(tofu tofuSettings, workspaceDir string, args []string) (tofuCredentialSettings, bool, error) {
 	credential, configured := tofu.Credentials[tofuWorkspaceKey(workspaceDir)]
 	usesCredential := configured && credentialCommand(args)
-	return credential, usesCredential, requireExplicitLockPath(tofu, workspaceDir, args, usesCredential)
+	return credential, usesCredential, requireExplicitLockPath(tofu, workspaceDir, args)
 }
 
-func explicitRefusalReason(tofu tofuSettings, args []string, command tofuargs.Command, usesCredential bool) string {
+// requiredCredentialHosts validates a credential workspace and returns its lock host.
+func requiredCredentialHosts(credential tofuCredentialSettings, usesCredential bool, workspaceDir string, childEnv []string) ([]string, error) {
+	if !usesCredential {
+		return nil, nil
+	}
+	if err := credential.validateWorkspace(workspaceDir, childEnv); err != nil {
+		return nil, err
+	}
+	return []string{credential.LockHost}, nil
+}
+
+// runEndpointHelp runs the OpenTofu help command for apply or destroy in a
+// workspace that declares lock_endpoints. The help command takes no lock and
+// reads no inventory. The first result reports whether it handled the command.
+func runEndpointHelp(env cmdEnv, tofu tofuSettings, workspaceDir string, args, childEnv []string) (bool, error) {
+	help := tofuargs.BooleanArgument(args, "help", false) || tofuargs.BooleanArgument(args, "h", false)
+	if !help || !tofuMutates(args) {
+		return false, nil
+	}
+	if len(tofu.LockTargets[tofuWorkspaceKey(workspaceDir)].LockEndpoints) == 0 {
+		return false, nil
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return true, executeTofu(ctx, env, workspaceDir, args, args, childEnv)
+}
+
+// validateEndpointCredentials refuses a workspace that declares both
+// lock_endpoints and a credential. The credential path locks through the
+// inventory, which the explicit lock path does not read.
+func validateEndpointCredentials(tofu tofuSettings) error {
+	for _, workspace := range slices.Sorted(maps.Keys(tofu.LockTargets)) {
+		if len(tofu.LockTargets[workspace].LockEndpoints) == 0 {
+			continue
+		}
+		if _, credential := tofu.Credentials[workspace]; !credential {
+			continue
+		}
+		err := fmt.Errorf("workspace %s declares both tofu.lock_targets lock_endpoints and tofu.credentials; the credential path locks through the inventory", workspace)
+		slog.Error("tofu.settings.endpoints_with_credential", "workspace", workspace, "err", err)
+		return err
+	}
+	return nil
+}
+
+func explicitRefusalReason(tofu tofuSettings, args []string, command tofuargs.Command) string {
 	switch {
 	case command == tofuargs.Destroy:
 		return "the explicit lock path runs apply only, and destroy would use the inventory lock path"
-	case usesCredential:
-		return "the workspace uses a credential, and the credential path would use the inventory lock path"
 	case tofu.GuestModules == nil:
 		return "tofu.guest_modules is unset, and the command would use the inventory lock path"
 	case args[0] != string(tofuargs.Apply):
@@ -188,7 +228,7 @@ func parseExplicitArguments(args []string) (explicitOptions, error) {
 	options := explicitOptions{parallelism: explicitDefaultParallelism, lockTimeout: ""}
 	for _, argument := range args[1:] {
 		if !strings.HasPrefix(argument, "-") {
-			return options, errors.New("the declared lock endpoints path does not accept a positional apply argument")
+			return options, errors.New("the explicit lock path does not accept a positional apply argument")
 		}
 		name, value, hasValue := strings.Cut(strings.TrimLeft(argument, "-"), "=")
 		switch explicitOption(name) {
@@ -202,7 +242,7 @@ func parseExplicitArguments(args []string) (explicitOptions, error) {
 			}
 		case optionInput:
 			if enabled, err := strconv.ParseBool(value); !hasValue || err != nil || enabled {
-				return options, errors.New("the declared lock endpoints path requires -input=false")
+				return options, errors.New("the explicit lock path requires -input=false")
 			}
 		case optionParallelism:
 			parallelism, err := strconv.Atoi(value)
@@ -216,7 +256,7 @@ func parseExplicitArguments(args []string) (explicitOptions, error) {
 			}
 			options.lockTimeout = value
 		default:
-			return options, fmt.Errorf("the declared lock endpoints path does not accept the OpenTofu option -%s", name)
+			return options, fmt.Errorf("the explicit lock path does not accept the OpenTofu option -%s", name)
 		}
 	}
 	return options, nil
@@ -370,8 +410,6 @@ func selectedTofuWorkspace(root string) (string, error) {
 	return strings.TrimSpace(string(body)), nil
 }
 
-// run runs one command and returns its result. A refused request or an
-// incomplete command returns an error.
 func (r explicitRunner) run(
 	ctx context.Context, step string, args []string, mode tofurun.OutputMode, jsonPath string,
 	scope *hostlock.Scope, requiredHosts []string,
@@ -439,19 +477,9 @@ func requirePlanDigest(path string, recorded [sha256.Size]byte) error {
 func acquireExplicitLocks(
 	ctx context.Context, hosts []hostlock.Host,
 ) (locked context.Context, scope *hostlock.Scope, release func(), err error) {
-	run, err := runid.Current()
-	if err != nil {
-		slog.Error("lock.run_id_failed", "err", err)
-		return nil, nil, nil, fmt.Errorf("create the run id for host locks: %w", err)
-	}
-	controller, err := controllerName()
+	set, run, err := acquireLockSet(ctx, hosts)
 	if err != nil {
 		return nil, nil, nil, err
-	}
-	set, err := hostlock.AcquireAll(ctx, hosts, run, controller, hostlock.DefaultLease())
-	if err != nil {
-		slog.Error("lock.acquire_failed", "run", run, "err", err)
-		return nil, nil, nil, fmt.Errorf("lock the target hosts: %w", err)
 	}
 	scope, err = set.Scope()
 	if err != nil {
@@ -459,11 +487,6 @@ func acquireExplicitLocks(
 		slog.Error("lock.scope_failed", "run", run, "err", err)
 		return nil, nil, nil, fmt.Errorf("create the host lock scope: %w", err)
 	}
-	lockedCtx, cancel := context.WithCancelCause(ctx)
-	stop := set.KeepRenewed(ctx, cancel)
-	return lockedCtx, scope, func() {
-		stop()
-		cancel(nil)
-		set.ReleaseAll(context.WithoutCancel(ctx))
-	}, nil
+	lockedCtx, release := keepLocksRenewed(ctx, set)
+	return lockedCtx, scope, release, nil
 }

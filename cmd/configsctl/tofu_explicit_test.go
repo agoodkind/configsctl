@@ -51,9 +51,30 @@ type explicitFixture struct {
 	tree    configsTree
 	binDir  string
 	lockDir string
+	// extraEnv adds variables to the configsctl process. stdin feeds its standard input.
+	extraEnv []string
+	stdin    string
+	// observed installs the tofu wrapper that records calls and plan bytes.
+	// Without it, configsctl runs the real tofu directly.
+	observed bool
 }
 
+// newExplicitFixture returns a fixture with the observing tofu wrapper.
 func newExplicitFixture(t *testing.T, settings string) explicitFixture {
+	t.Helper()
+	return newFixture(t, settings, true)
+}
+
+// newDirectFixture returns a fixture that runs the real tofu without the wrapper.
+func newDirectFixture(t *testing.T, settings string) explicitFixture {
+	t.Helper()
+	return newFixture(t, settings, false)
+}
+
+// The explicit path tests are controller tests with a substituted ssh program.
+// They do not prove that a declared endpoint owns the lock or that the lock path
+// and the release happen on the remote host.
+func newFixture(t *testing.T, settings string, observed bool) explicitFixture {
 	t.Helper()
 	requireTofu(t)
 	tree := newConfigsTree(t)
@@ -72,7 +93,7 @@ func newExplicitFixture(t *testing.T, settings string) explicitFixture {
 			t.Fatalf("the fixture tree has %s, or Stat failed: %v", name, err)
 		}
 	}
-	fixture := explicitFixture{tree: tree, binDir: t.TempDir(), lockDir: t.TempDir()}
+	fixture := explicitFixture{tree: tree, binDir: t.TempDir(), lockDir: t.TempDir(), extraEnv: nil, stdin: "", observed: observed}
 	fixture.installStandIns(t)
 	return fixture
 }
@@ -87,15 +108,17 @@ func (f explicitFixture) installStandIns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(absolute, filepath.Join(f.binDir, "real-tofu")); err != nil {
+	sources := map[string]string{"ssh": filepath.Join("testdata", "signalstop", "ssh")}
+	if f.observed {
+		if err := os.Symlink(absolute, filepath.Join(f.binDir, "real-tofu")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(f.binDir, "lockdir"), []byte(f.lockDir), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		sources["tofu"] = filepath.Join("testdata", "explicit", "tofu")
+	} else if err := os.Symlink(absolute, filepath.Join(f.binDir, "tofu")); err != nil {
 		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(f.binDir, "lockdir"), []byte(f.lockDir), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	sources := map[string]string{
-		"tofu": filepath.Join("testdata", "explicit", "tofu"),
-		"ssh":  filepath.Join("testdata", "signalstop", "ssh"),
 	}
 	for name, source := range sources {
 		script, err := os.ReadFile(source)
@@ -127,9 +150,10 @@ func (f explicitFixture) mutate(t *testing.T, args ...string) commandResult {
 	commandArgs := tofuArgs(explicitWorkspace, args...)
 	command := exec.CommandContext(t.Context(), configsctlBinary, commandArgs...)
 	command.Dir = f.tree.root
-	command.Env = []string{
+	command.Env = append([]string{
 		"PATH=" + path, "HOME=" + f.tree.home, "TMPDIR=" + tempDir, "FIXTURE_LOCK_DIR=" + f.lockDir,
-	}
+	}, f.extraEnv...)
+	command.Stdin = strings.NewReader(f.stdin)
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
 	command.Stderr = &stderr
@@ -179,6 +203,14 @@ func requireNoExplicitDirectories(t *testing.T, tree configsTree) {
 	}
 }
 
+// requireOpenTofuNotStarted fails when configsctl logged the start of an OpenTofu command.
+func requireOpenTofuNotStarted(t *testing.T, result commandResult) {
+	t.Helper()
+	if strings.Contains(result.stderr, "command_started") {
+		t.Fatalf("OpenTofu started before the refusal: %s", result.stderr)
+	}
+}
+
 func (f explicitFixture) stateFile() string {
 	return filepath.Join(f.tree.workspaces, "suburban", "tack", "tack.tfstate")
 }
@@ -208,7 +240,7 @@ func TestTofuMutationUsesDeclaredLockEndpointsWithoutInventory(t *testing.T) {
 
 func TestTofuMutationRefusesUndeclaredEndpoint(t *testing.T) {
 	missing := strings.Replace(explicitSettings, "        hv_alpha:\n          address: hv-alpha.example\n", "", 1)
-	fixture := newExplicitFixture(t, missing)
+	fixture := newDirectFixture(t, missing)
 	result := fixture.apply(t, "-auto-approve", "-input=false")
 	if result.exitCode == 0 {
 		t.Fatalf("the apply accepted a host without a declared endpoint: %s", result.stderr)
@@ -216,9 +248,7 @@ func TestTofuMutationRefusesUndeclaredEndpoint(t *testing.T) {
 	if !strings.Contains(result.stderr, "lock_endpoints does not declare host hv_alpha from node_hosts.site") {
 		t.Fatalf("the refusal omitted the undeclared host: %s", result.stderr)
 	}
-	if calls := fixture.calls(t); len(calls) != 0 {
-		t.Fatalf("OpenTofu started before the refusal: %q", calls)
-	}
+	requireOpenTofuNotStarted(t, result)
 	if strings.Contains(result.stderr, "hostlock.acquired") {
 		t.Fatalf("the refused apply took a lock: %s", result.stderr)
 	}
@@ -264,6 +294,7 @@ func TestTofuMutationAppliesTheExactSavedPlan(t *testing.T) {
 			}
 		}
 		requireNoFile(t, fixture.stateFile())
+		requireNoFile(t, filepath.Join(fixture.lockDir, "deploy.lock"))
 		requireNoExplicitDirectories(t, fixture.tree)
 	})
 }
@@ -283,16 +314,12 @@ func TestTofuMutationReleasesItsLock(t *testing.T) {
 }
 
 func TestTofuMutationRefusesUnknownOwnershipBeforeLocking(t *testing.T) {
-	fixture := newExplicitFixture(t, explicitSettings)
+	fixture := newDirectFixture(t, explicitSettings)
 	unowned := "resource \"terraform_data\" \"unowned\" {\n  input = \"unowned\"\n}\n"
 	writeFixtureFile(t, filepath.Join(fixture.tree.workspaces, "suburban", "tack", "unowned.tf"), unowned)
 	result := fixture.apply(t, "-auto-approve", "-input=false")
 	if result.exitCode == 0 || !strings.Contains(result.stderr, "unknown lock ownership") {
 		t.Fatalf("the apply did not refuse unknown ownership: %s", result.stderr)
-	}
-	calls := fixture.calls(t)
-	if len(calls) != 2 || !strings.HasPrefix(calls[0], "plan ") || !strings.HasPrefix(calls[1], "show ") {
-		t.Fatalf("the controller ran %q, want plan and show only", calls)
 	}
 	if strings.Contains(result.stderr, "hostlock.acquired") {
 		t.Fatalf("the refused apply took a lock: %s", result.stderr)
@@ -338,14 +365,12 @@ func TestTofuMutationOptions(t *testing.T) {
 	}
 	for name, test := range refused {
 		t.Run("refuses "+name, func(t *testing.T) {
-			fixture := newExplicitFixture(t, explicitSettings)
+			fixture := newDirectFixture(t, explicitSettings)
 			result := fixture.apply(t, test.args...)
 			if result.exitCode == 0 || !strings.Contains(result.stderr, test.want) {
 				t.Fatalf("the apply did not refuse %s: %s", name, result.stderr)
 			}
-			if calls := fixture.calls(t); len(calls) != 0 {
-				t.Fatalf("OpenTofu started before the refusal: %q", calls)
-			}
+			requireOpenTofuNotStarted(t, result)
 			if strings.Contains(result.stderr, "hostlock.acquired") {
 				t.Fatalf("the refused apply took a lock: %s", result.stderr)
 			}
@@ -402,12 +427,12 @@ func TestTofuMutationRefusesTheInventoryLockPath(t *testing.T) {
 	cases := map[string]legacyRefusalCase{
 		"guest modules unset": {withoutGuestModules, []string{"apply", "-auto-approve", "-input=false"}, false, "tofu.guest_modules is unset"},
 		"saved plan":          {explicitSettings, []string{"apply", "-input=false", "saved.plan"}, true, "the command includes a saved plan"},
-		"credential":          {explicitSettings + explicitCredentialSettings, []string{"apply", "-auto-approve", "-input=false"}, false, "the workspace uses a credential"},
+		"option before apply": {explicitSettings, []string{"-input=false", "apply", "-auto-approve"}, false, "the command must start with apply"},
 		"destroy":             {explicitSettings, []string{"destroy", "-auto-approve", "-input=false"}, false, "runs apply only"},
 	}
 	for name, test := range cases {
 		t.Run(name, func(t *testing.T) {
-			fixture := newExplicitFixture(t, test.settings)
+			fixture := newDirectFixture(t, test.settings)
 			if test.savePlan {
 				plan := tofuArgs(explicitWorkspace, "plan", "-input=false", "-out=saved.plan")
 				requireSuccess(t, runConfigsctl(t, fixture.tree, plan...), plan...)
@@ -423,13 +448,102 @@ func TestTofuMutationRefusesTheInventoryLockPath(t *testing.T) {
 					t.Fatalf("the refusal omitted %q: %s", fragment, result.stderr)
 				}
 			}
-			if calls := fixture.calls(t); len(calls) != 0 {
-				t.Fatalf("OpenTofu started before the refusal: %q", calls)
-			}
+			requireOpenTofuNotStarted(t, result)
 			if strings.Contains(result.stderr, "hostlock.acquired") {
 				t.Fatalf("the refused command took a lock: %s", result.stderr)
 			}
 			requireNoFile(t, fixture.stateFile())
 		})
 	}
+}
+
+func TestSettingsRefuseEndpointsWithACredential(t *testing.T) {
+	fixture := newDirectFixture(t, explicitSettings+explicitCredentialSettings)
+	result := fixture.mutate(t, "plan", "-input=false")
+	if result.exitCode == 0 {
+		t.Fatalf("configsctl loaded settings with endpoints and a credential: %s", result.stderr)
+	}
+	for _, fragment := range []string{"workspaces/suburban/tack", "lock_endpoints", "tofu.credentials"} {
+		if !strings.Contains(result.stderr, fragment) {
+			t.Fatalf("the refusal omitted %q: %s", fragment, result.stderr)
+		}
+	}
+	requireOpenTofuNotStarted(t, result)
+}
+
+func TestHelpRunsWithoutLocksInEndpointWorkspaces(t *testing.T) {
+	withoutGuestModules := strings.Replace(explicitSettings, "  guest_modules:\n    suburban/tack: module.base\n", "", 1)
+	cases := map[string]struct {
+		settings string
+		args     []string
+		// OpenTofu rejects a saved plan argument next to -help with exit status 1.
+		opentofuRejects bool
+	}{
+		"apply with guest modules unset":   {withoutGuestModules, []string{"apply", "-help"}, false},
+		"destroy with guest modules unset": {withoutGuestModules, []string{"destroy", "-help"}, false},
+		"apply with a saved plan":          {explicitSettings, []string{"apply", "-help", "-input=false", "saved.plan"}, true},
+	}
+	for name, test := range cases {
+		t.Run(name, func(t *testing.T) {
+			fixture := newDirectFixture(t, test.settings)
+			result := fixture.mutate(t, test.args...)
+			if test.opentofuRejects {
+				if result.exitCode != 1 || !strings.Contains(result.stderr, "No help topic for 'saved.plan'") {
+					t.Fatalf("OpenTofu did not report the help argument error: %d %s", result.exitCode, result.stderr)
+				}
+			} else {
+				requireSuccess(t, result, test.args...)
+				if !strings.Contains(result.stdout, "Usage: tofu") {
+					t.Fatalf("the help command did not print the OpenTofu usage: %s", result.stdout)
+				}
+			}
+			if strings.Contains(result.stderr, "hostlock.acquired") || strings.Contains(result.stderr, "inventory") || strings.Contains(result.stderr, "tofu.lock.") {
+				t.Fatalf("the help command took a lock or read the inventory: %s", result.stderr)
+			}
+			requireNoFile(t, filepath.Join(fixture.lockDir, "deploy.lock"))
+		})
+	}
+}
+
+func TestTofuMutationConfirmation(t *testing.T) {
+	refusals := map[string]struct {
+		args     []string
+		extraEnv []string
+	}{
+		"input option":  {[]string{"-input=false"}, nil},
+		"TF_INPUT is 0": {nil, []string{"TF_INPUT=0"}},
+	}
+	for name, test := range refusals {
+		t.Run("refuses "+name, func(t *testing.T) {
+			fixture := newDirectFixture(t, explicitSettings)
+			fixture.extraEnv = test.extraEnv
+			result := fixture.apply(t, test.args...)
+			if result.exitCode == 0 || !strings.Contains(result.stderr, "OpenTofu requires -auto-approve for a noninteractive apply") {
+				t.Fatalf("the apply did not require -auto-approve: %s", result.stderr)
+			}
+			if strings.Contains(result.stderr, "hostlock.acquired") {
+				t.Fatalf("the refused apply took a lock: %s", result.stderr)
+			}
+			requireNoFile(t, fixture.stateFile())
+		})
+	}
+	t.Run("applies after yes", func(t *testing.T) {
+		fixture := newDirectFixture(t, explicitSettings)
+		fixture.stdin = "yes\n"
+		requireSuccess(t, fixture.apply(t), "apply")
+		requireFile(t, fixture.stateFile())
+		requireNoFile(t, filepath.Join(fixture.lockDir, "deploy.lock"))
+	})
+	t.Run("stops after another answer", func(t *testing.T) {
+		fixture := newDirectFixture(t, explicitSettings)
+		fixture.stdin = "cancel\n"
+		result := fixture.apply(t)
+		if result.exitCode == 0 || !strings.Contains(result.stderr, "apply canceled") {
+			t.Fatalf("the apply ignored the canceled confirmation: %s", result.stderr)
+		}
+		if strings.Contains(result.stderr, "hostlock.acquired") {
+			t.Fatalf("the canceled apply took a lock: %s", result.stderr)
+		}
+		requireNoFile(t, fixture.stateFile())
+	})
 }

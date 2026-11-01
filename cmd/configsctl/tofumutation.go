@@ -47,7 +47,7 @@ func runIndependentMutation(env cmdEnv, request tofuLockRequest, credential tofu
 	if tofuargs.BooleanArgument(request.args, "help", false) || tofuargs.BooleanArgument(request.args, "h", false) {
 		return executeTofu(ctx, env, request.workspaceDir, request.args, request.args, request.env)
 	}
-	if explicitTargets, explicit := explicitLockTargets(request); explicit && !usesCredential {
+	if explicitTargets, explicit := explicitLockTargets(request); explicit {
 		return runExplicitMutation(ctx, request, explicitTargets, passwordFile)
 	}
 	targets, err := mutationLockTargets(ctx, request)
