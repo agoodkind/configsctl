@@ -5,6 +5,8 @@
 #   calls.log      one line with the arguments of each call
 #   planned.tfplan a copy of the plan file after the plan command
 #   applied.tfplan a copy of the saved plan that the apply command received
+#   lockstate      the line "held" when the lock file in the directory named by
+#                  the lockdir file exists during the apply command
 # When the file named tamper exists, it appends one byte to the recorded plan
 # after the show command, which the controller runs between plan and apply.
 dir=$(dirname "$0")
@@ -12,6 +14,9 @@ echo "$*" >> "$dir/calls.log"
 if [ "$1" = "apply" ]; then
 	for last; do :; done
 	cp "$last" "$dir/applied.tfplan"
+	if [ -e "$(cat "$dir/lockdir")/deploy.lock" ]; then
+		echo held >> "$dir/lockstate"
+	fi
 fi
 "$dir/real-tofu" "$@"
 status=$?

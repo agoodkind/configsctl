@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -22,7 +24,6 @@ import (
 const (
 	explicitDirectoryPattern = "configsctl-explicit-*"
 	explicitDirectoryMode    = 0o700
-	explicitPlanName         = "mutation.tfplan"
 	explicitPlanJSONName     = "mutation-plan.json"
 	// explicitDefaultParallelism is the OpenTofu default. tofurun requires the flag.
 	explicitDefaultParallelism = 10
@@ -60,6 +61,59 @@ func explicitLockTargets(request tofuLockRequest) (tofulock.Targets, bool) {
 		return none, false
 	}
 	return targets, true
+}
+
+// requireExplicitLockPath refuses an apply or destroy in a workspace that
+// declares lock_endpoints when the explicit path cannot run the command. The
+// inventory lock path reads the Ansible inventory for these commands. This
+// check stops the command before it starts that path.
+func requireExplicitLockPath(tofu tofuSettings, workspaceDir string, args []string, usesCredential bool) error {
+	command := tofuargs.Subcommand(args)
+	if command != tofuargs.Apply && command != tofuargs.Destroy {
+		return nil
+	}
+	if tofuargs.BooleanArgument(args, "help", false) || tofuargs.BooleanArgument(args, "h", false) {
+		return nil
+	}
+	workspace := tofuWorkspaceKey(workspaceDir)
+	targets := tofu.LockTargets[workspace]
+	if len(targets.LockEndpoints) == 0 {
+		return nil
+	}
+	reason := explicitRefusalReason(tofu, args, command, usesCredential)
+	if reason == "" {
+		return nil
+	}
+	endpoints := slices.Sorted(maps.Keys(targets.LockEndpoints))
+	err := fmt.Errorf("workspace %s declares lock_endpoints %v, but the explicit lock path cannot run %s: %s",
+		workspace, endpoints, command, reason)
+	slog.Error("tofu.mutation.explicit_path_unavailable", "workspace", workspace,
+		"lock_endpoints", endpoints, "command", string(command), "reason", reason, "err", err)
+	return err
+}
+
+// credentialForCommand returns the credential settings of the workspace and
+// whether the command uses them. It refuses a command that requireExplicitLockPath rejects.
+func credentialForCommand(tofu tofuSettings, workspaceDir string, args []string) (tofuCredentialSettings, bool, error) {
+	credential, configured := tofu.Credentials[tofuWorkspaceKey(workspaceDir)]
+	usesCredential := configured && credentialCommand(args)
+	return credential, usesCredential, requireExplicitLockPath(tofu, workspaceDir, args, usesCredential)
+}
+
+func explicitRefusalReason(tofu tofuSettings, args []string, command tofuargs.Command, usesCredential bool) string {
+	switch {
+	case command == tofuargs.Destroy:
+		return "the explicit lock path runs apply only, and destroy would use the inventory lock path"
+	case usesCredential:
+		return "the workspace uses a credential, and the credential path would use the inventory lock path"
+	case tofu.GuestModules == nil:
+		return "tofu.guest_modules is unset, and the command would use the inventory lock path"
+	case args[0] != string(tofuargs.Apply):
+		return "the command must start with apply, and any other order would use the inventory lock path"
+	case savedPlanCandidate(args) != "":
+		return "the command includes a saved plan, and the explicit lock path creates its own plan"
+	}
+	return ""
 }
 
 // runExplicitMutation plans, reads the plan, locks the declared endpoints, and
@@ -241,7 +295,7 @@ func newExplicitRunner(request tofuLockRequest, passwordFile string) (explicitRu
 		slog.Error("tofu.mutation.explicit_directory_failed", "err", err)
 		return runner, nil, fmt.Errorf("create a private mutation directory: %w", err)
 	}
-	cleanup := func() { removePlanCopy(directory) }
+	cleanup := func() { removePrivateDirectory(directory) }
 	home := filepath.Join(directory, "home")
 	temporary := filepath.Join(directory, "tmp")
 	for _, path := range []string{directory, home, temporary} {
@@ -264,7 +318,7 @@ func newExplicitRunner(request tofuLockRequest, passwordFile string) (explicitRu
 			RequiredEnvironment: required, SecretEnvironment: redacted, SecretFiles: nil,
 			OutputMode: tofurun.RedactedProgress, JSONPath: "", RequiredHosts: nil,
 		},
-		planPath: filepath.Join(temporary, explicitPlanName),
+		planPath: filepath.Join(temporary, mutationPlanName),
 		jsonPath: filepath.Join(temporary, explicitPlanJSONName),
 	}
 	return runner, cleanup, nil
@@ -282,6 +336,12 @@ func splitExplicitAssignments(assignments []string) (required, redacted []string
 		redacted = append(redacted, name)
 	}
 	return required, redacted
+}
+
+func removePrivateDirectory(path string) {
+	if err := os.RemoveAll(path); err != nil {
+		slog.Warn("tofu.mutation.explicit_directory_remove_failed", "path", path, "err", err)
+	}
 }
 
 func makePrivateDirectory(path string) error {
@@ -396,6 +456,7 @@ func acquireExplicitLocks(
 	scope, err = set.Scope()
 	if err != nil {
 		set.ReleaseAll(context.WithoutCancel(ctx))
+		slog.Error("lock.scope_failed", "run", run, "err", err)
 		return nil, nil, nil, fmt.Errorf("create the host lock scope: %w", err)
 	}
 	lockedCtx, cancel := context.WithCancelCause(ctx)

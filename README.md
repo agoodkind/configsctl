@@ -39,8 +39,7 @@ writes a credential-free CLI configuration in the standard user cache
 directory. OpenTofu installs those sources from the mirror and uses the public
 registries for other sources. The generated configuration uses private
 directories and files and takes precedence over `TF_CLI_CONFIG_FILE` when this
-setting is present. Without this setting, configsctl preserves the native CLI
-configuration environment.
+setting is present. Without this setting, configsctl preserves the native CLI configuration environment for other commands. The explicit lock path passes only the variables listed in the Declare lock endpoints section.
 
 To run OpenTofu in a nested workspace, pass its selector as the first argument:
 
@@ -65,6 +64,114 @@ When `tofu.guest_modules` enables independent workspaces, an ordinary `apply` or
 Guest-local changes use the enrolled guest's existing SSH lock. A known node and numeric VMID without deployment enrollment use a guest-specific lock directory through the declared hypervisor's SSH connection. Explicit resource ownership selects the host lock for guest creation, shared host changes, and firmware. `lock_free_types` can define a root that does not need Proxmox locks.
 
 configsctl expands `TF_CLI_ARGS` and command-specific arguments once, using OpenTofu's argument order. Explicit arguments take precedence over environment arguments.
+
+## Declare lock endpoints
+
+The `tofu.lock_targets.<workspace>.lock_endpoints` setting maps each lock host name to an object with connection fields. The workspace can declare these keys beside `lock_endpoints`:
+
+- `module_hosts`
+- `module_key_hosts`
+- `node_hosts`
+- `guest_hosts`
+- `lock_free_types`
+
+```yaml
+tofu:
+  lock_targets:
+    <workspace>:
+      node_hosts:
+        site: hv_alpha
+      guest_hosts:
+        site/101: guest-alpha
+      lock_endpoints:
+        hv_alpha:
+          address: hv-alpha.example
+        guest-alpha:
+          user: deploy
+          address: guest-alpha.example
+```
+
+Each endpoint provides the SSH connection for a lock host.
+
+Endpoint fields:
+
+| Field | Rule |
+| --- | --- |
+| `user` | configsctl uses this optional field as the SSH user. configsctl defaults to `root`. |
+| `address` | configsctl requires a nonempty address. An empty address means a local lock. configsctl refuses the settings with an error stating that configsctl does not support a local lock. |
+
+configsctl locks each host by running `ssh` as `user@address`. configsctl uses `/var/lib/configs` as the lock directory on every host.
+
+configsctl checks these rules when it reads the settings and refuses invalid settings before it starts OpenTofu:
+
+- A declared `lock_endpoints` map must contain at least one endpoint.
+- Each lock host name must contain at least one character.
+- Each lock host name must match a host value in `module_hosts`, `module_key_hosts`, `node_hosts`, or `guest_hosts` in the same workspace.
+- When the workspace declares any endpoint, every host value in those four mappings must have an endpoint. configsctl reports each missing host and the mapping entry that uses it.
+
+configsctl uses the explicit lock path for supported `apply` commands in workspaces that declare `lock_endpoints`. configsctl refuses an `apply` or `destroy` command instead of using the inventory lock path when any condition below applies.
+
+Refusal reasons:
+
+| Condition | Reason |
+| --- | --- |
+| The command is `destroy`. | The explicit lock path does not run `destroy`. |
+| The workspace has a `tofu.credentials` entry. | The explicit lock path does not support a workspace that uses a credential. |
+| The configuration does not set `tofu.guest_modules`. | The explicit lock path requires `tofu.guest_modules`. |
+| The command line does not start with `apply`. | The explicit lock path requires the command line to start with `apply`. |
+| The command line includes a saved plan. | The explicit lock path does not accept a saved plan. |
+
+configsctl logs each refusal. The error states the workspace, its declared `lock_endpoints`, and the reason. Workspaces that do not declare `lock_endpoints` keep their current behavior.
+
+The explicit lock path accepts only the following apply options. Each option with a value must use the `-name=value` form.
+
+Accepted options:
+
+| Option | Accepted form |
+| --- | --- |
+| `-auto-approve` | configsctl accepts `-auto-approve`, `-auto-approve=true`, and `-auto-approve=false`. |
+| `-no-color` | configsctl accepts `-no-color`. |
+| `-input=false` | configsctl accepts only `false` for `-input`. |
+| `-parallelism=N` | configsctl accepts a positive integer for `N` and defaults to `10`. |
+| `-lock-timeout=DURATION` | configsctl accepts the value in the `-lock-timeout=DURATION` form. |
+
+configsctl refuses every other option before OpenTofu starts, including these options:
+
+- `-target`
+- `-var`
+- `-var-file`
+- `-refresh=false`
+- `-input=true`
+
+The explicit lock path does not read the Ansible inventory and does not run any Ansible program. configsctl still reads the vault with its own code.
+
+The explicit lock path runs these steps:
+
+1. OpenTofu creates a plan with `-detailed-exitcode` in a private file. configsctl records the SHA-256 digest of the plan file immediately after planning.
+2. OpenTofu shows the plan as JSON.
+3. configsctl selects the hosts to lock from the declared `lock_targets` and endpoints. configsctl refuses a plan with unknown lock ownership before it takes any lock.
+4. configsctl asks for confirmation unless `-auto-approve` is present.
+5. configsctl acquires locks on all selected hosts.
+6. configsctl compares the current SHA-256 digest of the plan file with the recorded digest and refuses to apply a changed file.
+7. OpenTofu applies that exact plan.
+8. configsctl releases the locks.
+
+The explicit lock path passes only the following environment variables to OpenTofu. Each row states the source or condition for inclusion.
+
+Environment variables:
+
+| Variable | Value and condition |
+| --- | --- |
+| `PATH` | configsctl copies the value from its process environment. |
+| `HOME` | configsctl sets the value to a new private directory and removes the directory after the command. |
+| `TMPDIR` | configsctl sets the value to a new private directory for the plan file and plan JSON. configsctl removes the directory after the command. |
+| `TF_IN_AUTOMATION` | configsctl sets the value to `1`. |
+| `LANG` | configsctl passes the value only when its process environment sets it. |
+| `TF_CLI_CONFIG_FILE` | configsctl passes this variable only when the configuration sets `tofu.provider_mirror`. configsctl sets its value to the generated provider mirror configuration path. |
+| `TF_VAR_<name>` | configsctl passes a vault value when the vault key matches a variable that the workspace declares. configsctl redacts the value. |
+| `<NAME>` | configsctl passes a vault value when the vault key uses `<env_key_prefix><NAME>`. configsctl redacts the value. |
+
+When the configuration does not set `tofu.provider_mirror`, the explicit lock path does not pass `TF_CLI_CONFIG_FILE` or any native CLI configuration variable from the process environment.
 
 ## Transfer existing OpenTofu state
 

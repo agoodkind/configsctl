@@ -336,8 +336,10 @@ func runTofu(env cmdEnv, args []string) error {
 	if err != nil {
 		return err
 	}
-	credential, configured := loaded.Tofu.Credentials[tofuWorkspaceKey(workspaceDir)]
-	usesCredential := configured && credentialCommand(safeArgs)
+	credential, usesCredential, err := credentialForCommand(loaded.Tofu, workspaceDir, safeArgs)
+	if err != nil {
+		return err
+	}
 	releaseMigration, err := leaseTofuMigration(safeArgs, usesCredential)
 	if err != nil {
 		return err
