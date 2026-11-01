@@ -17,6 +17,7 @@ var rootTargets = tofulock.Targets{
 	NodeHosts:     nil,
 	GuestHosts:    nil,
 	LockFreeTypes: nil,
+	LockEndpoints: nil,
 }
 
 var guestTargets = tofulock.Targets{
@@ -25,6 +26,7 @@ var guestTargets = tofulock.Targets{
 	NodeHosts:      map[string]string{"suburban": "suburban", "poweredge": "poweredge", "vault": "vault"},
 	GuestHosts:     map[string]string{"suburban/224": "clyde_suburban"},
 	LockFreeTypes:  nil,
+	LockEndpoints:  nil,
 }
 
 func guestTargetsWithLockFreeTypes() tofulock.Targets {
