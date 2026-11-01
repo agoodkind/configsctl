@@ -107,7 +107,7 @@ configsctl checks these rules when it reads the settings and refuses invalid set
 - A declared `lock_endpoints` map must contain at least one endpoint.
 - Each lock host name must contain at least one character.
 - Each lock host name must match a host value in `module_hosts`, `module_key_hosts`, `node_hosts`, or `guest_hosts` in the same workspace.
-- When the workspace declares any endpoint, every host value in those four mappings must have an endpoint. configsctl reports each missing host and the mapping entry that uses it.
+- When the workspace declares any endpoint, every host value in those four mappings must have an endpoint. configsctl checks host names in sorted order and reports the first host without an endpoint, together with the first mapping entry that uses that host.
 
 configsctl uses the explicit lock path for supported `apply` commands in workspaces that declare `lock_endpoints`. configsctl refuses an `apply` or `destroy` command instead of using the inventory lock path when any condition below applies.
 
@@ -150,7 +150,7 @@ The explicit lock path runs these steps:
 1. OpenTofu creates a plan with `-detailed-exitcode` in a private file. configsctl records the SHA-256 digest of the plan file immediately after planning.
 2. OpenTofu shows the plan as JSON.
 3. configsctl selects the hosts to lock from the declared `lock_targets` and endpoints. configsctl refuses a plan with unknown lock ownership before it takes any lock.
-4. configsctl asks for confirmation unless `-auto-approve` is present.
+4. When the plan has changes and `-auto-approve` is absent, configsctl asks the operator to enter `yes` on standard input unless `-input=false` or the environment variable `TF_INPUT=false` disables input, in which case configsctl refuses the apply with an error stating that OpenTofu requires `-auto-approve` for a noninteractive apply.
 5. configsctl acquires locks on all selected hosts.
 6. configsctl compares the current SHA-256 digest of the plan file with the recorded digest and refuses to apply a changed file.
 7. OpenTofu applies that exact plan.
