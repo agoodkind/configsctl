@@ -24,6 +24,9 @@ func TestMain(m *testing.M) {
 	if os.Getenv(planStreamsVariable) != "" {
 		os.Exit(writePlanStreams())
 	}
+	if secret := os.Getenv(splitSecretVariable); secret != "" {
+		os.Exit(writeSplitSecret(secret, os.Getenv(splitBetweenVariable), os.Args[1:]))
+	}
 	os.Exit(runWithBuiltBinary(m))
 }
 

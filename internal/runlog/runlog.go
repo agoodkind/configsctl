@@ -6,12 +6,14 @@ package runlog
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"goodkind.io/configsctl/internal/clock"
 	"goodkind.io/configsctl/internal/fileowner"
@@ -48,7 +50,25 @@ type Log struct {
 	path     string
 	dir      *os.Root
 	file     *os.File
+	sink     *serialFile
+	secrets  []redact.Pattern
 	redactor *redact.Writer
+}
+
+// serialFile keeps each write together when both stream redactors write concurrently.
+type serialFile struct {
+	mu   sync.Mutex
+	file *os.File
+}
+
+func (s *serialFile) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n, err := s.file.Write(p)
+	if err != nil {
+		return n, fmt.Errorf("write run log file: %w", err)
+	}
+	return n, nil
 }
 
 // Open creates a log for one run and returns a writer. The file uses the label
@@ -70,7 +90,10 @@ func Open(label string, secrets []redact.Pattern) (*Log, error) {
 	if err != nil {
 		path = file.Name()
 	}
-	return &Log{path: path, dir: dir, file: file, redactor: redact.New(file, secrets)}, nil
+	sink := &serialFile{mu: sync.Mutex{}, file: file}
+	return &Log{
+		path: path, dir: dir, file: file, sink: sink, secrets: secrets, redactor: redact.New(sink, secrets),
+	}, nil
 }
 
 // openRunLogDir creates the log directory or checks its existing mode and owner.
@@ -171,6 +194,38 @@ func (l *Log) Write(p []byte) (int, error) {
 		return n, fmt.Errorf("write run log: %w", err)
 	}
 	return n, nil
+}
+
+// StreamSource provides a pair of writers for standard output and standard error.
+type StreamSource interface {
+	Streams() StreamPair
+}
+
+// StreamPair contains separate redacting writers for standard output and standard error.
+type StreamPair struct {
+	Stdout *redact.Writer
+	Stderr *redact.Writer
+}
+
+// Streams returns two new writers that use the log's secret patterns.
+// Both writers write to the same mutex-guarded log file.
+func (l *Log) Streams() StreamPair {
+	return NewStreamPair(l.sink, l.secrets)
+}
+
+// NewStreamPair returns a StreamPair with two new redact.Writer values using dst and the given patterns.
+// dst must accept concurrent writes.
+func NewStreamPair(dst io.Writer, patterns []redact.Pattern) StreamPair {
+	return StreamPair{Stdout: redact.New(dst, patterns), Stderr: redact.New(dst, patterns)}
+}
+
+// Close flushes the buffered tails from both stream redactors and reports failures.
+func (p StreamPair) Close() error {
+	if err := errors.Join(p.Stdout.Close(), p.Stderr.Close()); err != nil {
+		slog.Error("run log stream flush failed", "err", err)
+		return fmt.Errorf("flush run log streams: %w", err)
+	}
+	return nil
 }
 
 // Close flushes the redactor's held-back tail, then closes the file and the

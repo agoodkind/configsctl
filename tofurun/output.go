@@ -13,17 +13,19 @@ import (
 
 // output is the destination of one OpenTofu process.
 type output struct {
-	stdout  io.Writer
-	stderr  io.Writer
-	logPath string
-	log     *runlog.Log
-	console *redact.Writer
-	json    *os.File
+	stdout         io.Writer
+	stderr         io.Writer
+	logPath        string
+	log            *runlog.Log
+	logStreams     runlog.StreamPair
+	consoleStreams runlog.StreamPair
+	json           *os.File
 }
 
-// openOutput opens the private run log and, for PrivateJSON, creates
-// JSONPath with mode 0600. RedactedProgress uses one writer for standard
-// output and standard error. The writer records their writes in order.
+// openOutput opens the private run log and creates JSONPath with mode 0600 in PrivateJSON mode.
+// It redacts each stream across writes with separate run log and console redactors.
+// The order between standard output and standard error is approximate.
+// In PrivateJSON mode, it writes standard output unchanged to the JSON file.
 func openOutput(request Request, parsed command, built environment) (*output, error) {
 	patterns := built.patterns
 	log, err := runlog.Open("tofu-"+runlog.Name(parsed.name), patterns)
@@ -38,10 +40,10 @@ func openOutput(request Request, parsed command, built environment) (*output, er
 	}
 	sink := &output{
 		stdout: nil, stderr: nil, logPath: log.Path(), log: log,
-		console: redact.New(console, patterns), json: nil,
+		logStreams: log.Streams(), consoleStreams: runlog.NewStreamPair(console, patterns), json: nil,
 	}
-	progress := &teeWriter{log: log, console: sink.console}
-	sink.stdout, sink.stderr = progress, progress
+	sink.stdout = &teeWriter{log: sink.logStreams.Stdout, console: sink.consoleStreams.Stdout}
+	sink.stderr = &teeWriter{log: sink.logStreams.Stderr, console: sink.consoleStreams.Stderr}
 	if request.OutputMode != PrivateJSON {
 		return sink, nil
 	}
@@ -84,12 +86,12 @@ func createPrivateFile(tmpdir, path string) (*os.File, error) {
 // close flushes the redacted console output and closes the run log and the
 // JSON file. close removes the JSON file unless keep is true.
 func (o *output) close(keep bool) error {
-	consoleErr := o.console.Close()
+	consoleErr := o.consoleStreams.Close()
 	if consoleErr != nil {
 		slog.Error("tofurun.console_flush_failed", "err", consoleErr)
 		consoleErr = fmt.Errorf("flush the redacted OpenTofu output: %w", consoleErr)
 	}
-	logErr := o.log.Close()
+	logErr := errors.Join(o.logStreams.Close(), o.log.Close())
 	if logErr != nil {
 		slog.Error("tofurun.log_close_failed", "log", o.logPath, "err", logErr)
 		logErr = fmt.Errorf("close the OpenTofu run log: %w", logErr)
@@ -117,7 +119,7 @@ func removeQuietly(path string) {
 // teeWriter writes each chunk to the run log and to the redacted console.
 // Each destination applies its own redaction.
 type teeWriter struct {
-	log     *runlog.Log
+	log     *redact.Writer
 	console *redact.Writer
 }
 

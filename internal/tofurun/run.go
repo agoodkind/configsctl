@@ -70,13 +70,15 @@ func Run(ctx context.Context, request Request) (Result, error) {
 	cmd.Stderr = os.Stderr
 
 	var log *runlog.Log
+	var logStreams runlog.StreamPair
 	if tofuargs.Streams(display) {
 		log, err = openOutput(request, display)
 		if err != nil {
 			return Result{ExitCode: 0, LogPath: ""}, err
 		}
-		cmd.Stdout = log
-		cmd.Stderr = log
+		logStreams = log.Streams()
+		cmd.Stdout = logStreams.Stdout
+		cmd.Stderr = logStreams.Stderr
 	}
 
 	exitCode, runErr := Execute(ctx, cmd)
@@ -84,7 +86,7 @@ func Run(ctx context.Context, request Request) (Result, error) {
 	var closeErr error
 	if log != nil {
 		result.LogPath = log.Path()
-		closeErr = closeOutput(log)
+		closeErr = errors.Join(logStreams.Close(), closeOutput(log))
 	}
 	if runErr == nil {
 		return result, closeErr
