@@ -6,6 +6,7 @@ package runlog
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -209,7 +210,13 @@ type StreamPair struct {
 // Streams returns two new writers that use the log's secret patterns.
 // Both writers write to the same mutex-guarded log file.
 func (l *Log) Streams() StreamPair {
-	return StreamPair{Stdout: redact.New(l.sink, l.secrets), Stderr: redact.New(l.sink, l.secrets)}
+	return NewStreamPair(l.sink, l.secrets)
+}
+
+// NewStreamPair returns a StreamPair with two new redact.Writer values using dst and the given patterns.
+// dst must accept concurrent writes.
+func NewStreamPair(dst io.Writer, patterns []redact.Pattern) StreamPair {
+	return StreamPair{Stdout: redact.New(dst, patterns), Stderr: redact.New(dst, patterns)}
 }
 
 // Close closes both writers, writes their buffered bytes, and returns a joined error.

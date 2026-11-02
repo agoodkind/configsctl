@@ -1,10 +1,12 @@
 package main_test
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -117,7 +119,47 @@ func linkTestBinary(t *testing.T, name string) string {
 	return binDir + string(os.PathListSeparator) + os.Getenv("PATH")
 }
 
+func TestCITofuRedactsASecretSplitAcrossWrites(t *testing.T) {
+	for _, tc := range splitCases {
+		t.Run(tc.name, func(t *testing.T) {
+			checkout := newCICheckout(t)
+			random := make([]byte, splitSecretBytes)
+			if _, err := rand.Read(random); err != nil {
+				t.Fatalf("generate the secret: %v", err)
+			}
+			secret := splitSecretPrefix + hex.EncodeToString(random)
+			required := `[]`
+			if tc.between != "" {
+				required = `["` + splitBetweenVariable + `"]`
+			}
+			config := checkout.writeConfig(t, "config.json", `{"version": 1, "required_environment": `+required+
+				`, "secret_environment": ["`+splitSecretVariable+`"], "secret_files": {}, "output_mode": "redacted_progress"}`)
+			path := linkTestBinary(t, "tofu")
+			command := exec.CommandContext(t.Context(), configsctlBinary,
+				"ci", "tofu", "--config", config, "--root", ciRootName, "--workspace", ciWorkspace, "--", "validate", "-no-color")
+			command.Dir = checkout.dir
+			command.Env = []string{
+				"PATH=" + path, "HOME=" + checkout.home, "TMPDIR=" + checkout.tmpdir, "TF_IN_AUTOMATION=1",
+				splitSecretVariable + "=" + secret, splitBetweenVariable + "=" + tc.between,
+			}
+			var stdout, stderr bytes.Buffer
+			command.Stdout = &stdout
+			command.Stderr = &stderr
+			if err := command.Run(); err == nil {
+				t.Fatalf("ci tofu validate succeeded, want the helper exit status 1\nstderr: %s", stderr.String())
+			}
+			requireSplitSecretRedactedAs(t, readRunLog(t, stdout.String(), tofuLogNotice), secret, tc.between, splitSecretVariable)
+			requireSplitSecretRedactedAs(t, stdout.String(), secret, "", splitSecretVariable)
+		})
+	}
+}
+
 func requireSplitSecretRedacted(t *testing.T, log, secret, between string) {
+	t.Helper()
+	requireSplitSecretRedactedAs(t, log, secret, between, splitSecretKey)
+}
+
+func requireSplitSecretRedactedAs(t *testing.T, log, secret, between, label string) {
 	t.Helper()
 	half := len(secret) / 2
 	shown := strings.NewReplacer(
@@ -126,7 +168,7 @@ func requireSplitSecretRedacted(t *testing.T, log, secret, between string) {
 	if strings.Contains(log, secret[:half]) || strings.Contains(log, secret[half:]) {
 		t.Fatalf("the run log contains part of the secret: %q", shown)
 	}
-	placeholder := "<redacted:" + splitSecretKey + ">\n"
+	placeholder := "<redacted:" + label + ">\n"
 	if !strings.Contains(log, placeholder) {
 		t.Fatalf("the run log does not contain %q: %q", placeholder, shown)
 	}
