@@ -28,8 +28,6 @@ func tofuInvocation(settings tofuSettings, workspace, passwordFile string, args 
 	return expandTofuEnvironment(args, append(os.Environ(), secrets...))
 }
 
-// prepareTofuInvocation expands the native environment arguments and validates
-// the resulting arguments for a command line.
 func prepareTofuInvocation(settings tofuSettings, workspace, passwordFile string, args []string) (safeArgs, childEnv []string, err error) {
 	expanded, childEnv, err := tofuInvocation(settings, workspace, passwordFile, args)
 	if err != nil {
