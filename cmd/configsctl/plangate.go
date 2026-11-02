@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"goodkind.io/configsctl/internal/procgroup"
 	"goodkind.io/configsctl/internal/tofuargs"
@@ -149,8 +150,12 @@ func gateGuestPlan(ctx context.Context, request guestPlanRequest, guest gatedGue
 	cmd.Dir = request.workspaceDir
 	cmd.Env = request.env
 	var stderr bytes.Buffer
-	cmd.Stdout = request.output
-	cmd.Stderr = io.MultiWriter(request.output, &stderr)
+	// procgroup.RunGroup copies standard output and standard error concurrently.
+	// During a deploy, request.output uses redact.Writer, which is not safe
+	// for concurrent writes.
+	output := &lockedWriter{mu: &sync.Mutex{}, dst: request.output}
+	cmd.Stdout = output
+	cmd.Stderr = io.MultiWriter(output, &stderr)
 	runErr := procgroup.RunGroup(cmd)
 	if runErr == nil {
 		if err := requirePlannedGuest(ctx, request, planPath, target); err != nil {
