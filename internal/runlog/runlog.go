@@ -195,10 +195,30 @@ func (l *Log) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// Stream returns a new redacting writer that uses the log's secret patterns.
-// Call Close on the writer to write the bytes remaining in its buffer.
-func (l *Log) Stream() *redact.Writer {
-	return redact.New(l.sink, l.secrets)
+// StreamSource provides a pair of writers for standard output and standard error.
+type StreamSource interface {
+	Streams() StreamPair
+}
+
+// StreamPair contains separate redacting writers for standard output and standard error.
+type StreamPair struct {
+	Stdout *redact.Writer
+	Stderr *redact.Writer
+}
+
+// Streams returns two new writers that use the log's secret patterns.
+// Both writers write to the same mutex-guarded log file.
+func (l *Log) Streams() StreamPair {
+	return StreamPair{Stdout: redact.New(l.sink, l.secrets), Stderr: redact.New(l.sink, l.secrets)}
+}
+
+// Close closes both writers, writes their buffered bytes, and returns a joined error.
+func (p StreamPair) Close() error {
+	if err := errors.Join(p.Stdout.Close(), p.Stderr.Close()); err != nil {
+		slog.Error("run log stream flush failed", "err", err)
+		return fmt.Errorf("flush run log streams: %w", err)
+	}
+	return nil
 }
 
 // Close flushes the redactor's held-back tail, then closes the file and the

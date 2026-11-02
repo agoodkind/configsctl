@@ -5,6 +5,7 @@ package ansible
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,6 +18,7 @@ import (
 
 	"goodkind.io/configsctl/internal/lint"
 	"goodkind.io/configsctl/internal/procgroup"
+	"goodkind.io/configsctl/internal/runlog"
 )
 
 // ansibleDir is the ansible working tree, relative to the repository root that
@@ -127,17 +129,25 @@ func playbookArgs(opts DeployOptions) []string {
 	return args
 }
 
-// runStreaming runs an ansible CLI and streams its output as it is produced. A
-// nil out sends stdout and stderr to the process streams; a non-nil out receives
-// both, merged in the order the child wrote them, because os/exec gives one
-// descriptor to both fields when they hold the same writer.
+// runStreaming runs an Ansible CLI. When out is nil, the child writes stdout and stderr to
+// the process streams. When out implements runlog.StreamSource, os/exec gives each stream its own
+// file descriptor. The child writes each stream to its own StreamPair writer, which redacts secrets
+// across writes on that stream. Log order between streams is approximate. runStreaming closes the
+// StreamPair after the command exits. For any other out, os/exec gives both streams one file descriptor;
+// out receives both in the order the child wrote them.
 func runStreaming(ctx context.Context, name string, args []string, out io.Writer) error {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = ansibleDir
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if out != nil {
+	var logStreams *runlog.StreamPair
+	if source, isLog := out.(runlog.StreamSource); isLog {
+		streams := source.Streams()
+		logStreams = &streams
+		cmd.Stdout = streams.Stdout
+		cmd.Stderr = streams.Stderr
+	} else if out != nil {
 		cmd.Stdout = out
 		cmd.Stderr = out
 	}
@@ -148,9 +158,15 @@ func runStreaming(ctx context.Context, name string, args []string, out io.Writer
 	// makes each write reach the destination, which is what streaming means
 	// here.
 	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
-	if err := procgroup.Run(cmd); err != nil {
-		slog.Error("ansible command failed", "command", name, "err", err)
-		return fmt.Errorf("%s: %w", name, err)
+	runErr := procgroup.Run(cmd)
+	if logStreams != nil {
+		if flushErr := logStreams.Close(); flushErr != nil {
+			return errors.Join(runErr, fmt.Errorf("write the %s output to the run log: %w", name, flushErr))
+		}
+	}
+	if runErr != nil {
+		slog.Error("ansible command failed", "command", name, "err", runErr)
+		return fmt.Errorf("%s: %w", name, runErr)
 	}
 	return nil
 }

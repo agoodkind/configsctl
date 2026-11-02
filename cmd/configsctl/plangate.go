@@ -16,7 +16,7 @@ import (
 	"strings"
 
 	"goodkind.io/configsctl/internal/procgroup"
-	"goodkind.io/configsctl/internal/redact"
+	"goodkind.io/configsctl/internal/runlog"
 	"goodkind.io/configsctl/internal/tofuargs"
 	"goodkind.io/configsctl/internal/tofulock"
 )
@@ -55,12 +55,7 @@ type guestPlanRequest struct {
 	workspaceDir string
 	env          []string
 	module       string
-	output       planOutput
-}
-
-// planOutput provides redacting writers for plan output.
-type planOutput interface {
-	Stream() *redact.Writer
+	output       runlog.StreamSource
 }
 
 // gateGuestPlans runs targeted plans for selected playbook hosts listed as guest_hosts values.
@@ -82,7 +77,7 @@ func gateGuestPlans(ctx context.Context, targets deployTargets, output io.Writer
 	if err != nil {
 		return err
 	}
-	streams, ok := output.(planOutput)
+	streams, ok := output.(runlog.StreamSource)
 	if !ok {
 		err := errors.New("the plan gate requires a run log for the plan output")
 		slog.Error("deploy.gate.output_unsupported", "err", err)
@@ -158,12 +153,11 @@ func gateGuestPlan(ctx context.Context, request guestPlanRequest, guest gatedGue
 	cmd.Dir = request.workspaceDir
 	cmd.Env = request.env
 	var stderr bytes.Buffer
-	stdoutLog := request.output.Stream()
-	stderrLog := request.output.Stream()
-	cmd.Stdout = stdoutLog
-	cmd.Stderr = io.MultiWriter(stderrLog, &stderr)
+	logStreams := request.output.Streams()
+	cmd.Stdout = logStreams.Stdout
+	cmd.Stderr = io.MultiWriter(logStreams.Stderr, &stderr)
 	runErr := procgroup.RunGroup(cmd)
-	if flushErr := errors.Join(stdoutLog.Close(), stderrLog.Close()); flushErr != nil {
+	if flushErr := logStreams.Close(); flushErr != nil {
 		slog.Error("deploy.gate.plan_log_failed", "guest", guest.serviceName, "host", guest.host, "err", flushErr)
 		return fmt.Errorf("write the plan output of guest %s to the run log: %w", guest.serviceName, flushErr)
 	}

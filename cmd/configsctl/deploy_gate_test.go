@@ -224,18 +224,23 @@ func planFailureEvent(t *testing.T, stderr string) string {
 
 func readPlanLog(t *testing.T, stderr string) string {
 	t.Helper()
-	for line := range strings.SplitSeq(stderr, "\n") {
-		path, found := strings.CutPrefix(line, planLogNotice)
+	return readRunLog(t, stderr, planLogNotice)
+}
+
+func readRunLog(t *testing.T, output, notice string) string {
+	t.Helper()
+	for line := range strings.SplitSeq(output, "\n") {
+		path, found := strings.CutPrefix(line, notice)
 		if !found {
 			continue
 		}
 		contents, err := os.ReadFile(path)
 		if err != nil {
-			t.Fatalf("read the plan log: %v", err)
+			t.Fatalf("read the run log: %v", err)
 		}
 		return string(contents)
 	}
-	t.Fatalf("stderr does not name the plan log\nevents:\n%s", eventLines(stderr))
+	t.Fatalf("the output does not contain %q\nevents:\n%s", notice, eventLines(output))
 	return ""
 }
 
