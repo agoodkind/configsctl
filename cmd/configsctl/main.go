@@ -328,16 +328,13 @@ func runTofu(env cmdEnv, args []string) error {
 	if len(tofuArgs) == 0 {
 		return errors.New(tofuUsage)
 	}
-	tofuArgs, childEnv, err := tofuInvocation(loaded.Tofu, workspaceDir, passwordFile, tofuArgs)
+	safeArgs, childEnv, err := prepareTofuInvocation(loaded.Tofu, workspaceDir, passwordFile, tofuArgs)
 	if err != nil {
 		return err
 	}
-	safeArgs, err := sanitizeTofuArgs(tofuArgs)
-	if err != nil {
-		return err
-	}
-	credential, usesCredential, err := credentialOrRefusal(loaded.Tofu, workspaceDir, safeArgs)
-	if err != nil {
+	credential, configured := loaded.Tofu.Credentials[tofuWorkspaceKey(workspaceDir)]
+	usesCredential := configured && credentialCommand(safeArgs)
+	if err := requireExplicitLockPath(loaded.Tofu, workspaceDir, safeArgs); err != nil {
 		return err
 	}
 	if handled, helpErr := runEndpointHelp(env, loaded.Tofu, workspaceDir, safeArgs, childEnv); handled {

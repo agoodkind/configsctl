@@ -48,8 +48,6 @@ type explicitOptions struct {
 	lockTimeout string
 }
 
-// explicitLockTargets reports whether the apply uses the declared lock
-// endpoints. Only an apply in a workspace that declares lock_endpoints does.
 func explicitLockTargets(request tofuLockRequest) (tofulock.Targets, bool) {
 	var none tofulock.Targets
 	if len(request.args) == 0 || request.args[0] != string(tofuargs.Apply) {
@@ -89,12 +87,6 @@ func requireExplicitLockPath(tofu tofuSettings, workspaceDir string, args []stri
 	slog.Error("tofu.mutation.explicit_path_unavailable", "workspace", workspace,
 		"lock_endpoints", endpoints, "command", string(command), "reason", reason, "err", err)
 	return err
-}
-
-func credentialOrRefusal(tofu tofuSettings, workspaceDir string, args []string) (tofuCredentialSettings, bool, error) {
-	credential, configured := tofu.Credentials[tofuWorkspaceKey(workspaceDir)]
-	usesCredential := configured && credentialCommand(args)
-	return credential, usesCredential, requireExplicitLockPath(tofu, workspaceDir, args)
 }
 
 func requiredCredentialHosts(credential tofuCredentialSettings, usesCredential bool, workspaceDir string, childEnv []string) ([]string, error) {
@@ -469,8 +461,6 @@ func planDigest(path string) ([sha256.Size]byte, error) {
 	return sha256.Sum256(contents), nil
 }
 
-// requirePlanDigest refuses to apply a plan file that differs from the digest
-// recorded after planning.
 func requirePlanDigest(path string, recorded [sha256.Size]byte) error {
 	current, err := planDigest(path)
 	if err != nil {

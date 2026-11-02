@@ -114,7 +114,7 @@ Endpoint fields:
 | Field | Rule |
 | --- | --- |
 | `user` | configsctl uses this optional field as the SSH user. configsctl defaults to `root`. |
-| `address` | configsctl requires a nonempty address. An empty address means a local lock. configsctl refuses the settings with an error stating that configsctl does not support a local lock. |
+| `address` | configsctl requires a nonempty address because it does not support local locks. It rejects an empty address when it loads the settings, before starting OpenTofu. |
 
 configsctl locks each host by running `ssh` as `user@address`. configsctl uses these lock directories:
 

@@ -210,7 +210,10 @@ func requireNoExplicitDirectories(t *testing.T, tree configsTree) {
 	}
 }
 
-// requireOpenTofuNotStarted fails when configsctl logged the start of an OpenTofu command.
+// requireOpenTofuNotStarted reads the command_started log line because a direct
+// run leaves no other record that OpenTofu started. The refusal tests also read
+// the hostlock.acquired log line because a lock that the command takes and
+// releases leaves no file.
 func requireOpenTofuNotStarted(t *testing.T, result commandResult) {
 	t.Helper()
 	if strings.Contains(result.stderr, "command_started") {
@@ -227,15 +230,14 @@ func TestTofuMutationUsesDeclaredLockEndpointsWithoutInventory(t *testing.T) {
 	args := []string{"-auto-approve", "-input=false"}
 	result := fixture.apply(t, args...)
 	requireSuccess(t, result, args...)
-	if !strings.Contains(result.stderr, "tofu.mutation.explicit_lock_hosts") || !strings.Contains(result.stderr, "hosts=[guest-alpha]") {
-		t.Fatalf("the apply did not lock the declared host guest-alpha: %s", result.stderr)
+	// The stand-in tofu records "held" when the lock file exists during the apply.
+	// The Ansible sentinels in the fixture fail the test through mutate when the
+	// command runs an Ansible program.
+	state, err := os.ReadFile(filepath.Join(fixture.binDir, "lockstate"))
+	if err != nil || strings.TrimSpace(string(state)) != "held" {
+		t.Fatalf("the lock file did not exist during the apply: %q, %v", state, err)
 	}
-	if !strings.Contains(result.stderr, "hostlock.acquired") {
-		t.Fatalf("the apply did not acquire its lock: %s", result.stderr)
-	}
-	if strings.Contains(result.stderr, "inventory") || strings.Contains(result.stderr, "tofu.lock.") {
-		t.Fatalf("the apply used the inventory lock path: %s", result.stderr)
-	}
+	requireNoFile(t, filepath.Join(fixture.lockDir, "deploy.lock"))
 	requireFile(t, fixture.stateFile())
 	requireNoPlanCopies(t, fixture.tree)
 	requireNoExplicitDirectories(t, fixture.tree)
@@ -326,20 +328,6 @@ func requireOnlyRequestVariables(t *testing.T, path string) {
 	if strings.Contains(string(body), hostlock.StateEnvVar) {
 		t.Fatalf("the apply command received %s", hostlock.StateEnvVar)
 	}
-}
-
-func TestTofuMutationReleasesItsLock(t *testing.T) {
-	fixture := newExplicitFixture(t, explicitSettings)
-	args := []string{"-auto-approve", "-input=false"}
-	requireSuccess(t, fixture.apply(t, args...), args...)
-	// The stand-in tofu records "held" when the lock file exists during the apply.
-	state, err := os.ReadFile(filepath.Join(fixture.binDir, "lockstate"))
-	if err != nil || strings.TrimSpace(string(state)) != "held" {
-		t.Fatalf("the lock file did not exist during the apply: %q, %v", state, err)
-	}
-	// Only the release operation removes the lock file. Without the deferred
-	// release, the file remains and this assertion fails.
-	requireNoFile(t, filepath.Join(fixture.lockDir, "deploy.lock"))
 }
 
 func TestTofuMutationRefusesUnknownOwnershipBeforeLocking(t *testing.T) {
@@ -521,11 +509,11 @@ func TestHelpRunsWithoutLocksInEndpointWorkspaces(t *testing.T) {
 			if strings.Count(result.stderr, "command_started") > 1 || strings.Contains(result.stderr, "tofurun.command_started") {
 				t.Fatalf("configsctl ran more than the OpenTofu help command: %s", result.stderr)
 			}
-			if strings.Contains(result.stderr, "tofu.mutation.explicit") {
-				t.Fatalf("the help request entered the explicit apply flow: %s", result.stderr)
-			}
-			if strings.Contains(result.stderr, "hostlock.acquired") || strings.Contains(result.stderr, "inventory") || strings.Contains(result.stderr, "tofu.lock.") {
-				t.Fatalf("the help command took a lock or read the inventory: %s", result.stderr)
+			// No program or file records a lock that the command takes and releases, so
+			// the test reads the hostlock log line. The Ansible sentinels cover the
+			// inventory and Ansible use.
+			if strings.Contains(result.stderr, "hostlock.acquired") {
+				t.Fatalf("the help command took a lock: %s", result.stderr)
 			}
 			requireNoFile(t, filepath.Join(fixture.lockDir, "deploy.lock"))
 		})
