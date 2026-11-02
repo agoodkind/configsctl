@@ -22,8 +22,7 @@ type Targets struct {
 	NodeHosts      map[string]string            `yaml:"node_hosts"`
 	GuestHosts     map[string]string            `yaml:"guest_hosts"`
 	LockFreeTypes  []string                     `yaml:"lock_free_types"`
-	// LockEndpoints maps each lock host name to its ssh endpoint. A workspace
-	// that declares it locks without reading the Ansible inventory.
+	// LockEndpoints maps each lock host name to the SSH endpoint used to build its lock target.
 	LockEndpoints map[string]LockEndpoint `yaml:"lock_endpoints"`
 }
 
