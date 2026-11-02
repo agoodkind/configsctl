@@ -55,7 +55,7 @@ type Log struct {
 	redactor *redact.Writer
 }
 
-// serialFile serializes writes to a file with a mutex.
+// serialFile keeps each write together when both stream redactors write concurrently.
 type serialFile struct {
 	mu   sync.Mutex
 	file *os.File
@@ -219,7 +219,7 @@ func NewStreamPair(dst io.Writer, patterns []redact.Pattern) StreamPair {
 	return StreamPair{Stdout: redact.New(dst, patterns), Stderr: redact.New(dst, patterns)}
 }
 
-// Close closes both writers, writes their buffered bytes, and returns a joined error.
+// Close flushes the buffered tails from both stream redactors and reports failures.
 func (p StreamPair) Close() error {
 	if err := errors.Join(p.Stdout.Close(), p.Stderr.Close()); err != nil {
 		slog.Error("run log stream flush failed", "err", err)
