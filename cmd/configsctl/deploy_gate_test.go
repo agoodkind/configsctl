@@ -72,7 +72,7 @@ const (
 	pendingRefusal      = "guest guest_alpha (host guest-alpha) has 1 pending resource changes"
 	failedRefusal       = "the plan of guest guest_alpha (host guest-alpha) failed"
 	planLogNotice       = "The plan output is in "
-	planStreamLines     = 600000
+	planStreamLines     = 400000
 	planStreamsVariable = "CONFIGSCTL_TEST_PLAN_STREAMS"
 	stdoutMarker        = "p"
 	stderrMarker        = "b"
