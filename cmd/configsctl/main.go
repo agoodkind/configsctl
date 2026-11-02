@@ -357,7 +357,7 @@ func runTofu(env cmdEnv, args []string) error {
 			lockTargets: loaded.Tofu.LockTargets, requiredHosts: requiredHosts, independentWorkspaces: true,
 			guestModule: loaded.Tofu.lockGuestModule(workspaceDir),
 		}
-		return runIndependentMutation(env, request, credential, usesCredential, passwordFile)
+		return runIndependentMutation(env, loaded.Tofu, request, credential, usesCredential, passwordFile)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

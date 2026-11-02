@@ -150,12 +150,12 @@ func explicitRefusalReason(tofu tofuSettings, args []string, command tofuargs.Co
 // runExplicitMutation plans, reads the plan, locks the declared endpoints, and
 // applies the recorded plan. It does not read the Ansible inventory or run an
 // Ansible program, and it gives OpenTofu an explicit environment.
-func runExplicitMutation(ctx context.Context, request tofuLockRequest, targets tofulock.Targets, passwordFile string) error {
+func runExplicitMutation(ctx context.Context, settings tofuSettings, request tofuLockRequest, targets tofulock.Targets, passwordFile string) error {
 	options, err := parseExplicitArguments(request.args)
 	if err != nil {
 		return err
 	}
-	runner, cleanup, err := newExplicitRunner(request, passwordFile)
+	runner, cleanup, err := newExplicitRunner(settings, request, passwordFile)
 	if err != nil {
 		return err
 	}
@@ -296,13 +296,9 @@ type explicitRunner struct {
 // The request passes OpenTofu only PATH, LANG when set, TF_IN_AUTOMATION, the
 // private HOME and TMPDIR, the provider mirror configuration path, and the
 // vault values that the legacy path exports to the workspace.
-func newExplicitRunner(request tofuLockRequest, passwordFile string) (explicitRunner, func(), error) {
+func newExplicitRunner(settings tofuSettings, request tofuLockRequest, passwordFile string) (explicitRunner, func(), error) {
 	var runner explicitRunner
-	loaded, err := loadSettings(settingsFile)
-	if err != nil {
-		return runner, nil, err
-	}
-	assignments, err := tofuSecretEnv(loaded.Tofu, request.workspaceDir, defaultVaultFile, passwordFile)
+	assignments, err := tofuSecretEnv(settings, request.workspaceDir, defaultVaultFile, passwordFile)
 	if err != nil {
 		return runner, nil, err
 	}
