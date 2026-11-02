@@ -2,9 +2,11 @@ package main_test
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -66,9 +68,25 @@ const gatedPlaybook = `- name: Write the play marker
 `
 
 const (
-	gatedPlaybookName = "deploy-fixture"
-	pendingRefusal    = "guest guest_alpha (host guest-alpha) has 1 pending resource changes"
-	failedRefusal     = "the plan of guest guest_alpha (host guest-alpha) failed"
+	gatedPlaybookName   = "deploy-fixture"
+	pendingRefusal      = "guest guest_alpha (host guest-alpha) has 1 pending resource changes"
+	failedRefusal       = "the plan of guest guest_alpha (host guest-alpha) failed"
+	planLogNotice       = "The plan output is in "
+	planStreamLines     = 600000
+	planStreamsVariable = "CONFIGSCTL_TEST_PLAN_STREAMS"
+	stdoutMarker        = "p"
+	stderrMarker        = "b"
+	slogErrorLevel      = " ERROR "
+	eventLineLimit      = 300
+	raceReportStart     = "WARNING: DATA RACE"
+	raceReportEnd       = "=================="
+	panicMessage        = "panic"
+	planFailedEvent     = "deploy.gate.plan_failed"
+)
+
+var (
+	planStdoutLine = vaultAlphaValue[:len(vaultAlphaValue)-1]
+	planStderrLine = vaultBetaValue[:len(vaultBetaValue)-1]
 )
 
 func requireAnsiblePlaybook(t *testing.T) {
@@ -139,6 +157,103 @@ func TestDeployRefusesAGuestWithAFailedPlan(t *testing.T) {
 
 	result := runConfigsctl(t, tree, "deploy", gatedPlaybookName)
 	requireRefusal(t, tree, result, failedRefusal, "fixture precondition failed for guest_alpha")
+}
+
+func TestDeployLogsEveryPlanLineFromBothStreams(t *testing.T) {
+	tree := newGatedTree(t, true)
+	testBinary, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve the test binary: %v", err)
+	}
+	binDir := t.TempDir()
+	if err := os.Symlink(testBinary, filepath.Join(binDir, "tofu")); err != nil {
+		t.Fatalf("link the test binary as tofu: %v", err)
+	}
+	path := binDir + string(os.PathListSeparator) + os.Getenv("PATH")
+	env := []string{planStreamsVariable + "=1"}
+
+	result := runConfigsctlWithEnv(t, tree, path, env, "deploy", gatedPlaybookName)
+	requireRefusal(t, tree, result, failedRefusal)
+	events := eventLines(result.stderr)
+	if strings.Contains(result.stderr, panicMessage) {
+		t.Fatalf("configsctl reported a panic\nevents:\n%s", events)
+	}
+	log := readPlanLog(t, result.stderr)
+	wantBytes := planStreamLines * (len(planStdoutLine) + len(planStderrLine) + 2)
+	if len(log) != wantBytes {
+		t.Fatalf("the plan log contains %d bytes, want %d\nevents:\n%s", len(log), wantBytes, events)
+	}
+	for _, marker := range []string{stdoutMarker, stderrMarker} {
+		if count := strings.Count(log, marker); count != planStreamLines {
+			t.Fatalf("the plan log contains %d copies of %q, want %d\nevents:\n%s",
+				count, marker, planStreamLines, events)
+		}
+	}
+	failure := planFailureEvent(t, result.stderr)
+	if count := strings.Count(failure, planStderrLine); count != planStreamLines {
+		t.Fatalf("the plan failure event reports %d standard error lines, want %d\nevents:\n%s",
+			count, planStreamLines, events)
+	}
+	if strings.Contains(result.stderr, raceReportStart) {
+		t.Fatalf("configsctl reported a data race\nevents:\n%s", events)
+	}
+}
+
+func writePlanStreams() int {
+	var writers sync.WaitGroup
+	streams := map[*os.File]string{os.Stdout: planStdoutLine, os.Stderr: planStderrLine}
+	for stream, line := range streams {
+		writers.Go(func() {
+			_, _ = stream.WriteString(strings.Repeat(line+"\n", planStreamLines))
+		})
+	}
+	writers.Wait()
+	return 1
+}
+
+func planFailureEvent(t *testing.T, stderr string) string {
+	t.Helper()
+	for line := range strings.SplitSeq(stderr, "\n") {
+		if strings.Contains(line, planFailedEvent) {
+			return line
+		}
+	}
+	t.Fatalf("stderr does not contain the %s event\nevents:\n%s", planFailedEvent, eventLines(stderr))
+	return ""
+}
+
+func readPlanLog(t *testing.T, stderr string) string {
+	t.Helper()
+	for line := range strings.SplitSeq(stderr, "\n") {
+		path, found := strings.CutPrefix(line, planLogNotice)
+		if !found {
+			continue
+		}
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read the plan log: %v", err)
+		}
+		return string(contents)
+	}
+	t.Fatalf("stderr does not name the plan log\nevents:\n%s", eventLines(stderr))
+	return ""
+}
+
+func eventLines(text string) string {
+	var lines []string
+	inRaceReport := false
+	for line := range strings.SplitSeq(text, "\n") {
+		if line == raceReportStart {
+			inRaceReport = true
+		}
+		if inRaceReport || strings.Contains(line, slogErrorLevel) {
+			lines = append(lines, line[:min(len(line), eventLineLimit)])
+		}
+		if line == raceReportEnd {
+			inRaceReport = false
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func TestDeployRunsThePlayForAHostOutsideGuestHosts(t *testing.T) {

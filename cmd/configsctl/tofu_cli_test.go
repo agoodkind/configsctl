@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,7 +18,12 @@ import (
 
 var configsctlBinary string
 
+const raceBuildSetting = "-race"
+
 func TestMain(m *testing.M) {
+	if os.Getenv(planStreamsVariable) != "" {
+		os.Exit(writePlanStreams())
+	}
 	os.Exit(runWithBuiltBinary(m))
 }
 
@@ -30,13 +36,31 @@ func runWithBuiltBinary(m *testing.M) int {
 	defer func() { _ = os.RemoveAll(buildDir) }()
 
 	configsctlBinary = filepath.Join(buildDir, "configsctl")
-	build := exec.CommandContext(context.Background(), "go", "build", "-o", configsctlBinary, ".")
+	buildArgs := []string{"build"}
+	if raceEnabled() {
+		buildArgs = append(buildArgs, "-race")
+	}
+	buildArgs = append(buildArgs, "-o", configsctlBinary, ".")
+	build := exec.CommandContext(context.Background(), "go", buildArgs...)
 	output, err := build.CombinedOutput()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "build configsctl: %v\n%s", err, output)
 		return 1
 	}
 	return m.Run()
+}
+
+func raceEnabled() bool {
+	info, found := debug.ReadBuildInfo()
+	if !found {
+		return false
+	}
+	for _, setting := range info.Settings {
+		if setting.Key == raceBuildSetting && setting.Value == "true" {
+			return true
+		}
+	}
+	return false
 }
 
 // Each vault value has at least 16 characters.
@@ -181,6 +205,11 @@ func runConfigsctl(t *testing.T, tree configsTree, args ...string) commandResult
 
 func runConfigsctlWithPath(t *testing.T, tree configsTree, path string, args ...string) commandResult {
 	t.Helper()
+	return runConfigsctlWithEnv(t, tree, path, nil, args...)
+}
+
+func runConfigsctlWithEnv(t *testing.T, tree configsTree, path string, extraEnv []string, args ...string) commandResult {
+	t.Helper()
 	tempDir := filepath.Join(tree.root, "tmp")
 	if len(args) != 0 && args[0] == "deploy" {
 		var err error
@@ -194,11 +223,11 @@ func runConfigsctlWithPath(t *testing.T, tree configsTree, path string, args ...
 	}
 	command := exec.CommandContext(context.Background(), configsctlBinary, args...)
 	command.Dir = tree.root
-	command.Env = []string{
+	command.Env = append([]string{
 		"PATH=" + path,
 		"HOME=" + tree.home,
 		"TMPDIR=" + tempDir,
-	}
+	}, extraEnv...)
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
 	command.Stderr = &stderr

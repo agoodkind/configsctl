@@ -646,10 +646,10 @@ func loadSecretPatterns() ([]redact.Pattern, error) {
 	return patterns, nil
 }
 
-// lockedWriter serializes writes to a descriptor with a shared mutex.
+// lockedWriter serializes writes to dst using mu.
 type lockedWriter struct {
 	mu  *sync.Mutex
-	dst *os.File
+	dst io.Writer
 }
 
 func (l *lockedWriter) Write(p []byte) (int, error) {
