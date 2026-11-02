@@ -101,7 +101,8 @@ func PendingAddresses(plan []byte) ([]string, error) {
 	}
 	var addresses []string
 	for _, resource := range document.ResourceChanges {
-		if !resource.Change.inert() {
+		moved := resource.PreviousAddress != "" && resource.PreviousAddress != resource.Address
+		if !resource.Change.inert() || resource.Change.importing() || moved {
 			addresses = append(addresses, resource.Address)
 		}
 	}
