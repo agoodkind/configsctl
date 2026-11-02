@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"goodkind.io/configsctl/internal/clock"
 	"goodkind.io/configsctl/internal/fileowner"
@@ -48,7 +49,25 @@ type Log struct {
 	path     string
 	dir      *os.Root
 	file     *os.File
+	sink     *serialFile
+	secrets  []redact.Pattern
 	redactor *redact.Writer
+}
+
+// serialFile serializes writes to a file with a mutex.
+type serialFile struct {
+	mu   sync.Mutex
+	file *os.File
+}
+
+func (s *serialFile) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n, err := s.file.Write(p)
+	if err != nil {
+		return n, fmt.Errorf("write run log file: %w", err)
+	}
+	return n, nil
 }
 
 // Open creates a log for one run and returns a writer. The file uses the label
@@ -70,7 +89,10 @@ func Open(label string, secrets []redact.Pattern) (*Log, error) {
 	if err != nil {
 		path = file.Name()
 	}
-	return &Log{path: path, dir: dir, file: file, redactor: redact.New(file, secrets)}, nil
+	sink := &serialFile{mu: sync.Mutex{}, file: file}
+	return &Log{
+		path: path, dir: dir, file: file, sink: sink, secrets: secrets, redactor: redact.New(sink, secrets),
+	}, nil
 }
 
 // openRunLogDir creates the log directory or checks its existing mode and owner.
@@ -171,6 +193,12 @@ func (l *Log) Write(p []byte) (int, error) {
 		return n, fmt.Errorf("write run log: %w", err)
 	}
 	return n, nil
+}
+
+// Stream returns a new redacting writer that uses the log's secret patterns.
+// Call Close on the writer to write the bytes remaining in its buffer.
+func (l *Log) Stream() *redact.Writer {
+	return redact.New(l.sink, l.secrets)
 }
 
 // Close flushes the redactor's held-back tail, then closes the file and the

@@ -14,9 +14,9 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 
 	"goodkind.io/configsctl/internal/procgroup"
+	"goodkind.io/configsctl/internal/redact"
 	"goodkind.io/configsctl/internal/tofuargs"
 	"goodkind.io/configsctl/internal/tofulock"
 )
@@ -55,7 +55,12 @@ type guestPlanRequest struct {
 	workspaceDir string
 	env          []string
 	module       string
-	output       io.Writer
+	output       planOutput
+}
+
+// planOutput provides redacting writers for plan output.
+type planOutput interface {
+	Stream() *redact.Writer
 }
 
 // gateGuestPlans runs targeted plans for selected playbook hosts listed as guest_hosts values.
@@ -77,8 +82,11 @@ func gateGuestPlans(ctx context.Context, targets deployTargets, output io.Writer
 	if err != nil {
 		return err
 	}
-	if output == nil {
-		output = os.Stdout
+	streams, ok := output.(planOutput)
+	if !ok {
+		err := errors.New("the plan gate requires a run log for the plan output")
+		slog.Error("deploy.gate.output_unsupported", "err", err)
+		return err
 	}
 	var rejections []error
 	for _, guest := range guests {
@@ -87,7 +95,7 @@ func gateGuestPlans(ctx context.Context, targets deployTargets, output io.Writer
 			return err
 		}
 		request.env = append(os.Environ(), request.env...)
-		request.output = output
+		request.output = streams
 		if err := gateGuestPlan(ctx, request, guest); err != nil {
 			slog.Error("deploy.gate.rejected", "guest", guest.serviceName, "host", guest.host, "err", err)
 			rejections = append(rejections, err)
@@ -150,13 +158,15 @@ func gateGuestPlan(ctx context.Context, request guestPlanRequest, guest gatedGue
 	cmd.Dir = request.workspaceDir
 	cmd.Env = request.env
 	var stderr bytes.Buffer
-	// procgroup.RunGroup copies standard output and standard error concurrently.
-	// During a deploy, request.output uses redact.Writer, which is not safe
-	// for concurrent writes.
-	output := &lockedWriter{mu: &sync.Mutex{}, dst: request.output}
-	cmd.Stdout = output
-	cmd.Stderr = io.MultiWriter(output, &stderr)
+	stdoutLog := request.output.Stream()
+	stderrLog := request.output.Stream()
+	cmd.Stdout = stdoutLog
+	cmd.Stderr = io.MultiWriter(stderrLog, &stderr)
 	runErr := procgroup.RunGroup(cmd)
+	if flushErr := errors.Join(stdoutLog.Close(), stderrLog.Close()); flushErr != nil {
+		slog.Error("deploy.gate.plan_log_failed", "guest", guest.serviceName, "host", guest.host, "err", flushErr)
+		return fmt.Errorf("write the plan output of guest %s to the run log: %w", guest.serviceName, flushErr)
+	}
 	if runErr == nil {
 		if err := requirePlannedGuest(ctx, request, planPath, target); err != nil {
 			return err
