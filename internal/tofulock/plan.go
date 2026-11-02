@@ -44,6 +44,7 @@ type changeValues struct {
 	Before       map[string]json.RawMessage `json:"before"`
 	After        map[string]json.RawMessage `json:"after"`
 	AfterUnknown json.RawMessage            `json:"after_unknown"`
+	Importing    *struct{}                  `json:"importing"`
 }
 
 type resourceState struct {
@@ -67,6 +68,10 @@ func (c changeValues) inert() bool {
 		}
 	}
 	return true
+}
+
+func (c changeValues) importing() bool {
+	return c.Importing != nil
 }
 
 func (c changeValues) deletes() bool {
