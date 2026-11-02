@@ -117,7 +117,7 @@ func TestIndependentHostAndFirmwareApplyRequireTheirPhysicalHost(t *testing.T) {
 			if show.exitCode != 0 {
 				t.Fatal("the native host plan could not be read")
 			}
-			targets := tofulock.Targets{ModuleHosts: map[string]string{"module.host": "hv_alpha"}, ModuleKeyHosts: nil, NodeHosts: nil, GuestHosts: nil, LockFreeTypes: nil}
+			targets := tofulock.Targets{ModuleHosts: map[string]string{"module.host": "hv_alpha"}, ModuleKeyHosts: nil, NodeHosts: nil, GuestHosts: nil, LockFreeTypes: nil, LockEndpoints: nil}
 			decision := tofulock.DecideIndependent([]byte(show.stdout), targets)
 			requireRealPlanLock(t, decision, "hv_alpha")
 		})
@@ -264,7 +264,7 @@ func TestIndependentGuestPlanUsesARealGuestLock(t *testing.T) {
 	if shown.exitCode != 0 {
 		t.Fatal("the real guest plan could not be read")
 	}
-	targets := tofulock.Targets{GuestHosts: map[string]string{"site/101": "guest-alpha"}, NodeHosts: map[string]string{"site": "hv_alpha"}, ModuleHosts: nil, ModuleKeyHosts: nil, LockFreeTypes: nil}
+	targets := tofulock.Targets{GuestHosts: map[string]string{"site/101": "guest-alpha"}, NodeHosts: map[string]string{"site": "hv_alpha"}, ModuleHosts: nil, ModuleKeyHosts: nil, LockFreeTypes: nil, LockEndpoints: nil}
 	decision := tofulock.DecideIndependent([]byte(shown.stdout), targets)
 	if decision.AllHosts || !slices.Equal(decision.Hosts, []string{"guest-alpha"}) {
 		t.Fatalf("the real guest plan selected %v: %s", decision.Hosts, decision.Reason)

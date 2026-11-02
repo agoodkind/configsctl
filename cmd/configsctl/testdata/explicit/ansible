@@ -1,0 +1,6 @@
+#!/bin/sh
+# Sentinel for the explicit mutation tests. The tests install it under the
+# names ansible, ansible-playbook, ansible-inventory, and ansible-vault first on
+# PATH. A call records a marker next to this script and fails.
+echo "$0 $*" >> "$(dirname "$0")/ansible-marker"
+exit 1

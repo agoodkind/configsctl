@@ -1,0 +1,35 @@
+#!/bin/sh
+# Stand-in for tofu in the explicit mutation tests.
+# It runs the real tofu through the real-tofu link next to this script and
+# records what happened in the same directory:
+#   calls.log      one line with the arguments of each call
+#   planned.tfplan a copy of the plan file after the plan command
+#   applied.tfplan a copy of the saved plan that the apply command received
+#   apply-env-names sorted variable names in the environment of the apply command
+#   lockstate      the line "held" when the lock file in the directory named by
+#                  the lockdir file exists during the apply command
+# When the file named tamper exists, it appends one byte to the recorded plan
+# after the show command, which the controller runs between plan and apply.
+dir=$(dirname "$0")
+echo "$*" >> "$dir/calls.log"
+if [ "$1" = "apply" ]; then
+	for last; do :; done
+	cp "$last" "$dir/applied.tfplan"
+	env | cut -d= -f1 | sort > "$dir/apply-env-names"
+	if [ -e "$(cat "$dir/lockdir")/deploy.lock" ]; then
+		echo held >> "$dir/lockstate"
+	fi
+fi
+"$dir/real-tofu" "$@"
+status=$?
+if [ "$1" = "plan" ]; then
+	for argument; do
+		case "$argument" in
+		-out=*) cp "${argument#-out=}" "$dir/planned.tfplan" ;;
+		esac
+	done
+fi
+if [ "$1" = "show" ] && [ -e "$dir/tamper" ]; then
+	printf x >> "$TMPDIR/mutation.tfplan"
+fi
+exit "$status"

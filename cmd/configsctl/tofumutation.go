@@ -41,11 +41,14 @@ func needsIndependentPlan(independent bool, args []string) bool {
 	return independent && tofuMutates(args) && savedPlanCandidate(args) == ""
 }
 
-func runIndependentMutation(env cmdEnv, request tofuLockRequest, credential tofuCredentialSettings, usesCredential bool, passwordFile string) error {
+func runIndependentMutation(env cmdEnv, settings tofuSettings, request tofuLockRequest, credential tofuCredentialSettings, usesCredential bool, passwordFile string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if tofuargs.BooleanArgument(request.args, "help", false) || tofuargs.BooleanArgument(request.args, "h", false) {
 		return executeTofu(ctx, env, request.workspaceDir, request.args, request.args, request.env)
+	}
+	if explicitTargets, explicit := explicitLockTargets(request); explicit {
+		return runExplicitMutation(ctx, settings, request, explicitTargets, passwordFile)
 	}
 	targets, err := mutationLockTargets(ctx, request)
 	if err != nil {

@@ -328,28 +328,27 @@ func runTofu(env cmdEnv, args []string) error {
 	if len(tofuArgs) == 0 {
 		return errors.New(tofuUsage)
 	}
-	tofuArgs, childEnv, err := tofuInvocation(loaded.Tofu, workspaceDir, passwordFile, tofuArgs)
-	if err != nil {
-		return err
-	}
-	safeArgs, err := sanitizeTofuArgs(tofuArgs)
+	safeArgs, childEnv, err := prepareTofuInvocation(loaded.Tofu, workspaceDir, passwordFile, tofuArgs)
 	if err != nil {
 		return err
 	}
 	credential, configured := loaded.Tofu.Credentials[tofuWorkspaceKey(workspaceDir)]
 	usesCredential := configured && credentialCommand(safeArgs)
+	if err := requireExplicitLockPath(loaded.Tofu, workspaceDir, safeArgs); err != nil {
+		return err
+	}
+	if handled, helpErr := runEndpointHelp(env, loaded.Tofu, workspaceDir, safeArgs, childEnv); handled {
+		return helpErr
+	}
 	releaseMigration, err := leaseTofuMigration(safeArgs, usesCredential)
 	if err != nil {
 		return err
 	}
 	defer releaseMigration()
 	slog.Info("tofu run", "dir", workspaceDir, "args", strings.Join(safeArgs, " "))
-	var requiredHosts []string
-	if usesCredential {
-		if err := credential.validateWorkspace(workspaceDir, childEnv); err != nil {
-			return err
-		}
-		requiredHosts = []string{credential.LockHost}
+	requiredHosts, err := requiredCredentialHosts(credential, usesCredential, workspaceDir, childEnv)
+	if err != nil {
+		return err
 	}
 	independent := loaded.Tofu.GuestModules != nil
 	if needsIndependentPlan(independent, safeArgs) {
@@ -358,7 +357,7 @@ func runTofu(env cmdEnv, args []string) error {
 			lockTargets: loaded.Tofu.LockTargets, requiredHosts: requiredHosts, independentWorkspaces: true,
 			guestModule: loaded.Tofu.lockGuestModule(workspaceDir),
 		}
-		return runIndependentMutation(env, request, credential, usesCredential, passwordFile)
+		return runIndependentMutation(env, loaded.Tofu, request, credential, usesCredential, passwordFile)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

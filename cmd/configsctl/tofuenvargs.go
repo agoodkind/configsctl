@@ -28,6 +28,18 @@ func tofuInvocation(settings tofuSettings, workspace, passwordFile string, args 
 	return expandTofuEnvironment(args, append(os.Environ(), secrets...))
 }
 
+func prepareTofuInvocation(settings tofuSettings, workspace, passwordFile string, args []string) (safeArgs, childEnv []string, err error) {
+	expanded, childEnv, err := tofuInvocation(settings, workspace, passwordFile, args)
+	if err != nil {
+		return nil, nil, err
+	}
+	safeArgs, err = sanitizeTofuArgs(expanded)
+	if err != nil {
+		return nil, nil, err
+	}
+	return safeArgs, childEnv, nil
+}
+
 // Expand native environment arguments once before selecting approval and locks.
 func expandTofuEnvironment(args, environment []string) ([]string, []string, error) {
 	command, insertion := tofuEnvironmentCommand(args)
