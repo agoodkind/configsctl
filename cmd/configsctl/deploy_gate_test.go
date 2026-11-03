@@ -112,6 +112,7 @@ func newGatedTree(t *testing.T, healthy bool) configsTree {
 
 	initArgs := tofuArgs("guest", "init", "-input=false")
 	requireSuccess(t, runConfigsctl(t, tree, initArgs...), initArgs...)
+	publishConfigsTree(t, tree)
 	return tree
 }
 

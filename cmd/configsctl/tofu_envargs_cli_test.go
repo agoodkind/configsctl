@@ -13,6 +13,7 @@ import (
 
 func runTofuEnvironment(t *testing.T, tree configsTree, input string, environment []string, args ...string) commandResult {
 	t.Helper()
+	publishConfigsTree(t, tree)
 	temporary := filepath.Join(tree.root, "tmp")
 	if err := os.MkdirAll(temporary, 0o700); err != nil {
 		t.Fatal(err)
@@ -192,6 +193,7 @@ func TestTofuMigrationPauseRejectsTaintAndUntaint(t *testing.T) {
 			tree := independentUnlockedTree(t)
 			root := filepath.Join(tree.workspaces, "suburban", "tack")
 			writeFixtureFile(t, filepath.Join(root, "main.tf"), workspaceFixture(t, "environment-args.tf"))
+			publishConfigsTree(t, tree)
 			apply := tofuArgs("suburban/tack", "apply", "-auto-approve", "-input=false")
 			requireSuccess(t, runConfigsctl(t, tree, apply...), apply...)
 			if operation == "untaint" {

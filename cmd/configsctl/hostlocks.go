@@ -238,7 +238,7 @@ func selectTofuLockHosts(ctx context.Context, inv ansible.Inventory, request tof
 	if err := requireRegularPlan(workspacePath(request.workspaceDir, planFile)); err != nil {
 		return tofuHostSelection{}, err
 	}
-	copyDir, copyPath, err := copySavedPlan(request.workspaceDir, planFile)
+	copyDir, copyPath, err := copySavedPlan(ctx, request.workspaceDir, planFile)
 	if err != nil {
 		return tofuHostSelection{}, err
 	}
@@ -346,7 +346,7 @@ func requireRegularPlan(path string) error {
 	return nil
 }
 
-func copySavedPlan(workspaceDir, planFile string) (string, string, error) {
+func copySavedPlan(ctx context.Context, workspaceDir, planFile string) (string, string, error) {
 	dir, err := os.MkdirTemp("", "configsctl-plan-*")
 	if err != nil {
 		slog.Error("tofu.lock.plan_copy_dir_failed", "err", err)
@@ -354,6 +354,10 @@ func copySavedPlan(workspaceDir, planFile string) (string, string, error) {
 	}
 	copyPath := filepath.Join(dir, filepath.Base(planFile))
 	if err := copyPrivateFile(workspacePath(workspaceDir, planFile), copyPath); err != nil {
+		removePlanCopy(dir)
+		return "", "", err
+	}
+	if err := requireTofuPlanSource(ctx, workspaceDir, copyPath); err != nil {
 		removePlanCopy(dir)
 		return "", "", err
 	}

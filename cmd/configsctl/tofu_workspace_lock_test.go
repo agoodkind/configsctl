@@ -62,6 +62,7 @@ func independentLockTree(t *testing.T) configsTree {
 	writeFixtureFile(t, filepath.Join(root, "item", "main.tf"), gatedItemModule)
 	args := tofuArgs("suburban/tack", "init", "-input=false")
 	requireSuccess(t, runConfigsctl(t, tree, args...), args...)
+	publishConfigsTree(t, tree)
 	return tree
 }
 
@@ -108,6 +109,7 @@ func TestIndependentHostAndFirmwareApplyRequireTheirPhysicalHost(t *testing.T) {
 			writeFixtureFile(t, filepath.Join(root, "item", "main.tf"), lockedItemModule)
 			init := tofuArgs(selector, "init", "-input=false")
 			requireSuccess(t, runConfigsctl(t, tree, init...), init...)
+			publishConfigsTree(t, tree)
 			args := tofuArgs(selector, "apply", "-auto-approve", "-input=false")
 			requireWorkspaceLockRefusal(t, tree, runConfigsctl(t, tree, args...), "hv_alpha")
 			requireNoFile(t, filepath.Join(root, "host.tfstate"))
@@ -127,6 +129,7 @@ func TestIndependentHostAndFirmwareApplyRequireTheirPhysicalHost(t *testing.T) {
 func TestIndependentApplyRefusesUnknownOwnership(t *testing.T) {
 	tree := independentLockTree(t)
 	writeFixtureFile(t, filepath.Join(tree.workspaces, "suburban", "tack", "unowned.tf"), "resource \"terraform_data\" \"unowned\" {\n  input = \"unowned\"\n}\n")
+	publishConfigsTree(t, tree)
 	args := tofuArgs("suburban/tack", "apply", "-auto-approve", "-input=false", "-target=terraform_data.unowned")
 	result := runConfigsctl(t, tree, args...)
 	if result.exitCode == 0 || !strings.Contains(result.stderr, "unknown lock ownership") || !strings.Contains(result.stderr, "terraform_data.unowned matches no lock target") {
@@ -143,11 +146,15 @@ func independentUnlockedTree(t *testing.T) configsTree {
 	tree := independentLockTree(t)
 	configuration := strings.Replace(independentLockSettings, "    workspaces/suburban/tack:\n", "    workspaces/suburban/tack:\n      lock_free_types: [terraform_data]\n", 1)
 	writeFixtureFile(t, filepath.Join(tree.root, settingsName), configuration)
+	publishConfigsTree(t, tree)
 	return tree
 }
 
 func runMutationInput(t *testing.T, tree configsTree, input string, args ...string) commandResult {
 	t.Helper()
+	if len(args) != 0 && args[0] == "tofu" {
+		publishConfigsTree(t, tree)
+	}
 	tempDir, err := os.MkdirTemp(shortTempRoot, "workspace-lock-*")
 	if err != nil {
 		t.Fatal(err)
@@ -223,6 +230,7 @@ func TestIndependentLockFreeWorkspaceNeedsNoHostMapping(t *testing.T) {
 	writeFixtureFile(t, filepath.Join(root, "main.tf"), "resource \"terraform_data\" \"shared\" {\n  input = \"shared-fixture\"\n}\n")
 	init := tofuArgs("shared", "init", "-input=false")
 	requireSuccess(t, runConfigsctl(t, tree, init...), init...)
+	publishConfigsTree(t, tree)
 	apply := tofuArgs("shared", "apply", "-auto-approve", "-input=false")
 	result := runConfigsctl(t, tree, apply...)
 	requireSuccess(t, result, apply...)

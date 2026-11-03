@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"goodkind.io/configsctl/internal/tofuargs"
@@ -12,6 +13,9 @@ func savedPlanCandidate(args []string) string {
 		return ""
 	}
 	candidate := args[len(args)-1]
+	if slices.Contains(args[:len(args)-1], "--") {
+		return candidate
+	}
 	if strings.HasPrefix(candidate, "-") || tofuargs.ConsumesValue(args[len(args)-2]) {
 		return ""
 	}

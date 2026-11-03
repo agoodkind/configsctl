@@ -337,6 +337,9 @@ func runTofu(env cmdEnv, args []string) error {
 	if err := requireExplicitLockPath(loaded.Tofu, workspaceDir, safeArgs); err != nil {
 		return err
 	}
+	if err := requireMergedTofuSource(context.Background(), workspaceDir, safeArgs, usesCredential); err != nil {
+		return err
+	}
 	if handled, helpErr := runEndpointHelp(env, loaded.Tofu, workspaceDir, safeArgs, childEnv); handled {
 		return helpErr
 	}
@@ -394,12 +397,26 @@ func runTofu(env cmdEnv, args []string) error {
 }
 
 func executeTofu(ctx context.Context, env cmdEnv, workspaceDir string, safeArgs, commandArgs, childEnv []string) error {
+	planPath := tofuPlanOutput(commandArgs)
+	var source tofuPlanSource
+	if planPath != "" {
+		var err error
+		source, err = inspectTofuPlanSource(ctx, workspaceDir)
+		if err != nil {
+			return err
+		}
+	}
 	request := tofurun.Request{
 		Root: workspaceDir, Args: commandArgs, Environment: childEnv, DisplayArgs: safeArgs, Patterns: env.secrets,
 	}
 	result, err := tofurun.Run(ctx, request)
 	if errors.Is(err, tofurun.ErrIncomplete) {
 		return tofuFailure(ctx, err, result.LogPath)
+	}
+	if err == nil && planPath != "" && (result.ExitCode == 0 || result.ExitCode == tofuPendingExitCode) {
+		if err := recordTofuPlanSource(ctx, workspaceDir, workspacePath(workspaceDir, planPath), source); err != nil {
+			return err
+		}
 	}
 	pendingPlan := tofuargs.Subcommand(commandArgs) == tofuargs.Plan &&
 		tofuargs.Subcommand(safeArgs) != tofuargs.Plan && result.ExitCode == tofuPendingExitCode

@@ -11,6 +11,7 @@ func TestTofuCredentialRejectsPersistentVariablesBeforeAuthentication(t *testing
 	tree := newConfigsTree(t)
 	writeFixtureFile(t, filepath.Join(tree.root, "configsctl.yml"), settingsContent+readCredentialFixture(t, "credentials.yml"))
 	writeFixtureFile(t, filepath.Join(tree.workspaces, "alpha", "credentials.tf"), readCredentialFixture(t, "user.tf"))
+	publishConfigsTree(t, tree)
 	result := runConfigsctl(t, tree, "tofu", "alpha", "plan", "-input=false")
 	if result.exitCode == 0 || !strings.Contains(result.stderr, "credential variable vault_alpha requires ephemeral = true and sensitive = true") {
 		t.Fatalf("the CLI did not reject the persistent password declaration: %s", result.stderr)
@@ -26,6 +27,7 @@ func TestTofuCredentialRequiresItsHostLockBeforeAuthentication(t *testing.T) {
 	writeFixtureFile(t, filepath.Join(tree.workspaces, "alpha", "main.tf"), readCredentialFixture(t, "credentials.tf"))
 	writeFixtureFile(t, filepath.Join(tree.root, "ansible", "ansible.cfg"), lockedAnsibleConfig)
 	writeFixtureFile(t, filepath.Join(tree.root, "ansible", "inventory", "hosts.yml"), lockedInventory)
+	publishConfigsTree(t, tree)
 	result := runConfigsctl(t, tree, "tofu", "alpha", "plan", "-input=false")
 	if result.exitCode == 0 || !strings.Contains(result.stderr, "host hv_alpha from tofu.lock_targets has no ssh lock target") {
 		t.Fatalf("the CLI did not require the credential host lock: %s", result.stderr)
