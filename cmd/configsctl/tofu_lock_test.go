@@ -66,11 +66,13 @@ func newLockedTree(t *testing.T) configsTree {
 
 	initArgs := tofuArgs("locked", "init", "-input=false")
 	requireSuccess(t, runConfigsctl(t, tree, initArgs...), initArgs...)
+	publishConfigsTree(t, tree)
 	return tree
 }
 
 func planTarget(t *testing.T, tree configsTree, module, planFile string) {
 	t.Helper()
+	publishConfigsTree(t, tree)
 	args := tofuArgs("locked", "plan", "-input=false", "-target="+module, "-out="+planFile)
 	requireSuccess(t, runConfigsctl(t, tree, args...), args...)
 }
@@ -153,6 +155,7 @@ func TestTofuApplyWithVarFileValueLocksEveryHypervisor(t *testing.T) {
 	requireTofu(t)
 	tree := newLockedTree(t)
 	writeFixtureFile(t, filepath.Join(tree.workspaces, "locked", "extra.tfvars"), "# no variables\n")
+	publishConfigsTree(t, tree)
 
 	args := tofuArgs("locked", "apply", "-auto-approve", "-input=false", "-var-file", "extra.tfvars")
 	result := runConfigsctl(t, tree, args...)
@@ -192,6 +195,7 @@ func newLockOnlyTree(t *testing.T) configsTree {
 	tree := newLockedTree(t)
 	writeFixtureFile(t, filepath.Join(tree.root, "configsctl.yml"), settingsContent+lockOnlyTargetsSettings)
 	writeFixtureFile(t, filepath.Join(tree.root, "ansible", "inventory", "hosts.yml"), lockOnlyInventory)
+	publishConfigsTree(t, tree)
 	return tree
 }
 

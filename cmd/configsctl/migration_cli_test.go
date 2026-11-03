@@ -56,6 +56,7 @@ func commitMigrationFixture(t *testing.T, tree configsTree, paths ...string) str
 	t.Helper()
 	fixtureGit(t, tree, append([]string{"add", "--"}, paths...)...)
 	fixtureGit(t, tree, "-c", "user.name=Configsctl Test", "-c", "user.email=configsctl-test@example.invalid", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "commit", "-m", "Save synthetic migration configuration")
+	publishConfigsTree(t, tree)
 	return fixtureGit(t, tree, "rev-parse", "HEAD")
 }
 

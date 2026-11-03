@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"goodkind.io/configsctl/internal/migrationpause"
-	"goodkind.io/configsctl/internal/tofuargs"
 )
 
 func migrationPausePath() (string, error) {
@@ -40,8 +39,8 @@ func leaseTofuMigration(args []string, usesCredential bool) (func(), error) {
 }
 
 func tofuWritesState(args []string) bool {
-	command := string(tofuargs.Subcommand(args))
-	if slices.Contains([]string{"apply", "destroy", "refresh", "import", "test", "taint", "untaint"}, command) {
+	command, _ := tofuEnvironmentCommand(args)
+	if slices.Contains([]string{"apply", "destroy", "refresh", "import", "test", "taint", "untaint", "force-unlock"}, command) {
 		return true
 	}
 	if command == "init" {
@@ -51,10 +50,10 @@ func tofuWritesState(args []string) bool {
 			}
 		}
 	}
-	if command == "state" && len(args) > 1 && !slices.Contains([]string{"list", "ls", "pull", "show"}, args[1]) {
+	if (command == "state" || strings.HasPrefix(command, "state ")) && !slices.Contains([]string{"state list", "state ls", "state pull", "state show"}, command) {
 		return true
 	}
-	if (command == "workspace" || command == "env") && len(args) > 1 && slices.Contains([]string{"new", "delete"}, args[1]) {
+	if slices.Contains([]string{"workspace new", "workspace delete", "env new", "env delete"}, command) {
 		return true
 	}
 	return false

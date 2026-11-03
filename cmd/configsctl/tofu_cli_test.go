@@ -198,6 +198,9 @@ func newConfigsTreeAt(t *testing.T, base string) configsTree {
 	if err := ansiblevault.EncryptFile(vaultFile, vaultContent, vaultUnlockText); err != nil {
 		t.Fatalf("encrypt vault: %v", err)
 	}
+	writeFixtureFile(t, filepath.Join(tree.root, ".gitignore"), sourceFixtureIgnore)
+	sourceGit(t, tree, "init", "--initial-branch=main")
+	publishConfigsTree(t, tree)
 	return tree
 }
 
@@ -295,6 +298,7 @@ func applyWorkspace(t *testing.T, tree configsTree, workspace string) {
 	t.Helper()
 	initArgs := tofuArgs(workspace, "init", "-input=false")
 	requireSuccess(t, runConfigsctl(t, tree, initArgs...), initArgs...)
+	publishConfigsTree(t, tree)
 	applyArgs := tofuArgs(workspace, "apply", "-auto-approve", "-input=false")
 	requireSuccess(t, runConfigsctl(t, tree, applyArgs...), applyArgs...)
 }

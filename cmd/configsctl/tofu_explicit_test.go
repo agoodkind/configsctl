@@ -147,6 +147,7 @@ func (f explicitFixture) apply(t *testing.T, args ...string) commandResult {
 // mutate runs "configsctl tofu suburban/tack" with the given OpenTofu arguments.
 func (f explicitFixture) mutate(t *testing.T, args ...string) commandResult {
 	t.Helper()
+	publishConfigsTree(t, f.tree)
 	path := f.binDir + string(os.PathListSeparator) + "/usr/bin" + string(os.PathListSeparator) + "/bin"
 	tempDir := filepath.Join(f.tree.root, "tmp")
 	if err := os.MkdirAll(tempDir, 0o700); err != nil {

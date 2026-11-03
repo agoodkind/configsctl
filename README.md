@@ -73,6 +73,12 @@ configsctl passes the remaining arguments to OpenTofu. Existing immediate-child 
 
 configsctl exports a vault key as `TF_VAR_<key>` only when the selected workspace declares a variable with that name.
 
+## Require merged OpenTofu source
+
+Commands that write deployment state or rotate provider credentials require a clean configuration checkout at a commit contained in `origin/main`. configsctl fetches `origin` and rejects unmerged commits, uncommitted files, and unavailable remotes before acquiring deployment locks or starting OpenTofu. Select the workspace through configsctl rather than the OpenTofu `-chdir` option. Preview plans that do not rotate credentials and other read-only commands remain available from unmerged checkouts.
+
+When a plan writes an `-out` file, configsctl records its source commit and workspace in the local user cache, using the plan's SHA-256 digest as the key. A saved-plan apply requires those exact bytes and the same clean, merged configuration commit. Plans from dirty or unversioned checkouts remain previews. Regenerate plans that lack a source record, including older plans and plans copied to a machine without the matching cache entry.
+
 ## Scope infrastructure locks
 
 When `tofu.guest_modules` enables independent workspaces, an ordinary `apply` or `destroy` prepares a native saved plan before selecting locks. configsctl preserves the confirmation prompt unless the effective arguments include `-auto-approve`. It applies that exact plan after acquiring its declared locks. Unknown ownership refuses the mutation.
@@ -428,6 +434,7 @@ The check also runs with `--check`. Check mode now reads the settings and still 
   `/opt/homebrew/bin/python3` or `/usr/local/bin/python3` can provide it when
   the shell's `python3` cannot.
 - The Ansible command line tools for `deploy`, `syntax-check`, and `inventory-dump`, and OpenTofu for `tofu`.
+- Git and access to `origin` for OpenTofu commands that write deployment state.
 - The vault password at `~/.config/ansible/vault.pass` for every command that reads the vault.
 
 ## Develop
