@@ -38,18 +38,33 @@ func (r Repo) RequireOnMain(ctx context.Context, commit string) error {
 
 // CleanRevision returns HEAD only when tracked and untracked files are clean.
 func (r Repo) CleanRevision(ctx context.Context) (string, error) {
-	status, err := r.output(ctx, "status", "--porcelain", "--untracked-files=all")
+	checkout, err := r.Snapshot(ctx)
 	if err != nil {
 		return "", err
 	}
-	if len(status) != 0 {
+	if checkout.Dirty {
 		return "", ErrDirty
+	}
+	return checkout.Commit, nil
+}
+
+// CheckoutRevision records the current commit and uncommitted changes.
+type CheckoutRevision struct {
+	Commit string
+	Dirty  bool
+}
+
+// Snapshot reads the current commit and working tree status.
+func (r Repo) Snapshot(ctx context.Context) (CheckoutRevision, error) {
+	status, err := r.output(ctx, "status", "--porcelain", "--untracked-files=all")
+	if err != nil {
+		return CheckoutRevision{}, err
 	}
 	revision, err := r.output(ctx, "rev-parse", "HEAD")
 	if err != nil {
-		return "", err
+		return CheckoutRevision{}, err
 	}
-	return strings.TrimSpace(string(revision)), nil
+	return CheckoutRevision{Commit: strings.TrimSpace(string(revision)), Dirty: len(status) != 0}, nil
 }
 
 // Root returns the configuration repository root.

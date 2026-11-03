@@ -400,7 +400,11 @@ func executeTofu(ctx context.Context, env cmdEnv, workspaceDir string, safeArgs,
 	planPath := tofuPlanOutput(commandArgs)
 	var source tofuPlanSource
 	if planPath != "" {
-		source = inspectTofuPlanSource(ctx, workspaceDir)
+		var err error
+		source, err = inspectTofuPlanSource(ctx, workspaceDir)
+		if err != nil {
+			return err
+		}
 	}
 	request := tofurun.Request{
 		Root: workspaceDir, Args: commandArgs, Environment: childEnv, DisplayArgs: safeArgs, Patterns: env.secrets,

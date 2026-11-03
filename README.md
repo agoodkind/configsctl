@@ -77,7 +77,7 @@ configsctl exports a vault key as `TF_VAR_<key>` only when the selected workspac
 
 Commands that write deployment state or rotate provider credentials require a clean configuration checkout at a commit contained in `origin/main`. configsctl fetches `origin` and rejects unmerged commits, uncommitted files, and unavailable remotes before acquiring deployment locks or starting OpenTofu. Select the workspace through configsctl rather than the OpenTofu `-chdir` option. Preview plans that do not rotate credentials and other read-only commands remain available from unmerged checkouts.
 
-When a plan writes an `-out` file, configsctl records its source commit and workspace in the local user cache, using the plan's SHA-256 digest as the key. A saved-plan apply requires those exact bytes and the same clean, merged configuration commit. Plans from dirty or unversioned checkouts remain previews. Regenerate plans that lack a source record, including older plans and plans copied to a machine without the matching cache entry.
+When a plan writes an `-out` file, configsctl records its source commit, workspace, and committed or preview status in the local user cache, using the plan's SHA-256 digest as the key. A saved-plan apply requires those exact bytes and the same clean, merged configuration commit. Plans from dirty checkouts remain previews. Source inspection failures or configuration changes during planning refuse the saved plan. Regenerate plans that lack a source record, including older plans and plans copied to a machine without the matching cache entry.
 
 ## Scope infrastructure locks
 

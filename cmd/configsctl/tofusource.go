@@ -14,9 +14,17 @@ import (
 	"goodkind.io/configsctl/internal/tofuargs"
 )
 
+type tofuSourceStatus string
+
+const (
+	tofuSourceCommitted tofuSourceStatus = "committed"
+	tofuSourcePreview   tofuSourceStatus = "preview"
+)
+
 type tofuPlanSource struct {
-	Commit    string `json:"commit"`
-	Workspace string `json:"workspace"`
+	Status    tofuSourceStatus `json:"status"`
+	Commit    string           `json:"commit"`
+	Workspace string           `json:"workspace"`
 }
 
 func requireMergedTofuSource(ctx context.Context, workspace string, args []string, changesCredential bool) error {
@@ -109,19 +117,22 @@ func tofuPlanOutput(args []string) string {
 	return path
 }
 
-func inspectTofuPlanSource(ctx context.Context, workspace string) tofuPlanSource {
+func inspectTofuPlanSource(ctx context.Context, workspace string) (tofuPlanSource, error) {
 	repository := gate.Repo{Dir: "."}
-	revision, err := repository.CleanRevision(ctx)
+	checkout, err := repository.Snapshot(ctx)
 	if err != nil {
-		slog.Warn("saved plan is preview only; its configuration is not a clean Git commit", "err", err)
-		return tofuPlanSource{}
+		slog.Error("tofu.source.snapshot_failed", "err", err)
+		return tofuPlanSource{}, fmt.Errorf("inspect the saved plan configuration: %w", err)
 	}
 	selected, err := tofuSourceWorkspace(ctx, workspace)
 	if err != nil {
-		slog.Warn("saved plan is preview only; its workspace is not in the configuration repository", "err", err)
-		return tofuPlanSource{}
+		return tofuPlanSource{}, err
 	}
-	return tofuPlanSource{Commit: revision, Workspace: selected}
+	status := tofuSourceCommitted
+	if checkout.Dirty {
+		status = tofuSourcePreview
+	}
+	return tofuPlanSource{Status: status, Commit: checkout.Commit, Workspace: selected}, nil
 }
 
 // The cache key binds source metadata to the exact plan bytes without writing
@@ -143,10 +154,18 @@ func tofuPlanSourcePath(path string) (string, error) {
 }
 
 func recordTofuPlanSource(ctx context.Context, workspace, path string, before tofuPlanSource) error {
-	after := inspectTofuPlanSource(ctx, workspace)
+	after, err := inspectTofuPlanSource(ctx, workspace)
+	if err != nil {
+		return errors.Join(err, removeTofuPlanSource(path))
+	}
 	if before != after {
-		slog.Warn("saved plan is preview only; its configuration changed during planning")
-		after = tofuPlanSource{}
+		if err := removeTofuPlanSource(path); err != nil {
+			return err
+		}
+		return errors.New("the configuration changed during planning; regenerate the saved plan")
+	}
+	if after.Status == tofuSourcePreview {
+		slog.Warn("saved plan is preview only; configuration has uncommitted changes")
 	}
 	metadata, err := tofuPlanSourcePath(path)
 	if err != nil {
@@ -161,6 +180,19 @@ func recordTofuPlanSource(ctx context.Context, workspace, path string, before to
 	}
 	if err := os.WriteFile(metadata, encoded, 0o600); err != nil {
 		return fmt.Errorf("record the saved plan source: %w", err)
+	}
+	return nil
+}
+
+func removeTofuPlanSource(path string) error {
+	metadata, err := tofuPlanSourcePath(path)
+	if err != nil {
+		return err
+	}
+	// A newly generated plan may not have a cached source record yet.
+	if err := os.Remove(metadata); err != nil && !errors.Is(err, os.ErrNotExist) {
+		slog.Error("tofu.source.plan_record_remove_failed", "err", err)
+		return fmt.Errorf("remove the stale saved plan source record: %w", err)
 	}
 	return nil
 }
@@ -180,8 +212,11 @@ func requireTofuPlanSource(ctx context.Context, workspace, path string) error {
 		slog.Error("tofu.source.plan_record_invalid", "err", err)
 		return fmt.Errorf("read the saved plan source record: %w", err)
 	}
-	current := inspectTofuPlanSource(ctx, workspace)
-	if source.Commit == "" || current.Commit == "" || source != current {
+	current, err := inspectTofuPlanSource(ctx, workspace)
+	if err != nil {
+		return err
+	}
+	if source.Status != tofuSourceCommitted || current.Status != tofuSourceCommitted || source != current {
 		return errors.New("regenerate the saved plan from this clean merged configuration commit; its recorded source does not match")
 	}
 	return nil

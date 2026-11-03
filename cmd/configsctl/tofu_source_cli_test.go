@@ -2,12 +2,16 @@ package main_test
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 const sourceFixtureIgnore = ".terraform/\n.terraform.lock.hcl\n*.tfstate*\n*.tfplan\n*.plan\ntmp/\n"
@@ -197,4 +201,55 @@ func TestTofuSourceRefusesUnmergedCredentialPlan(t *testing.T) {
 	sourceFeature(t, tree)
 	result := runConfigsctl(t, tree, tofuArgs("alpha", "plan", "-input=false")...)
 	requireSourceRefusal(t, tree, result, "is not on origin/main")
+}
+
+func TestTofuSourceRejectsConfigurationChangedDuringPlanning(t *testing.T) {
+	tree := initializedSourceTree(t)
+	requests := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		select {
+		case requests <- struct{}{}:
+		default:
+		}
+		select {
+		case <-release:
+		case <-request.Context().Done():
+			return
+		}
+		response.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(response, `{"version":4,"terraform_version":"1.0.0","serial":1,"lineage":"00000000-0000-0000-0000-000000000001","outputs":{},"resources":[]}`)
+	}))
+	defer func() {
+		unblock()
+		server.Close()
+	}()
+	configuration := fmt.Sprintf("data \"terraform_remote_state\" \"wait\" {\n  backend = \"http\"\n  config = { address = %q }\n}\n", server.URL)
+	writeFixtureFile(t, filepath.Join(tree.workspaces, "alpha", "remote.tf"), configuration)
+	publishConfigsTree(t, tree)
+	plan := filepath.Join(t.TempDir(), "changed-source.tfplan")
+	arguments := tofuArgs("alpha", "plan", "-input=false", "-out="+plan)
+	results := make(chan commandResult, 1)
+	go func() { results <- runConfigsctl(t, tree, arguments...) }()
+	select {
+	case <-requests:
+	case result := <-results:
+		t.Fatalf("the native plan exited before reading remote state: %s", result.stderr)
+	case <-time.After(30 * time.Second):
+		t.Fatal("the native plan did not request the temporary remote state")
+	}
+	changed := filepath.Join(tree.workspaces, "alpha", "changed.tf")
+	writeFixtureFile(t, changed, "output \"changed\" { value = true }\n")
+	unblock()
+	result := <-results
+	if result.exitCode == 0 || !strings.Contains(result.stderr, "configuration changed during planning") {
+		t.Fatalf("the plan did not report the changed configuration: %s", result.stderr)
+	}
+	if err := os.Remove(changed); err != nil {
+		t.Fatal(err)
+	}
+	apply := runConfigsctl(t, tree, tofuArgs("alpha", "apply", "-input=false", plan)...)
+	requireSourceRefusal(t, tree, apply, "source record is unavailable")
 }
