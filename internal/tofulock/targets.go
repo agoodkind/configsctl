@@ -24,6 +24,11 @@ type Targets struct {
 	LockFreeTypes  []string                     `yaml:"lock_free_types"`
 	// LockEndpoints maps each lock host name to the SSH endpoint used to build its lock target.
 	LockEndpoints map[string]LockEndpoint `yaml:"lock_endpoints"`
+	// RequiredHosts lists lock hosts that every mutation of the workspace locks,
+	// including an apply of a plan without changes.
+	RequiredHosts []string `yaml:"required_hosts"`
+	// MaxParallelism is the largest OpenTofu -parallelism value that the workspace allows.
+	MaxParallelism *int `yaml:"max_parallelism"`
 }
 
 // LockEndpoint is the ssh endpoint of one lock host. User defaults to root.
@@ -64,6 +69,9 @@ func (t Targets) Validate() error {
 	if t.ModuleKeyHosts != nil && len(t.ModuleKeyHosts) == 0 {
 		return errors.New("module_key_hosts is empty")
 	}
+	if err := t.validatePolicy(); err != nil {
+		return err
+	}
 	for _, module := range slices.Sorted(maps.Keys(t.ModuleKeyHosts)) {
 		if module == "" {
 			return errors.New("module_key_hosts has an empty module address")
@@ -79,8 +87,24 @@ func (t Targets) Validate() error {
 	return t.validateLockEndpoints()
 }
 
+func (t Targets) validatePolicy() error {
+	if t.RequiredHosts != nil && len(t.RequiredHosts) == 0 {
+		return errors.New("required_hosts is empty")
+	}
+	if slices.Contains(t.RequiredHosts, "") {
+		return errors.New("required_hosts has an empty host name")
+	}
+	if t.MaxParallelism != nil && *t.MaxParallelism < 1 {
+		return fmt.Errorf("max_parallelism is %d; it must be a positive integer", *t.MaxParallelism)
+	}
+	return nil
+}
+
 func (t Targets) validateLockEndpoints() error {
 	if t.LockEndpoints == nil {
+		if len(t.RequiredHosts) > 0 {
+			return errors.New("required_hosts requires lock_endpoints for each required host")
+		}
 		return nil
 	}
 	if len(t.LockEndpoints) == 0 {
@@ -97,7 +121,7 @@ func (t Targets) validateLockEndpoints() error {
 	referenced := t.referencedHosts()
 	for _, name := range slices.Sorted(maps.Keys(t.LockEndpoints)) {
 		if _, used := referenced[name]; !used {
-			return fmt.Errorf("lock_endpoints.%s is not a host in module_hosts, module_key_hosts, node_hosts, or guest_hosts", name)
+			return fmt.Errorf("lock_endpoints.%s is not a host in required_hosts, module_hosts, module_key_hosts, node_hosts, or guest_hosts", name)
 		}
 	}
 	for _, host := range slices.Sorted(maps.Keys(referenced)) {
@@ -125,15 +149,26 @@ func (t Targets) referencedHosts() map[string]string {
 	}
 	add("node_hosts", t.NodeHosts)
 	add("guest_hosts", t.GuestHosts)
+	for _, name := range t.RequiredHosts {
+		if _, seen := referenced[name]; !seen {
+			referenced[name] = "required_hosts"
+		}
+	}
 	return referenced
 }
 
-// LockHosts returns the ssh lock target of each host and guest lock in
-// decision. It reads only LockEndpoints and returns an error for a host
-// without an endpoint.
+// LockHosts returns the deduplicated ssh lock targets of the hosts and guest
+// locks in decision together with RequiredHosts. It reads only LockEndpoints
+// and returns an error for a host without an endpoint.
 func (t Targets) LockHosts(decision Decision) ([]hostlock.Host, error) {
 	var hosts []hostlock.Host
-	for _, name := range decision.Hosts {
+	seen := map[string]bool{}
+	names := slices.Concat(decision.Hosts, t.RequiredHosts)
+	for _, name := range names {
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
 		host, err := t.lockHost(name)
 		if err != nil {
 			return nil, err
@@ -154,6 +189,10 @@ func (t Targets) LockHosts(decision Decision) ([]hostlock.Host, error) {
 			slog.Error("tofu.lock.guest_target_failed", "node", guest.Node, "err", err)
 			return nil, fmt.Errorf("select the guest lock target: %w", err)
 		}
+		if seen[guestHost.Name] {
+			continue
+		}
+		seen[guestHost.Name] = true
 		hosts = append(hosts, guestHost)
 	}
 	return hosts, nil
@@ -172,7 +211,7 @@ func (t Targets) lockHost(name string) (hostlock.Host, error) {
 }
 
 func (t Targets) hasDeclarations() bool {
-	return t.ModuleHosts != nil || t.ModuleKeyHosts != nil || t.NodeHosts != nil || t.GuestHosts != nil || t.LockFreeTypes != nil
+	return t.ModuleHosts != nil || t.ModuleKeyHosts != nil || t.NodeHosts != nil || t.GuestHosts != nil || t.LockFreeTypes != nil || t.RequiredHosts != nil
 }
 
 func validateHostMap(name string, mapping map[string]string) error {

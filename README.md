@@ -90,6 +90,8 @@ The `tofu.lock_targets.<workspace>.lock_endpoints` setting maps each lock host n
 - `node_hosts`
 - `guest_hosts`
 - `lock_free_types`
+- `required_hosts`
+- `max_parallelism`
 
 ```yaml
 tofu:
@@ -129,8 +131,13 @@ configsctl checks these rules when it reads the settings and refuses invalid set
 
 - A declared `lock_endpoints` map must contain at least one endpoint.
 - Each lock host name must contain at least one character.
-- Each lock host name must match a host value in `module_hosts`, `module_key_hosts`, `node_hosts`, or `guest_hosts` in the same workspace.
-- When the workspace declares any endpoint, every host value in those four mappings must have an endpoint. configsctl checks host names in sorted order and reports the first host without an endpoint, together with the first mapping entry that uses that host.
+- Each lock host name must match a host value in `module_hosts`, `module_key_hosts`, `node_hosts`, or `guest_hosts`, or a name in `required_hosts`, in the same workspace.
+- When the workspace declares any endpoint, every host value in those four mappings and every name in `required_hosts` must have an endpoint. configsctl checks host names in sorted order and reports the first host without an endpoint, together with the first mapping entry that uses that host.
+- A declared `required_hosts` list must contain at least one host name, and no name can be empty.
+- A workspace that declares `required_hosts` must also declare `lock_endpoints`.
+- A declared `max_parallelism` must be a positive integer.
+
+Omitting `required_hosts` or `max_parallelism` adds no policy. Workspaces without these settings keep their current behavior.
 
 configsctl uses the explicit lock path for supported `apply` commands in workspaces that declare `lock_endpoints`. Except for the help requests below, configsctl refuses an `apply` or `destroy` command instead of using the inventory lock path when any condition in the table applies.
 
@@ -145,6 +152,12 @@ Refusal reasons:
 
 configsctl logs each refusal. Each error identifies the workspace and its declared `lock_endpoints` and states the reason. Workspaces that do not declare `lock_endpoints` keep their current behavior.
 
+A workspace with `required_hosts` must run `apply` on the explicit lock path, and the refusal reasons above apply to it. The explicit lock path locks every host in `required_hosts` together with the hosts that the plan selects, including for a plan without changes. If another run has locked a required host, the apply stops before OpenTofu applies.
+
+A workspace with `required_hosts` also refuses `destroy`, `refresh`, `import`, `taint`, `untaint`, `force-unlock`, and the `state` subcommands `rm`, `remove`, `mv`, `move`, `push`, and `replace-provider`. These commands write state without the required locks. Declarative `import` blocks still work through `plan` and `apply`.
+
+A workspace with `max_parallelism` limits `plan`, `apply`, `destroy`, and `refresh`. configsctl adds `-parallelism=<max_parallelism>` when the effective arguments omit the option. After configsctl expands `TF_CLI_ARGS`, it refuses any `-parallelism` value above the limit, from the command line or from `TF_CLI_ARGS`, before OpenTofu starts. A workspace with `required_hosts` or `max_parallelism` also refuses `-lock=false` for `apply`, `destroy`, and `refresh`. A workspace with `max_parallelism` and without `lock_endpoints` uses the inventory lock path and applies the limit there.
+
 When configsctl reads the settings, it refuses any workspace that declares both `lock_endpoints` and a `tofu.credentials` entry before starting OpenTofu. The error identifies the workspace and states that the credential path locks through the inventory. A workspace that declares `lock_endpoints` does not use the credential path.
 
 In a workspace that declares `lock_endpoints`, configsctl runs OpenTofu help directly when an `apply` or `destroy` command includes `-help` or `-h`. For these requests, configsctl does not take a lock, read Ansible inventory, or run an Ansible program. The workspace does not need `tofu.guest_modules`. OpenTofu itself rejects `-help` combined with another positional argument, such as a saved plan, with exit status 1 and a message stating that the help topic does not exist.
@@ -158,7 +171,7 @@ Accepted options:
 | `-auto-approve` | On the explicit lock path, configsctl accepts the bare option as true or accepts any of these values: `1`, `t`, `T`, `true`, `True`, `TRUE`, `0`, `f`, `F`, `false`, `False`, `FALSE`. configsctl rejects any other value with an invalid value error. A false value requires the same operator confirmation as an absent option. |
 | `-no-color` | On the explicit lock path, configsctl accepts the bare option as true or accepts any of these values: `1`, `t`, `T`, `true`, `True`, `TRUE`, `0`, `f`, `F`, `false`, `False`, `FALSE`. configsctl rejects any other value with an invalid value error. The accepted value does not change command behavior. The plan command and the apply command always run with `-no-color`, even when the value is false. |
 | `-input=false` | On the explicit lock path, configsctl accepts `-input` only with one of these false values: `0`, `f`, `F`, `false`, `False`, `FALSE`. configsctl rejects a bare `-input` and all other values with an error stating that the explicit lock path requires `-input=false`. |
-| `-parallelism=N` | configsctl accepts a positive integer for `N` and defaults to `10`. |
+| `-parallelism=N` | configsctl accepts a positive integer for `N` that does not exceed `max_parallelism` when that setting is declared. When the option is omitted, `N` defaults to `10` if the workspace omits `max_parallelism` and to the configured `max_parallelism` value otherwise. |
 | `-lock-timeout=DURATION` | configsctl accepts the value in the `-lock-timeout=DURATION` form. |
 
 configsctl refuses every other option before OpenTofu starts, including these options:
@@ -175,7 +188,7 @@ The explicit lock path runs these steps:
 
 1. OpenTofu creates a plan with `-detailed-exitcode` in a private file. configsctl records the SHA-256 digest of the plan file immediately after planning.
 2. OpenTofu shows the plan as JSON.
-3. configsctl selects the hosts to lock from the declared `lock_targets` and endpoints. configsctl refuses a plan with unknown lock ownership before it takes any lock.
+3. configsctl selects the hosts to lock from the declared `lock_targets` and endpoints and adds every host in `required_hosts`. configsctl refuses a plan with unknown lock ownership before it takes any lock.
 4. When the plan has changes and the effective arguments do not enable `-auto-approve`, configsctl requires confirmation. An argument `-auto-approve=false` does not enable automatic approval. configsctl treats input as disabled when either condition applies:
 
    1. The arguments include `-input` with an accepted false value.

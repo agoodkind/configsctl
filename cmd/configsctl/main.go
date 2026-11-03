@@ -328,7 +328,7 @@ func runTofu(env cmdEnv, args []string) error {
 	if len(tofuArgs) == 0 {
 		return errors.New(tofuUsage)
 	}
-	safeArgs, childEnv, err := prepareTofuInvocation(loaded.Tofu, workspaceDir, passwordFile, tofuArgs)
+	safeArgs, childEnv, err := preparePolicyInvocation(loaded.Tofu, workspaceDir, passwordFile, tofuArgs)
 	if err != nil {
 		return err
 	}

@@ -59,3 +59,28 @@ func TestTofuSubcommand(t *testing.T) {
 		})
 	}
 }
+
+// TestIntegerArguments checks that every value of a flag is returned in order,
+// in both spellings, so a limit check sees values from the command line and
+// from TF_CLI_ARGS.
+func TestIntegerArguments(t *testing.T) {
+	values, err := tofuargs.IntegerArguments(
+		[]string{"-parallelism=7", "apply", "--parallelism", "3", "-var", "parallelism=9", "-parallelism=1"}, "parallelism")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []int{7, 3, 1}
+	if len(values) != len(want) {
+		t.Fatalf("IntegerArguments returned %v, want %v", values, want)
+	}
+	for i := range want {
+		if values[i] != want[i] {
+			t.Fatalf("IntegerArguments returned %v, want %v", values, want)
+		}
+	}
+	for _, args := range [][]string{{"apply", "-parallelism=many"}, {"apply", "-parallelism"}} {
+		if _, err := tofuargs.IntegerArguments(args, "parallelism"); err == nil {
+			t.Fatalf("IntegerArguments accepted %v", args)
+		}
+	}
+}

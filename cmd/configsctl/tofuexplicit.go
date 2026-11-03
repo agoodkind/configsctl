@@ -151,7 +151,7 @@ func explicitRefusalReason(tofu tofuSettings, args []string, command tofuargs.Co
 // applies the recorded plan. It does not read the Ansible inventory or run an
 // Ansible program, and it gives OpenTofu an explicit environment.
 func runExplicitMutation(ctx context.Context, settings tofuSettings, request tofuLockRequest, targets tofulock.Targets, passwordFile string) error {
-	options, err := parseExplicitArguments(request.args)
+	options, err := parseExplicitArguments(request.args, targets.MaxParallelism)
 	if err != nil {
 		return err
 	}
@@ -186,12 +186,15 @@ func runExplicitMutation(ctx context.Context, settings tofuSettings, request tof
 		slog.Error("tofu.mutation.explicit_lock_hosts_failed", "workspace", request.workspaceDir, "err", err)
 		return fmt.Errorf("select the lock hosts of workspace %s: %w", request.workspaceDir, err)
 	}
+	names := lockHostNames(hosts)
+	if err := requirePolicyScope(request.workspaceDir, targets, names); err != nil {
+		return err
+	}
 	if changed && !tofuargs.AutoApprove(request.args) {
 		if err := confirmMutation(ctx, request.args, request.env); err != nil {
 			return err
 		}
 	}
-	names := lockHostNames(hosts)
 	slog.Info("tofu.mutation.explicit_lock_hosts", "workspace", request.workspaceDir, "hosts", names)
 	lockedCtx, scope, release, err := acquireExplicitLocks(ctx, hosts)
 	if err != nil {
@@ -215,8 +218,11 @@ func runExplicitMutation(ctx context.Context, settings tofuSettings, request tof
 // parseExplicitArguments accepts the options of "apply" that the public
 // runner can run, each in the -name=value form. It refuses every other
 // argument before OpenTofu starts.
-func parseExplicitArguments(args []string) (explicitOptions, error) {
+func parseExplicitArguments(args []string, maxParallelism *int) (explicitOptions, error) {
 	options := explicitOptions{parallelism: explicitDefaultParallelism, lockTimeout: ""}
+	if maxParallelism != nil {
+		options.parallelism = min(options.parallelism, *maxParallelism)
+	}
 	for _, argument := range args[1:] {
 		if !strings.HasPrefix(argument, "-") {
 			return options, errors.New("the explicit lock path does not accept a positional apply argument")
@@ -239,6 +245,9 @@ func parseExplicitArguments(args []string) (explicitOptions, error) {
 			parallelism, err := strconv.Atoi(value)
 			if !hasValue || err != nil || parallelism < 1 {
 				return options, errors.New("-parallelism requires the -parallelism=N form with a positive integer N")
+			}
+			if maxParallelism != nil && parallelism > *maxParallelism {
+				return options, fmt.Errorf("-parallelism=%d exceeds the workspace max_parallelism %d", parallelism, *maxParallelism)
 			}
 			options.parallelism = parallelism
 		case optionLockTimeout:
@@ -273,6 +282,27 @@ func explicitApplyArguments(options explicitOptions, planPath string) []string {
 		args = append(args, "-lock-timeout="+options.lockTimeout)
 	}
 	return append(args, planPath)
+}
+
+// requirePolicyScope checks that the lock names include every required host of
+// the workspace before the controller acquires any lock.
+func requirePolicyScope(workspaceDir string, targets tofulock.Targets, names []string) error {
+	if len(targets.RequiredHosts) == 0 {
+		return nil
+	}
+	if len(names) == 0 {
+		err := fmt.Errorf("workspace %s requires locks on hosts %v, but the lock scope is empty", workspaceDir, targets.RequiredHosts)
+		slog.Error("tofu.policy.scope_empty", "workspace", workspaceDir, "err", err)
+		return err
+	}
+	for _, required := range targets.RequiredHosts {
+		if !slices.Contains(names, required) {
+			err := fmt.Errorf("workspace %s requires a lock on host %s, but the lock scope %v omits it", workspaceDir, required, names)
+			slog.Error("tofu.policy.scope_incomplete", "workspace", workspaceDir, "host", required, "scope", names, "err", err)
+			return err
+		}
+	}
+	return nil
 }
 
 func lockHostNames(hosts []hostlock.Host) []string {
