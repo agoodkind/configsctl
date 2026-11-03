@@ -4,6 +4,7 @@
 package tofuargs
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -102,6 +103,51 @@ func BooleanArgument(args []string, name string, defaultValue bool) bool {
 		}
 	}
 	return value
+}
+
+// IntegerArguments returns every value of the flag name in the order given. It
+// accepts one or two dashes and both the -name=value and -name value forms. It
+// returns an error when a value is not an integer or the final -name has no
+// value. Callers that enforce a limit check every value, not only the last one.
+func IntegerArguments(args []string, name string) ([]int, error) {
+	var values []int
+	for index := 0; index < len(args); index++ {
+		argument := args[index]
+		if !strings.HasPrefix(argument, "-") {
+			continue
+		}
+		flag, text, found := strings.Cut(strings.TrimLeft(argument, "-"), "=")
+		if flag != name {
+			if ConsumesValue(argument) {
+				index++
+			}
+			continue
+		}
+		if !found {
+			index++
+			if index >= len(args) {
+				return nil, fmt.Errorf("-%s requires an integer value", name)
+			}
+			text = args[index]
+		}
+		value, err := strconv.Atoi(text)
+		if err != nil {
+			return nil, fmt.Errorf("-%s value %q is not an integer", name, text)
+		}
+		values = append(values, value)
+	}
+	return values, nil
+}
+
+// SubcommandIndex returns the index of the argument that Subcommand returns,
+// or -1 when args has no subcommand.
+func SubcommandIndex(args []string) int {
+	for index, arg := range args {
+		if !strings.HasPrefix(arg, "-") {
+			return index
+		}
+	}
+	return -1
 }
 
 // ConsumesValue reports whether arg is a flag without "=" that takes the next
