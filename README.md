@@ -171,7 +171,7 @@ Accepted options:
 | `-auto-approve` | On the explicit lock path, configsctl accepts the bare option as true or accepts any of these values: `1`, `t`, `T`, `true`, `True`, `TRUE`, `0`, `f`, `F`, `false`, `False`, `FALSE`. configsctl rejects any other value with an invalid value error. A false value requires the same operator confirmation as an absent option. |
 | `-no-color` | On the explicit lock path, configsctl accepts the bare option as true or accepts any of these values: `1`, `t`, `T`, `true`, `True`, `TRUE`, `0`, `f`, `F`, `false`, `False`, `FALSE`. configsctl rejects any other value with an invalid value error. The accepted value does not change command behavior. The plan command and the apply command always run with `-no-color`, even when the value is false. |
 | `-input=false` | On the explicit lock path, configsctl accepts `-input` only with one of these false values: `0`, `f`, `F`, `false`, `False`, `FALSE`. configsctl rejects a bare `-input` and all other values with an error stating that the explicit lock path requires `-input=false`. |
-| `-parallelism=N` | configsctl accepts a positive integer for `N` and defaults to `10`, or to `max_parallelism` when that setting is lower. |
+| `-parallelism=N` | configsctl accepts a positive integer for `N` that does not exceed `max_parallelism` when that setting is declared. When the option is omitted, `N` defaults to `10` if the workspace omits `max_parallelism` and to the configured `max_parallelism` value otherwise. |
 | `-lock-timeout=DURATION` | configsctl accepts the value in the `-lock-timeout=DURATION` form. |
 
 configsctl refuses every other option before OpenTofu starts, including these options:
