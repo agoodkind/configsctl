@@ -24,6 +24,22 @@ var tofuBackendSchema = &hcl.BodySchema{
 	Blocks: []hcl.BlockHeaderSchema{{Type: "backend", LabelNames: []string{"type"}}},
 }
 
+var tofuOperationalSchema = &hcl.BodySchema{
+	Blocks: []hcl.BlockHeaderSchema{
+		{Type: "resource", LabelNames: []string{"type", "name"}},
+		{Type: "data", LabelNames: []string{"type", "name"}},
+		{Type: "module", LabelNames: []string{"name"}},
+	},
+}
+
+func tofuHasOperationalConfiguration(dir string) (bool, error) {
+	blocks, err := tofuModuleBlocks(dir, tofuOperationalSchema)
+	if err != nil {
+		return false, err
+	}
+	return len(blocks) > 0, nil
+}
+
 func tofuModuleFiles(dir string) (native, jsonFiles []string, err error) {
 	native, err = filepath.Glob(filepath.Join(dir, "*.tf"))
 	if err != nil {

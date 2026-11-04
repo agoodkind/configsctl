@@ -10,7 +10,7 @@ Run configsctl from the root of a configuration checkout. The selected workspace
 go run goodkind.io/configsctl/cmd/configsctl@latest tofu <workspace> plan
 ```
 
-Run `configsctl lint` to check native configuration formatting and evaluate each workspace's nonsecret input metadata. Explicit file arguments retain the generic template linter. `version` prints the build commit, checkout state, and binary hash.
+Run `configsctl lint` to check native configuration formatting. Roots with resource, data, or module blocks also require nonsecret ownership metadata. The formatter still checks retained backend-only roots, and every mutation still requires ownership metadata. Explicit file arguments retain the generic template linter. `version` prints the build commit, checkout state, and binary hash.
 
 ## Select an OpenTofu workspace
 

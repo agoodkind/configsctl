@@ -49,6 +49,13 @@ func runNativeLint(ctx context.Context, tofu tofuSettings) error {
 		return fmt.Errorf("%s does not contain any native workspaces", tofu.WorkspacesDir)
 	}
 	for _, workspace := range workspaces {
+		operational, err := tofuHasOperationalConfiguration(filepath.Join(tofu.WorkspacesDir, workspace))
+		if err != nil {
+			return err
+		}
+		if !operational {
+			continue
+		}
 		if _, err := evaluateNativeConfiguration(ctx, tofu, filepath.Join(tofu.WorkspacesDir, workspace)); err != nil {
 			return err
 		}
