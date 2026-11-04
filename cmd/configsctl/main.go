@@ -109,11 +109,13 @@ func run(args []string) error {
 
 func runLint(_ cmdEnv, paths []string) error {
 	if len(paths) == 0 {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
 		loaded, err := loadNativeSettings(settingsFile)
 		if err != nil {
 			return err
 		}
-		return runNativeLint(context.Background(), loaded.Tofu)
+		return runNativeLint(ctx, loaded.Tofu)
 	}
 	result, err := lint.Gate(paths)
 	if err != nil {
@@ -262,6 +264,8 @@ func runSetSecrets(_ cmdEnv, _ []string) error {
 const tofuUsage = "usage: configsctl tofu [<workspace>] <tofu args...>"
 
 func runTofu(env cmdEnv, args []string) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	if len(args) == 0 {
 		return errors.New(tofuUsage)
 	}
@@ -269,7 +273,7 @@ func runTofu(env cmdEnv, args []string) error {
 	if err != nil {
 		return err
 	}
-	loaded, workspaceDir, tofuArgs, err := loadTofuWorkspace(context.Background(), args)
+	loaded, workspaceDir, tofuArgs, err := loadTofuWorkspace(ctx, args)
 	if err != nil {
 		return err
 	}
@@ -282,10 +286,10 @@ func runTofu(env cmdEnv, args []string) error {
 	if err := requireExplicitLockPath(loaded.Tofu, workspaceDir, safeArgs); err != nil {
 		return err
 	}
-	if err := requireMergedTofuSource(context.Background(), workspaceDir, safeArgs, usesCredential); err != nil {
+	if err := requireMergedTofuSource(ctx, workspaceDir, safeArgs, usesCredential); err != nil {
 		return err
 	}
-	if handled, helpErr := runEndpointHelp(env, loaded.Tofu, workspaceDir, safeArgs, childEnv); handled {
+	if handled, helpErr := runEndpointHelp(ctx, env, loaded.Tofu, workspaceDir, safeArgs, childEnv); handled {
 		return helpErr
 	}
 	releaseMigration, err := leaseTofuMigration(safeArgs, usesCredential)
@@ -304,10 +308,8 @@ func runTofu(env cmdEnv, args []string) error {
 			lockTargets: loaded.Tofu.LockTargets, requiredHosts: requiredHosts, independentWorkspaces: true,
 			guestModule: loaded.Tofu.lockGuestModule(workspaceDir),
 		}
-		return runIndependentMutation(env, loaded.Tofu, request, passwordFile)
+		return runIndependentMutation(ctx, env, loaded.Tofu, request, passwordFile)
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	commandArgs := safeArgs
 	release := func() {}
 	if usesCredential {

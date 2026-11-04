@@ -183,8 +183,13 @@ func (l *Log) Path() string { return l.path }
 
 // Announce prints the log path and a command for reading output during the run.
 func (l *Log) Announce(what string) {
-	fmt.Fprintf(os.Stdout, "%s output streams to %s\n", what, l.path)
-	fmt.Fprintf(os.Stdout, "Follow it with: tail -f %s\n", l.path)
+	l.AnnounceTo(os.Stdout, what)
+}
+
+// AnnounceTo writes the run log path to the selected diagnostic stream.
+func (l *Log) AnnounceTo(writer io.Writer, what string) {
+	fmt.Fprintf(writer, "%s output streams to %s\n", what, l.path)
+	fmt.Fprintf(writer, "Follow it with: tail -f %s\n", l.path)
 }
 
 // Write replaces secrets and appends output as the command produces it.

@@ -53,7 +53,9 @@ const (
 type Request struct {
 	Binary, Root, Workspace string
 	// DataDirectory isolates module initialization in a private directory.
-	DataDirectory                                             string
+	DataDirectory string
+	// ProgressToStderr preserves stdout for the caller's machine-readable output.
+	ProgressToStderr                                          bool
 	Args, Environment, RequiredEnvironment, SecretEnvironment []string
 	SecretFiles                                               map[string]string
 	OutputMode                                                OutputMode

@@ -122,6 +122,7 @@ func evaluateNativeConfigurationAt(ctx context.Context, tofu tofuSettings, repos
 	}
 	request := tofurun.Request{
 		Binary: binary, Root: root, Workspace: defaultTofuWorkspace, DataDirectory: data,
+		ProgressToStderr:    true,
 		Environment:         []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "TMPDIR=" + temporary, "TF_IN_AUTOMATION=1", "TF_VAR_workspace=" + selector},
 		RequiredEnvironment: []string{"TF_VAR_workspace"}, OutputMode: tofurun.RedactedProgress,
 	}

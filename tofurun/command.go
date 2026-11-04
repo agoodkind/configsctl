@@ -45,7 +45,7 @@ var flagRules = map[string]flagRule{
 	workspaceCommand: {allowed: []string{"no-color"}, required: nil},
 	planCommand: {
 		allowed: []string{
-			"input", "no-color", "detailed-exitcode", parallelismFlag, outFlag, "var-file", lockFlag, "lock-timeout", "refresh",
+			"input", "no-color", "detailed-exitcode", parallelismFlag, outFlag, "var", "var-file", "target", "replace", "destroy", lockFlag, "lock-timeout", "refresh",
 		},
 		required: map[string]string{"input": falseValue, "no-color": trueValue, "detailed-exitcode": trueValue},
 	},

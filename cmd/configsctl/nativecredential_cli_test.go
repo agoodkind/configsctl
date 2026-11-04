@@ -60,7 +60,7 @@ func (s *nativeCredentialServer) ServeHTTP(writer http.ResponseWriter, request *
 
 func installNativeCredential(t *testing.T, fixture explicitFixture, server *httptest.Server) {
 	t.Helper()
-	installNativeConfiguration(t, fixture)
+	installNativeConfiguration(t, fixture.tree)
 	for source, destination := range map[string]string{
 		"credential-targets.tf": "native/suburban/tack/main.tf",
 		"credentials.tf":        "workspaces/suburban/tack/credentials.tf",
@@ -104,6 +104,44 @@ func TestTofuPreparesNativeCredentialUnderItsLock(t *testing.T) {
 	}
 	if strings.Contains(result.stdout+result.stderr+string(state), controller.deployment.Password) {
 		t.Fatal("the CLI persisted or printed its generated credential")
+	}
+	requireNoFile(t, filepath.Join(fixture.lockDir, "deploy.lock"))
+}
+
+func TestTofuAddsThePlannedGuestLockAfterNativeCredentialPreparation(t *testing.T) {
+	base, err := os.MkdirTemp(shortTempRoot, "credential-guest-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(base) })
+	fixture := newFixtureWithTree(t, explicitSettings, false, newConfigsTreeAt(t, base))
+	controller := &nativeCredentialServer{mu: sync.Mutex{}, lockPath: filepath.Join(fixture.lockDir, "deploy.lock"), deployment: credentialUpdate{Password: ""}, reads: 0, lockMissing: false}
+	server := httptest.NewTLSServer(controller)
+	defer server.Close()
+	installNativeCredential(t, fixture, server)
+	installGuestProviderMirror(t, fixture.tree)
+	targets, err := os.ReadFile(filepath.Join("testdata", "nativeconfiguration", "credential-guest-targets.tf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFixtureFile(t, filepath.Join(fixture.tree.root, "native/suburban/tack/main.tf"), string(targets))
+	root := filepath.Join(fixture.tree.workspaces, "suburban", "tack")
+	writeFixtureFile(t, filepath.Join(root, "main.tf"), workspaceFixture(t, "lock-guest.tf"))
+	writeFixtureFile(t, filepath.Join(root, "item/main.tf"), workspaceFixture(t, "lock-guest-item.tf"))
+	requireSuccess(t, fixture.mutate(t, "init", "-input=false"))
+	result := fixture.apply(t, "-auto-approve")
+	if result.exitCode == 0 {
+		t.Fatal("the real provider unexpectedly connected to its closed loopback endpoint")
+	}
+	for _, expected := range []string{"hostlock.additional_acquired", "subcommand=apply mutation=true"} {
+		if !strings.Contains(result.stderr, expected) {
+			t.Fatalf("the CLI did not add its planned guest lock before apply: %s", result.stderr)
+		}
+	}
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	if controller.lockMissing || controller.reads != 2 {
+		t.Fatal("credential preparation did not retain its original host lock")
 	}
 	requireNoFile(t, filepath.Join(fixture.lockDir, "deploy.lock"))
 }

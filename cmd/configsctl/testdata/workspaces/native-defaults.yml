@@ -1,0 +1,14 @@
+tofu:
+  workspaces_dir: workspaces
+  env_key_prefix: fixture_env_
+  lock_targets:
+    workspaces:
+      lock_free_types: [terraform_data]
+    workspaces/alpha:
+      lock_free_types: [terraform_data]
+    workspaces/beta:
+      lock_free_types: [terraform_data]
+    workspaces/suburban/tack:
+      lock_free_types: [terraform_data]
+    workspaces/vault/tack:
+      lock_free_types: [terraform_data]

@@ -7,10 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"goodkind.io/configsctl/internal/redact"
 	"goodkind.io/configsctl/internal/tofuargs"
@@ -28,15 +26,16 @@ func tofuMutates(args []string) bool {
 	return command == tofuargs.Apply || command == tofuargs.Destroy
 }
 
-func runIndependentMutation(env cmdEnv, settings tofuSettings, request tofuLockRequest, passwordFile string) error {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+func runIndependentMutation(ctx context.Context, env cmdEnv, settings tofuSettings, request tofuLockRequest, passwordFile string) error {
 	if tofuargs.BooleanArgument(request.args, "help", false) || tofuargs.BooleanArgument(request.args, "h", false) {
 		return executeTofu(ctx, env, request.workspaceDir, request.args, request.args, request.env)
 	}
 	targets, declared := explicitLockTargets(request)
 	if !declared {
 		return fmt.Errorf("workspace %s requires native lock ownership", request.workspaceDir)
+	}
+	if !strictExplicitSettings(settings, targets) {
+		return runNativeMutation(ctx, settings, request, targets, passwordFile)
 	}
 	return runExplicitMutation(ctx, settings, request, targets, passwordFile)
 }

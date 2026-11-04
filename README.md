@@ -1,18 +1,16 @@
 # configsctl
 
-configsctl is the control tool for the configs repository. It runs Ansible deploys, lints Ansible input variables, reads and updates the Ansible vault, and runs OpenTofu with credentials from the vault.
+configsctl runs OpenTofu with declared infrastructure locks and reads or updates encrypted Vault secrets.
 
 ## Run it from a configs checkout
 
-configsctl resolves every path it uses relative to its working directory, so it only works from the root of a configs checkout. From there it finds the Ansible tree, the vault, the OpenTofu tree, and the lint baseline. The jinja2 lint oracle ships inside the binary. Run from anywhere else, it finds none of them.
-
-To run a deploy from the root of a configs checkout:
+Run configsctl from the root of a configuration checkout. The selected workspace supplies its OpenTofu variables, and configsctl reads matching secret values from the encrypted Vault.
 
 ```sh
-go run goodkind.io/configsctl/cmd/configsctl@latest deploy <playbook>
+go run goodkind.io/configsctl/cmd/configsctl@latest tofu <workspace> plan
 ```
 
-The commands are `lint`, `baseline`, `keys`, `secret`, `set-secrets`, `rename-secret`, `delete-secrets`, `deploy`, `tofu`, `ci`, `migrate-state`, `syntax-check`, `inventory-dump`, and `version`. `version` prints the commit the binary was built from, whether that tree was dirty, and a hash of the binary. A deploy lints the files its playbook reads and refuses to run on a new finding. The playbooks pin and pull the releases they install; configsctl stages nothing.
+Run `configsctl lint` to check native configuration formatting and evaluate each workspace's nonsecret input metadata. Explicit file arguments retain the generic template linter. `version` prints the build commit, checkout state, and binary hash.
 
 ## Select an OpenTofu workspace
 
@@ -81,13 +79,26 @@ When a plan writes an `-out` file, configsctl records its source commit, workspa
 
 ## Scope infrastructure locks
 
-When `tofu.guest_modules` enables independent workspaces, an ordinary `apply` or `destroy` prepares a native saved plan before selecting locks. configsctl preserves the confirmation prompt unless the effective arguments include `-auto-approve`. It applies that exact plan after acquiring its declared locks. Unknown ownership refuses the mutation.
+An ordinary native `apply` or `destroy` prepares a saved plan before selecting locks. configsctl preserves the confirmation prompt unless the effective arguments include `-auto-approve`. It applies that exact plan after acquiring its declared locks. Unknown ownership refuses the mutation.
 
 Guest-local changes use the enrolled guest's existing SSH lock. A known node and numeric VMID without deployment enrollment use a guest-specific lock directory through the declared hypervisor's SSH connection. Explicit resource ownership selects the host lock for guest creation, shared host changes, and firmware. `lock_free_types` can define a root that does not need Proxmox locks.
 
 configsctl expands `TF_CLI_ARGS` and command-specific arguments once, using OpenTofu's argument order. Explicit arguments take precedence over environment arguments.
 
 ## Declare lock endpoints
+
+Set `tofu.configuration_root` to the provider-free OpenTofu root that accepts a constant `workspace` variable and exports `lock_targets`. The selector matches the selected workspace below `tofu.workspaces_dir`.
+
+```yaml
+tofu:
+  workspaces_dir: opentofu
+  configuration_root: opentofu/render/configuration
+  env_key_prefix: vault_tofu_env_
+```
+
+The native root selects only the requested feature module. Initialization, planning, and saved-plan reading receive the same selector. Evaluation uses a private module data directory and does not require state, providers, Vault values, or host access. Diagnostics use standard error and preserve OpenTofu JSON output on standard output. Missing native inputs refuse the command.
+
+`configuration_root` and `lock_targets` cannot both appear in the settings. Native output uses the same ownership and endpoint fields as the static settings below. Native configuration workspaces preserve ordinary apply, destroy, variable arguments, and recorded saved-plan applies. The existing static remote-endpoint path retains its explicit argument restrictions.
 
 The `tofu.lock_targets.<workspace>.lock_endpoints` setting maps each lock host name to an object with connection fields. The workspace can declare these keys beside `lock_endpoints`:
 
@@ -120,9 +131,10 @@ Endpoint fields:
 | Field | Rule |
 | --- | --- |
 | `user` | configsctl uses this optional field as the SSH user. configsctl defaults to `root`. |
-| `address` | configsctl requires a nonempty address because it does not support local locks. It rejects an empty address when it loads the settings, before starting OpenTofu. |
+| `address` | A remote endpoint requires a nonempty SSH address. |
+| `local` | Set this field to `true` to run the existing lock script on the controller. A local endpoint cannot also set an address. |
 
-configsctl locks each host by running `ssh` as `user@address`. configsctl uses these lock directories:
+configsctl uses `ssh` as `user@address` for a remote endpoint. An explicitly local endpoint runs the same lock script on the controller. configsctl uses these lock directories:
 
 | Lock | Host | Directory |
 |---|---|---|
@@ -138,7 +150,7 @@ configsctl checks these rules when it reads the settings and refuses invalid set
 - Each lock host name must match a host value in `module_hosts`, `module_key_hosts`, `node_hosts`, or `guest_hosts` in the same workspace.
 - When the workspace declares any endpoint, every host value in those four mappings must have an endpoint. configsctl checks host names in sorted order and reports the first host without an endpoint, together with the first mapping entry that uses that host.
 
-configsctl uses the explicit lock path for supported `apply` commands in workspaces that declare `lock_endpoints`. Except for the help requests below, configsctl refuses an `apply` or `destroy` command instead of using the inventory lock path when any condition in the table applies.
+Static settings with remote `lock_endpoints` use the existing explicit lock path for supported `apply` commands. Except for the help requests below, configsctl refuses an `apply` or `destroy` command instead of using the inventory lock path when any condition in the table applies.
 
 Refusal reasons:
 
@@ -149,9 +161,9 @@ Refusal reasons:
 | The command line does not start with `apply`. | The explicit lock path requires a command line that starts with `apply`. |
 | The command line includes a saved plan. | The explicit lock path does not accept saved plans. |
 
-configsctl logs each refusal. Each error identifies the workspace and its declared `lock_endpoints` and states the reason. Workspaces that do not declare `lock_endpoints` keep their current behavior.
+configsctl logs each refusal. Each error identifies the workspace and its declared `lock_endpoints` and states the reason. A mutation without native endpoint metadata or declared lock-free resource types refuses the command.
 
-When configsctl reads the settings, it refuses any workspace that declares both `lock_endpoints` and a `tofu.credentials` entry before starting OpenTofu. The error identifies the workspace and states that the credential path locks through the inventory. A workspace that declares `lock_endpoints` does not use the credential path.
+A credential entry requires an endpoint for its `lock_host`. configsctl acquires and renews the credential workspace locks before preparing the deployment credential. After planning, the same lock set acquires any additional selected guest locks. A fresh scope covers the complete selected host and guest set through apply. The original credential lock remains active throughout preparation, planning, and apply.
 
 In a workspace that declares `lock_endpoints`, configsctl runs OpenTofu help directly when an `apply` or `destroy` command includes `-help` or `-h`. For these requests, configsctl does not take a lock, read Ansible inventory, or run an Ansible program. The workspace does not need `tofu.guest_modules`. OpenTofu itself rejects `-help` combined with another positional argument, such as a saved plan, with exit status 1 and a message stating that the help topic does not exist.
 
@@ -340,7 +352,7 @@ credential enters the OpenTofu child environment. configsctl redacts that
 password from terminal output and run logs and refuses `TF_LOG_PATH`, which
 would bypass its output redaction.
 
-A saved-plan apply generates a fresh password. The ephemeral username and
+A native saved-plan apply generates a fresh password. The ephemeral username and
 password do not persist in the saved plan or state. A failed password request or
 failed login stops execution before OpenTofu starts. A later command can recover
 with another rotation through the rotator account. The generated password stays
@@ -357,24 +369,6 @@ provider. Run it only during an available host lock window:
 CONFIGSCTL_DELL_INTEGRATION_ROOT=/path/to/configs go test ./cmd/configsctl -run '^TestDellCredentialSavedPlanLifecycle$' -count=1 -v
 ```
 
-## Gate a deploy on the guest plan
-
-configsctl checks each selected enrolled guest in its owning workspace before acquiring deployment locks or running Ansible. `tofu.guest_modules` maps workspace selectors to the module address indexed by the inventory's `service_name`. Each workspace's `guest_hosts` mapping supplies its enrolled inventory hosts. Duplicate ownership and missing required mappings refuse deployment.
-
-Each plan targets the selected guest module in its root. The gate verifies that the saved plan includes that exact module instance. A failed plan, pending changes, or an empty target plan refuses deployment. Unrelated workspace configuration and state do not participate in the check.
-
-The `--check` option skips the gate. A configuration without either guest-module key disables it. Legacy `tofu.guest_module` still selects the shared `guest` workspace during tooling rollout; the configuration cannot set both keys.
-
-```yaml
-tofu:
-  guest_modules:
-    suburban/tack-qa: module.base
-  lock_targets:
-    opentofu/suburban/tack-qa:
-      guest_hosts:
-        suburban/217: tack-qa.suburban.goodkind.io
-```
-
 ## Run OpenTofu in CI
 
 Run `configsctl ci tofu` from the configuration checkout root. The OpenTofu root must be inside that checkout. The command finds `tofu` in `PATH` and does not read the vault or its password file.
@@ -383,7 +377,7 @@ Run `configsctl ci tofu` from the configuration checkout root. The OpenTofu root
 configsctl ci tofu --config <file> --root <root> --workspace <workspace> -- plan -input=false -no-color -detailed-exitcode -parallelism=<n> -out=<private-plan>
 ```
 
-Set `TF_IN_AUTOMATION=1` and use private directories for `HOME` and `TMPDIR`. `plan` accepts only `-input`, `-no-color`, `-detailed-exitcode`, `-parallelism`, `-out`, `-var-file`, `-lock`, and `-lock-timeout` and requires `-input=false`, `-no-color`, `-detailed-exitcode`, a positive `-parallelism`, and an `-out` path for a new file in a private directory below `TMPDIR`; `apply` accepts only `-input`, `-parallelism`, `-no-color`, and `-lock-timeout` and requires `-input=false` and a positive `-parallelism`. The command accepts `init`, `workspace select`, `plan`, `show`, `validate`, and `fmt -check`. It refuses `apply` because the CI command does not acquire host locks. Select the declared workspace before running `plan` or `show` without a saved plan. Use `-name=value` for flags with values. The command returns the OpenTofu exit status.
+Set `TF_IN_AUTOMATION=1` and use private directories for `HOME` and `TMPDIR`. `plan` accepts `-input`, `-no-color`, `-detailed-exitcode`, `-parallelism`, `-out`, `-var`, `-var-file`, `-target`, `-replace`, `-destroy`, `-refresh`, `-lock`, and `-lock-timeout` and requires `-input=false`, `-no-color`, `-detailed-exitcode`, a positive `-parallelism`, and an `-out` path for a new file in a private directory below `TMPDIR`; `apply` accepts only `-input`, `-parallelism`, `-no-color`, and `-lock-timeout` and requires `-input=false` and a positive `-parallelism`. The command accepts `init`, `workspace select`, `plan`, `show`, `validate`, and `fmt -check`. It refuses `apply` because the CI command does not acquire host locks. Select the declared workspace before running `plan` or `show` without a saved plan. Use `-name=value` for flags with values. The command returns the OpenTofu exit status.
 
 The configuration is a JSON object with these keys:
 
@@ -400,40 +394,13 @@ The command rejects configurations with unknown or duplicate keys, missing requi
 
 Go callers can use `goodkind.io/configsctl/tofurun` and call `Run(ctx, request, scope)` with a `tofurun.Request`. `Run` returns a `tofurun.Result` and an error. A saved-plan `apply` requires a `*hostlock.Scope` from `(*hostlock.Set).Scope`; the scope must cover every host in `Request.RequiredHosts`. `Scope.Check` verifies the scope and its required hosts.
 
-## Deploy behavior for hosts without Proxmox guests
-
-The `deploy.absent_guest_nodes` setting maps the second label of a host name to a Proxmox node name from `ansible_proxmox_host`. A missing or empty mapping disables the check.
-
-```yaml
-deploy:
-  absent_guest_nodes:
-    home: vault
-```
-
-This mapping checks hosts such as `tack-search1.home.goodkind.io` against the Proxmox node `vault`. A play host qualifies for the check only when it has the inventory variable `service_vmid` and its second label appears in the mapping.
-
-A guest matches when an inventory host has `ansible_proxmox_host` equal to the mapped node and `ansible_proxmox_vmid` equal to the play host's `service_vmid`. The check compares VMIDs rather than host names. The Proxmox inventory can list an existing guest under a different name, such as `mwan-failover` for `mwan-failover.home.goodkind.io`.
-
-configsctl skips each checked play host without a matching guest. It does not lock that host. It adds an exclusion for the host to the Ansible limit, using a comma separator when the limit contains a comma and a colon separator otherwise.
-
-The run log records `Skipping hosts with no Proxmox guest: <hosts>`. configsctl also logs `deploy.hosts_absent`.
-
-With a nonempty mapping, the deploy fails before taking any locks when any of these conditions applies:
-
-* The Proxmox inventory does not report any guests on the mapped node of a checked host.
-* A skipped host is a value of `tofu.guest_hosts`.
-* The check would skip every play host.
-* The `--limit` value starts with `@`.
-
-The check also runs with `--check`. Check mode now reads the settings and still does not take locks.
-
 ## Prerequisites
 
 - Go at the version in `go.mod`.
-- A `python3` that can import `jinja2` in isolated mode. On macOS,
+- A `python3` that can import `jinja2` in isolated mode for explicit template lint requests. On macOS,
   `/opt/homebrew/bin/python3` or `/usr/local/bin/python3` can provide it when
   the shell's `python3` cannot.
-- The Ansible command line tools for `deploy`, `syntax-check`, and `inventory-dump`, and OpenTofu for `tofu`.
+- OpenTofu for native validation and infrastructure commands.
 - Git and access to `origin` for OpenTofu commands that write deployment state.
 - The vault password at `~/.config/ansible/vault.pass` for every command that reads the vault.
 
