@@ -98,6 +98,9 @@ func run(args []string) error {
 	if command == "ci" {
 		return runCI(args[1:])
 	}
+	if command == "providers" {
+		return runProviders(args[1:])
+	}
 	handler, ok := handlers[command]
 	if !ok {
 		return fmt.Errorf("unknown command: %q", command)
