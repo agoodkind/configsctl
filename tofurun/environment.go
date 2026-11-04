@@ -54,7 +54,14 @@ func buildEnvironment(request Request) (environment, error) {
 	if err != nil {
 		return built, err
 	}
-	if err := checkOrdinary(assigned, request.ManualHome); err != nil {
+	if err := checkOrdinary(assigned); err != nil {
+		return built, err
+	}
+	if request.ManualHome {
+		if err := checkManualHome(assigned[homeVariable]); err != nil {
+			return built, err
+		}
+	} else if err := checkPrivateDirectory(homeVariable, assigned[homeVariable]); err != nil {
 		return built, err
 	}
 	built.tmpdir = assigned[tmpdirVariable]
@@ -144,7 +151,7 @@ func assignments(source, names []string) (map[string]string, error) {
 	return assigned, nil
 }
 
-func checkOrdinary(assigned map[string]string, manualHome bool) error {
+func checkOrdinary(assigned map[string]string) error {
 	if assigned[pathVariable] == "" {
 		return rejection("tofurun.variable_missing", "the environment does not set PATH")
 	}
@@ -154,10 +161,7 @@ func checkOrdinary(assigned map[string]string, manualHome bool) error {
 	if err := checkPrivateDirectory(tmpdirVariable, assigned[tmpdirVariable]); err != nil {
 		return err
 	}
-	if manualHome {
-		return checkManualHome(assigned[homeVariable])
-	}
-	return checkPrivateDirectory(homeVariable, assigned[homeVariable])
+	return nil
 }
 
 func secretPattern(name string, value []byte) (redact.Pattern, error) {
