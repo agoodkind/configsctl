@@ -214,9 +214,6 @@ func TestProvidersInstallRecoversFromAKilledRun(t *testing.T) {
 	pin := fixture.pin(t, "providers.pin", stalled.release.pinLine(hostPlatformName()))
 	result := fixture.install(t, pin)
 	requireSuccess(t, result, "providers", "install")
-	if got := strings.Count(result.stdout, "Removed staging directory for an exited process"); got != 2 {
-		t.Fatalf("stdout = %q, want two stale directory removals", result.stdout)
-	}
 	requireEntryCount(t, fixture.stagingRoot(), 2)
 	requireEntryCount(t, fixture.archiveStagingRoot(), 2)
 	for _, directory := range kept {

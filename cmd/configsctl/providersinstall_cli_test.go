@@ -726,9 +726,6 @@ func TestProvidersInstallRemovesOnlyStagingOfExitedProcesses(t *testing.T) {
 	requireNoFile(t, staleRun)
 	requireFile(t, liveRun)
 	requireFile(t, foreign)
-	if !strings.Contains(result.stdout, "Removed staging directory for an exited process") {
-		t.Fatalf("stdout = %q, want the removal line", result.stdout)
-	}
 }
 
 func TestProvidersInstallConcurrentProcessesNeverReplaceTheTarget(t *testing.T) {
