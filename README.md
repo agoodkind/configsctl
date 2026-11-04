@@ -440,7 +440,7 @@ gh release download <tag> --repo <repository> --pattern <asset>
 
 The command compares the archive's SHA-256 digest with the pin before moving the archive into the cache. It also checks the digest of each cached archive on every run.
 
-The command reads each entire archive, including its gzip checksum, and fails on any read error before publishing anything. It uses only the member `terraform-provider-<name>`, requires that member to be a regular file, and writes it with mode `0755`.
+The command installs providers in pin file order and reads each entire archive, including its gzip checksum, before publishing that provider's binary. If a read fails, the command fails without publishing that provider's binary, and providers installed earlier in the run remain installed. It uses only the member `terraform-provider-<name>`, requires that member to be a regular file, and writes it with mode `0755`.
 
 The command publishes the binary with a hard link at:
 
