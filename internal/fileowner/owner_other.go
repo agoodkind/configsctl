@@ -14,3 +14,8 @@ import (
 func CurrentUser(_ fs.FileInfo) (bool, error) {
 	return false, errors.New("file ownership is not available on this platform")
 }
+
+// EffectiveUser retains the platform's existing ownership refusal.
+func EffectiveUser(info fs.FileInfo) (bool, error) {
+	return CurrentUser(info)
+}

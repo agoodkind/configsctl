@@ -64,6 +64,24 @@ func checkPrivateDirectory(label, path string) error {
 	return checkPrivateDirectoryInfo(label, path, info)
 }
 
+func checkManualHome(path string) error {
+	if !cleanAbsolute(path) {
+		return rejection("tofurun.home_refused", "manual HOME must be a clean absolute path")
+	}
+	canonical, err := filepath.EvalSymlinks(path)
+	if err != nil || canonical != path {
+		return rejection("tofurun.home_refused", "manual HOME must use its canonical directory path")
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.IsDir() {
+		return rejection("tofurun.home_refused", "manual HOME must be an existing directory")
+	}
+	if info.Mode().Perm()&0o022 != 0 {
+		return rejection("tofurun.home_refused", "manual HOME must not allow group or other users to write")
+	}
+	return checkOwnership("manual HOME", path, info, fileowner.EffectiveUser)
+}
+
 // checkPrivateDirectoryInfo applies the checkPrivateDirectory rules to info
 // from Lstat.
 func checkPrivateDirectoryInfo(label, path string, info fs.FileInfo) error {
@@ -98,7 +116,11 @@ func checkPrivateFile(label, path string) error {
 }
 
 func checkOwner(label, path string, info fs.FileInfo) error {
-	owned, err := fileowner.CurrentUser(info)
+	return checkOwnership(label, path, info, fileowner.CurrentUser)
+}
+
+func checkOwnership(label, path string, info fs.FileInfo, owns func(fs.FileInfo) (bool, error)) error {
+	owned, err := owns(info)
 	if err != nil {
 		return rejection("tofurun.owner_unknown", fmt.Sprintf("%s %s: %v", label, path, err))
 	}

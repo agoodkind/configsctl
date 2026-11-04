@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -281,6 +282,11 @@ func runTofu(env cmdEnv, args []string) error {
 	if err != nil {
 		return err
 	}
+	env, restoreOperator, err := registerOperatorRedaction(env, loaded.Tofu, workspaceDir, safeArgs, childEnv)
+	if err != nil {
+		return err
+	}
+	defer restoreOperator()
 	credential, configured := loaded.Tofu.Credentials[tofuWorkspaceKey(workspaceDir)]
 	usesCredential := configured && credentialCommand(safeArgs)
 	if err := requireExplicitLockPath(loaded.Tofu, workspaceDir, safeArgs); err != nil {
@@ -554,6 +560,7 @@ func (l *lockedWriter) Write(p []byte) (int, error) {
 // that restores their original descriptors after both redactors finish.
 func installRedaction(patterns []redact.Pattern) (func(), error) {
 	realStdout, realStderr := os.Stdout, os.Stderr
+	realLogOutput := log.Writer()
 	if len(patterns) == 0 {
 		return func() {}, nil
 	}
@@ -594,10 +601,12 @@ func installRedaction(patterns []redact.Pattern) (func(), error) {
 
 	os.Stdout = outW
 	os.Stderr = errW
+	log.SetOutput(errW)
 
 	restore := func() {
 		os.Stdout = realStdout
 		os.Stderr = realStderr
+		log.SetOutput(realLogOutput)
 		_ = outW.Close()
 		_ = errW.Close()
 		wg.Wait()

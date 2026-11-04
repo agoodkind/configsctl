@@ -395,8 +395,9 @@ type explicitRunner struct {
 // directory.
 //
 // The request passes OpenTofu only PATH, LANG when set, TF_IN_AUTOMATION, the
-// private HOME and TMPDIR, the provider mirror configuration path, and the
-// vault values that the legacy path exports to the workspace.
+// private TMPDIR, the provider mirror configuration path, and declared inputs.
+// Native execution retains the bounded operator HOME and optional agent socket.
+// Static remote-endpoint execution retains its private HOME.
 func newExplicitRunner(settings tofuSettings, request tofuLockRequest, passwordFile string) (explicitRunner, func(), error) {
 	var runner explicitRunner
 	assignments, err := tofuSecretEnv(settings, request.workspaceDir, defaultVaultFile, passwordFile)
@@ -452,13 +453,23 @@ func newExplicitRunner(settings tofuSettings, request tofuLockRequest, passwordF
 			return runner, nil, err
 		}
 	}
+	manual := !strictExplicitSettings(settings, request.lockTargets[tofuWorkspaceKey(request.workspaceDir)])
+	inputs := operatorInputs{home: home, assignments: assignments, publicNames: nil}
+	if manual {
+		inputs, err = manualOperatorInputs(request, assignments)
+		if err != nil {
+			cleanup()
+			return runner, nil, err
+		}
+	}
 	environment := []string{
-		"PATH=" + os.Getenv("PATH"), "HOME=" + home, "TMPDIR=" + temporary, "TF_IN_AUTOMATION=1",
+		"PATH=" + os.Getenv("PATH"), "HOME=" + inputs.home, "TMPDIR=" + temporary, "TF_IN_AUTOMATION=1",
 	}
 	if language := os.Getenv("LANG"); language != "" {
 		environment = append(environment, "LANG="+language)
 	}
-	required, redacted := splitExplicitAssignments(assignments)
+	required, redacted := splitExplicitAssignments(inputs.assignments)
+	redacted = slices.DeleteFunc(redacted, func(name string) bool { return slices.Contains(inputs.publicNames, name) })
 	if credential, configured := settings.Credentials[tofuWorkspaceKey(request.workspaceDir)]; configured {
 		username := tofuVariablePrefix + credential.UsernameVariable
 		redacted = slices.DeleteFunc(redacted, func(name string) bool { return name == username })
@@ -467,7 +478,8 @@ func newExplicitRunner(settings tofuSettings, request tofuLockRequest, passwordF
 	runner = explicitRunner{
 		base: tofurun.Request{
 			Binary: binary, Root: root, Workspace: workspace,
-			Args: nil, Environment: append(environment, assignments...),
+			ManualHome: manual, OptionalEnvironment: inputs.publicNames,
+			Args: nil, Environment: append(environment, inputs.assignments...),
 			RequiredEnvironment: required, SecretEnvironment: redacted, SecretFiles: nil,
 			OutputMode: tofurun.RedactedProgress, JSONPath: "", RequiredHosts: nil,
 		},

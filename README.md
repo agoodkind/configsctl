@@ -104,6 +104,8 @@ Native saved-plan applies forward explicit ephemeral `-var` and `-var-file` inpu
 
 JSON diagnostic files contain redacted output after the command ends. The runner creates each file with mode `0600` and refuses symbolic links. It replaces an existing owned regular file after successful redaction.
 
+Native manual execution preserves the operator's canonical HOME and optional SSH agent socket. The effective user must own HOME, and group or other users cannot have write access. Only inherited `TF_VAR_` inputs declared by the selected root enter the child environment. Sensitive and ephemeral inputs use the existing redactors. Nonsecret declared inputs may contain an empty value. CI and metadata evaluation retain private HOME directories and their existing environment allowlists.
+
 The `tofu.lock_targets.<workspace>.lock_endpoints` setting maps each lock host name to an object with connection fields. The workspace can declare these keys beside `lock_endpoints`:
 
 - `module_hosts`

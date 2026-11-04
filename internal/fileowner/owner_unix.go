@@ -20,3 +20,12 @@ func CurrentUser(info fs.FileInfo) (bool, error) {
 	}
 	return int(stat.Uid) == os.Getuid(), nil
 }
+
+// EffectiveUser reports whether the active filesystem identity owns the entry.
+func EffectiveUser(info fs.FileInfo) (bool, error) {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return false, errors.New("this filesystem does not report a file owner")
+	}
+	return int(stat.Uid) == os.Geteuid(), nil
+}
