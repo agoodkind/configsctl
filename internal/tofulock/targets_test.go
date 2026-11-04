@@ -1,6 +1,7 @@
 package tofulock_test
 
 import (
+	"context"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -34,7 +35,7 @@ func TestLockEndpointsValidate(t *testing.T) {
 			change: func(targets *tofulock.Targets) {
 				targets.LockEndpoints["hv_alpha"] = tofulock.LockEndpoint{User: "", Address: ""}
 			},
-			want: "lock_endpoints.hv_alpha has an empty address",
+			want: "lock_endpoints.hv_alpha requires an address or explicit local operation",
 		},
 		"unknown name": {
 			change: func(targets *tofulock.Targets) {
@@ -66,6 +67,34 @@ func TestLockEndpointsValidate(t *testing.T) {
 				t.Fatalf("Validate returned %v, want an error containing %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestExplicitLocalEndpointUsesTheExistingLocalLock(t *testing.T) {
+	targets := tofulock.Targets{
+		ModuleHosts:    map[string]string{"module.host": "poweredge"},
+		ModuleKeyHosts: nil, NodeHosts: nil, GuestHosts: nil, LockFreeTypes: nil,
+		LockEndpoints: map[string]tofulock.LockEndpoint{"poweredge": {User: "", Address: "", Local: true}},
+	}
+	if err := targets.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	hosts, err := targets.LockHosts(tofulock.Decision{AllHosts: false, Reason: "", Hosts: []string{"poweredge"}, GuestLocks: nil})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hosts[0].Dir = t.TempDir()
+	set, err := hostlock.AcquireAll(t.Context(), hosts, "20261005T050000Z-aaaaaaaa", "local-controller", hostlock.DefaultLease())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.ReleaseAll(context.WithoutCancel(t.Context()))
+	scope, err := set.Scope()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := scope.Check([]string{"poweredge"}); err != nil {
+		t.Fatal(err)
 	}
 }
 

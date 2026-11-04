@@ -10,11 +10,10 @@ import (
 	"github.com/hashicorp/hcl/v2"
 	"github.com/zclconf/go-cty/cty"
 
-	"goodkind.io/configsctl/hostlock"
-	"goodkind.io/configsctl/internal/ansible"
 	"goodkind.io/configsctl/internal/dellcredential"
 	"goodkind.io/configsctl/internal/redact"
 	"goodkind.io/configsctl/internal/tofuargs"
+	"goodkind.io/configsctl/internal/tofulock"
 )
 
 type tofuCredentialSettings struct {
@@ -115,16 +114,13 @@ func (s tofuCredentialSettings) validateWorkspace(workspace string, childEnv []s
 	return nil
 }
 
-func lockCredentialHost(ctx context.Context, name string) (context.Context, func(), error) {
-	inv, err := ansible.LoadInventory(ctx, "")
+func lockCredentialHost(ctx context.Context, name string, targets tofulock.Targets) (context.Context, func(), error) {
+	hosts, err := targets.LockHosts(tofulock.Decision{AllHosts: false, Reason: "", Hosts: []string{name}, GuestLocks: nil})
 	if err != nil {
-		slog.Error("tofu.credential.inventory_failed", "err", err)
-		return nil, nil, fmt.Errorf("read inventory for credential lock: %w", err)
+		slog.Error("tofu.credential.lock_targets_failed", "host", name, "err", err)
+		return nil, nil, fmt.Errorf("select the credential lock host: %w", err)
 	}
-	if err := requireLockTargets(inv, []string{name}); err != nil {
-		return nil, nil, err
-	}
-	return takeLocks(ctx, hostlock.Targets(inv, []string{name}))
+	return takeLocks(ctx, hosts)
 }
 
 func environmentValue(environment []string, name string) string {

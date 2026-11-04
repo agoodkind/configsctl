@@ -144,23 +144,6 @@ func stopSignalRun(t *testing.T, run signalRun, wantError string) {
 	requireProcessGone(t, run.worker)
 }
 
-func TestDeployStopsThePlayAndReleasesTheLockOnSIGTERM(t *testing.T) {
-	if _, err := exec.LookPath("ansible-inventory"); err != nil {
-		t.Skip("ansible-inventory is not installed")
-	}
-	tree := newConfigsTree(t)
-	writeFixtureFile(t, filepath.Join(tree.root, "ansible", "ansible.cfg"), lockedAnsibleConfig)
-	writeFixtureFile(t, filepath.Join(tree.root, "ansible", "inventory", "hosts.yml"), signalInventory)
-	writeFixtureFile(t, filepath.Join(tree.root, "ansible", "playbooks", signalPlaybookName+".yml"), signalPlaybook)
-	lockDir := t.TempDir()
-	extraEnv := []string{"FIXTURE_PLAY_HOST=" + signalHost, "FIXTURE_LOCK_DIR=" + lockDir}
-
-	run := startSignalRun(t, tree, []string{"ansible-playbook", "ssh"}, extraEnv, "deploy", signalPlaybookName)
-	requireFile(t, filepath.Join(lockDir, signalLockFile))
-	stopSignalRun(t, run, "deploy "+signalPlaybookName+" stopped on a signal: terminated signal received")
-	requireNoFile(t, filepath.Join(lockDir, signalLockFile))
-}
-
 func TestTofuStopsItsProcessGroupOnSIGTERM(t *testing.T) {
 	tree := newConfigsTree(t)
 

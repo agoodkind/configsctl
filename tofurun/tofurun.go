@@ -51,7 +51,9 @@ const (
 // for PrivateJSON. RequiredHosts lists the hosts that a mutation requires in
 // its scope.
 type Request struct {
-	Binary, Root, Workspace                                   string
+	Binary, Root, Workspace string
+	// DataDirectory isolates module initialization in a private directory.
+	DataDirectory                                             string
 	Args, Environment, RequiredEnvironment, SecretEnvironment []string
 	SecretFiles                                               map[string]string
 	OutputMode                                                OutputMode
@@ -166,6 +168,9 @@ func checkFiles(request Request, parsed command, built environment) error {
 		}
 	}
 	if parsed.usesWorkspace() {
+		if request.DataDirectory != "" {
+			return checkSelectedWorkspaceData(request.DataDirectory, request.Workspace)
+		}
 		return checkSelectedWorkspace(request.Root, request.Workspace)
 	}
 	return nil

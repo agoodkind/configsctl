@@ -17,19 +17,20 @@ const defaultLockUser = "root"
 
 // Targets declares inventory hosts for a workspace's modules, nodes, and guests.
 type Targets struct {
-	ModuleHosts    map[string]string            `yaml:"module_hosts"`
-	ModuleKeyHosts map[string]map[string]string `yaml:"module_key_hosts"`
-	NodeHosts      map[string]string            `yaml:"node_hosts"`
-	GuestHosts     map[string]string            `yaml:"guest_hosts"`
-	LockFreeTypes  []string                     `yaml:"lock_free_types"`
+	ModuleHosts    map[string]string            `yaml:"module_hosts" json:"module_hosts"`
+	ModuleKeyHosts map[string]map[string]string `yaml:"module_key_hosts" json:"module_key_hosts"`
+	NodeHosts      map[string]string            `yaml:"node_hosts" json:"node_hosts"`
+	GuestHosts     map[string]string            `yaml:"guest_hosts" json:"guest_hosts"`
+	LockFreeTypes  []string                     `yaml:"lock_free_types" json:"lock_free_types"`
 	// LockEndpoints maps each lock host name to the SSH endpoint used to build its lock target.
-	LockEndpoints map[string]LockEndpoint `yaml:"lock_endpoints"`
+	LockEndpoints map[string]LockEndpoint `yaml:"lock_endpoints" json:"lock_endpoints"`
 }
 
 // LockEndpoint is the ssh endpoint of one lock host. User defaults to root.
 type LockEndpoint struct {
-	User    string `yaml:"user"`
-	Address string `yaml:"address"`
+	User    string `yaml:"user" json:"user"`
+	Address string `yaml:"address" json:"address"`
+	Local   bool   `yaml:"local" json:"local"`
 }
 
 // Validate requires a host mapping or declared lock-free resource types.
@@ -90,8 +91,8 @@ func (t Targets) validateLockEndpoints() error {
 		if name == "" {
 			return errors.New("lock_endpoints has an empty host name")
 		}
-		if t.LockEndpoints[name].Address == "" {
-			return fmt.Errorf("lock_endpoints.%s has an empty address; a local lock is not supported", name)
+		if err := t.LockEndpoints[name].validate(name); err != nil {
+			return err
 		}
 	}
 	referenced := t.referencedHosts()
@@ -164,11 +165,24 @@ func (t Targets) lockHost(name string) (hostlock.Host, error) {
 	if !declared {
 		return hostlock.Host{}, fmt.Errorf("host %s has no declared lock endpoint", name)
 	}
+	if err := endpoint.validate(name); err != nil {
+		return hostlock.Host{}, err
+	}
 	user := endpoint.User
 	if user == "" {
 		user = defaultLockUser
 	}
 	return hostlock.Host{Name: name, User: user, Address: endpoint.Address, Dir: hostlock.DefaultDir}, nil
+}
+
+func (e LockEndpoint) validate(name string) error {
+	if e.Local && e.Address != "" {
+		return fmt.Errorf("lock_endpoints.%s cannot combine local operation with an address", name)
+	}
+	if !e.Local && e.Address == "" {
+		return fmt.Errorf("lock_endpoints.%s requires an address or explicit local operation", name)
+	}
+	return nil
 }
 
 func (t Targets) hasDeclarations() bool {

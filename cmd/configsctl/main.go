@@ -1,5 +1,4 @@
-// Command configsctl is the control tool for the configs repository. It runs
-// Ansible deploys, manages vault secrets, and lints Ansible input variables.
+// Command configsctl runs OpenTofu and manages encrypted Vault secrets.
 package main
 
 import (
@@ -16,11 +15,9 @@ import (
 	"sync"
 	"syscall"
 
-	"goodkind.io/configsctl/internal/ansible"
 	"goodkind.io/configsctl/internal/baseline"
 	"goodkind.io/configsctl/internal/lint"
 	"goodkind.io/configsctl/internal/redact"
-	"goodkind.io/configsctl/internal/runlog"
 	"goodkind.io/configsctl/internal/tofuargs"
 	"goodkind.io/configsctl/internal/tofurun"
 	"goodkind.io/configsctl/internal/vault"
@@ -58,11 +55,8 @@ var handlers = map[string]func(cmdEnv, []string) error{
 	"set-secrets":    runSetSecrets,
 	"rename-secret":  runRenameSecret,
 	"delete-secrets": runDeleteSecrets,
-	"deploy":         runDeploy,
 	"tofu":           runTofu,
 	"migrate-state":  runStateMigration,
-	"syntax-check":   runSyntaxCheck,
-	"inventory-dump": runInventoryDump,
 	"version":        runVersion,
 	"gate":           runGate,
 	"gate-finish":    runGateFinish,
@@ -115,7 +109,11 @@ func run(args []string) error {
 
 func runLint(_ cmdEnv, paths []string) error {
 	if len(paths) == 0 {
-		paths = lint.Discover(".")
+		loaded, err := loadNativeSettings(settingsFile)
+		if err != nil {
+			return err
+		}
+		return runNativeLint(context.Background(), loaded.Tofu)
 	}
 	result, err := lint.Gate(paths)
 	if err != nil {
@@ -261,52 +259,6 @@ func runSetSecrets(_ cmdEnv, _ []string) error {
 	return nil
 }
 
-// deployRunner runs the play; ansible.Deploy in production, a fake in tests.
-type deployRunner func(opts ansible.DeployOptions) error
-
-func runDeploy(env cmdEnv, args []string) error {
-	return runDeployWith(env, args, lockedDeploy)
-}
-
-// runDeployWith is runDeploy with the play boundary injectable, so the run log
-// contract (where the play's output lands and what the error names) is testable
-// without ansible.
-func runDeployWith(env cmdEnv, args []string, deploy deployRunner) error {
-	opts, err := parseDeploy(args)
-	if err != nil {
-		return err
-	}
-	if !opts.Check {
-		release, err := acquireMigrationWriter()
-		if err != nil {
-			return err
-		}
-		defer release()
-	}
-	log, err := runlog.Open(opts.Playbook, env.secrets)
-	if err != nil {
-		slog.Error("deploy.log_open_failed", "playbook", opts.Playbook, "err", err)
-		return fmt.Errorf("open the play run log: %w", err)
-	}
-	opts.Output = log
-	log.Announce("Play")
-	deployErr := deploy(opts)
-	if closeErr := log.Close(); closeErr != nil {
-		slog.Error("deploy.log_close_failed", "playbook", opts.Playbook, "err", closeErr)
-		return fmt.Errorf("close the play run log: %w", closeErr)
-	}
-	var gateErr *planGateError
-	if errors.As(deployErr, &gateErr) {
-		fmt.Fprintf(os.Stderr, "The plan output is in %s\n", log.Path())
-		return gateErr
-	}
-	if deployErr != nil {
-		slog.Error("deploy.command_failed", "playbook", opts.Playbook, "err", deployErr)
-		return fmt.Errorf("deploy failed; the play output is in %s: %w", log.Path(), deployErr)
-	}
-	return nil
-}
-
 const tofuUsage = "usage: configsctl tofu [<workspace>] <tofu args...>"
 
 func runTofu(env cmdEnv, args []string) error {
@@ -317,16 +269,9 @@ func runTofu(env cmdEnv, args []string) error {
 	if err != nil {
 		return err
 	}
-	loaded, err := loadSettings(settingsFile)
+	loaded, workspaceDir, tofuArgs, err := loadTofuWorkspace(context.Background(), args)
 	if err != nil {
 		return err
-	}
-	workspaceDir, tofuArgs, err := selectTofuWorkspace(loaded.Tofu.WorkspacesDir, args)
-	if err != nil {
-		return err
-	}
-	if len(tofuArgs) == 0 {
-		return errors.New(tofuUsage)
 	}
 	safeArgs, childEnv, err := prepareTofuInvocation(loaded.Tofu, workspaceDir, passwordFile, tofuArgs)
 	if err != nil {
@@ -353,23 +298,20 @@ func runTofu(env cmdEnv, args []string) error {
 	if err != nil {
 		return err
 	}
-	independent := loaded.Tofu.GuestModules != nil
-	if needsIndependentPlan(independent, safeArgs) {
+	if tofuMutates(safeArgs) {
 		request := tofuLockRequest{
 			workspaceDir: workspaceDir, env: childEnv, args: safeArgs,
 			lockTargets: loaded.Tofu.LockTargets, requiredHosts: requiredHosts, independentWorkspaces: true,
 			guestModule: loaded.Tofu.lockGuestModule(workspaceDir),
 		}
-		return runIndependentMutation(env, loaded.Tofu, request, credential, usesCredential, passwordFile)
+		return runIndependentMutation(env, loaded.Tofu, request, passwordFile)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	commandArgs := safeArgs
 	release := func() {}
-	if tofuMutates(safeArgs) {
-		ctx, commandArgs, release, err = lockTofuHosts(ctx, tofuLockRequest{workspaceDir: workspaceDir, env: childEnv, args: safeArgs, lockTargets: loaded.Tofu.LockTargets, requiredHosts: requiredHosts, independentWorkspaces: independent, guestModule: loaded.Tofu.lockGuestModule(workspaceDir)})
-	} else if usesCredential {
-		ctx, release, err = lockCredentialHost(ctx, credential.LockHost)
+	if usesCredential {
+		ctx, release, err = lockCredentialHost(ctx, credential.LockHost, loaded.Tofu.LockTargets[tofuWorkspaceKey(workspaceDir)])
 	}
 	if err != nil {
 		return err
@@ -522,79 +464,6 @@ func runDeleteSecrets(_ cmdEnv, args []string) error {
 	}
 	fmt.Printf("deleted: %s\n", strings.Join(args, ", "))
 	return nil
-}
-
-func runSyntaxCheck(_ cmdEnv, args []string) error {
-	if len(args) != 1 {
-		return errors.New("usage: configsctl syntax-check <playbook>")
-	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	if err := ansible.SyntaxCheck(ctx, args[0]); err != nil {
-		if cause := context.Cause(ctx); cause != nil {
-			slog.Error("syntax_check.stopped", "playbook", args[0], "err", cause)
-			return fmt.Errorf("syntax-check stopped on a signal: %w", cause)
-		}
-		return errors.New("syntax-check failed")
-	}
-	return nil
-}
-
-func runInventoryDump(_ cmdEnv, _ []string) error {
-	if err := ansible.InventoryDump(); err != nil {
-		return errors.New("inventory-dump failed")
-	}
-	return nil
-}
-
-func parseDeploy(args []string) (ansible.DeployOptions, error) {
-	var opts ansible.DeployOptions
-	index := 0
-	for index < len(args) {
-		consumed, err := applyDeployArg(&opts, args, index)
-		if err != nil {
-			return opts, err
-		}
-		index += consumed
-	}
-	if opts.Playbook == "" {
-		return opts, errors.New("usage: configsctl deploy <playbook> [flags]")
-	}
-	return opts, nil
-}
-
-// applyDeployArg applies one deploy argument and returns how many tokens it
-// consumed.
-func applyDeployArg(opts *ansible.DeployOptions, args []string, index int) (int, error) {
-	arg := args[index]
-	switch {
-	case arg == "--check":
-		opts.Check = true
-	case arg == "--diff":
-		opts.Diff = true
-	case arg == "--full-lint":
-		opts.FullLint = true
-	case arg == "--limit" && index+1 < len(args):
-		opts.Limit = args[index+1]
-		return 2, nil
-	case strings.HasPrefix(arg, "--limit="):
-		opts.Limit = strings.TrimPrefix(arg, "--limit=")
-	case arg == "--extra-var" && index+1 < len(args):
-		opts.ExtraVars = append(opts.ExtraVars, args[index+1])
-		return 2, nil
-	case strings.HasPrefix(arg, "--extra-var="):
-		opts.ExtraVars = append(opts.ExtraVars, strings.TrimPrefix(arg, "--extra-var="))
-	case arg == "--tags" && index+1 < len(args):
-		opts.Tags = append(opts.Tags, args[index+1])
-		return 2, nil
-	case strings.HasPrefix(arg, "--tags="):
-		opts.Tags = append(opts.Tags, strings.TrimPrefix(arg, "--tags="))
-	case !strings.HasPrefix(arg, "-"):
-		opts.Playbook = arg
-	default:
-		return 0, fmt.Errorf("unknown deploy argument: %q", arg)
-	}
-	return 1, nil
 }
 
 func vaultPassPath() (string, error) {

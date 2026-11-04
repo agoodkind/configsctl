@@ -1,14 +1,22 @@
 package main_test
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	ansiblevault "github.com/sosedoff/ansible-vault-go"
 )
+
+const shortTempRoot = "/tmp"
 
 const gatedWorkspace = `
 module "base" {
@@ -133,73 +141,6 @@ func requireRefusal(t *testing.T, tree configsTree, result commandResult, fragme
 	requireNoFile(t, playMarker(tree))
 }
 
-func TestDeployRunsThePlayForAGuestWithoutPendingChanges(t *testing.T) {
-	tree := newGatedTree(t, true)
-	applyArgs := tofuArgs("guest", "apply", "-auto-approve", "-input=false")
-	requireSuccess(t, runConfigsctl(t, tree, applyArgs...), applyArgs...)
-
-	result := runConfigsctl(t, tree, "deploy", gatedPlaybookName)
-	requireSuccess(t, result, "deploy", gatedPlaybookName)
-	if !strings.Contains(result.stderr, "deploy.gate.passed guest=guest_alpha") {
-		t.Fatalf("stderr = %q, want the gate to pass guest_alpha", result.stderr)
-	}
-	requireFile(t, playMarker(tree))
-}
-
-func TestDeployRefusesAGuestWithPendingChanges(t *testing.T) {
-	tree := newGatedTree(t, true)
-
-	result := runConfigsctl(t, tree, "deploy", gatedPlaybookName)
-	requireRefusal(t, tree, result, pendingRefusal, "terraform_data.item")
-}
-
-func TestDeployRefusesAGuestWithAFailedPlan(t *testing.T) {
-	tree := newGatedTree(t, false)
-
-	result := runConfigsctl(t, tree, "deploy", gatedPlaybookName)
-	requireRefusal(t, tree, result, failedRefusal, "fixture precondition failed for guest_alpha")
-}
-
-func TestDeployLogsEveryPlanLineFromBothStreams(t *testing.T) {
-	tree := newGatedTree(t, true)
-	testBinary, err := os.Executable()
-	if err != nil {
-		t.Fatalf("resolve the test binary: %v", err)
-	}
-	binDir := t.TempDir()
-	if err := os.Symlink(testBinary, filepath.Join(binDir, "tofu")); err != nil {
-		t.Fatalf("link the test binary as tofu: %v", err)
-	}
-	path := binDir + string(os.PathListSeparator) + os.Getenv("PATH")
-	env := []string{planStreamsVariable + "=1"}
-
-	result := runConfigsctlWithEnv(t, tree, path, env, "deploy", gatedPlaybookName)
-	requireRefusal(t, tree, result, failedRefusal)
-	events := eventLines(result.stderr)
-	if strings.Contains(result.stderr, panicMessage) {
-		t.Fatalf("configsctl reported a panic\nevents:\n%s", events)
-	}
-	log := readPlanLog(t, result.stderr)
-	wantBytes := planStreamLines * (len(planStdoutLine) + len(planStderrLine) + 2)
-	if len(log) != wantBytes {
-		t.Fatalf("the plan log contains %d bytes, want %d\nevents:\n%s", len(log), wantBytes, events)
-	}
-	for _, marker := range []string{stdoutMarker, stderrMarker} {
-		if count := strings.Count(log, marker); count != planStreamLines {
-			t.Fatalf("the plan log contains %d copies of %q, want %d\nevents:\n%s",
-				count, marker, planStreamLines, events)
-		}
-	}
-	failure := planFailureEvent(t, result.stderr)
-	if count := strings.Count(failure, planStderrLine); count != planStreamLines {
-		t.Fatalf("the plan failure event reports %d standard error lines, want %d\nevents:\n%s",
-			count, planStreamLines, events)
-	}
-	if strings.Contains(result.stderr, raceReportStart) {
-		t.Fatalf("configsctl reported a data race\nevents:\n%s", events)
-	}
-}
-
 func writePlanStreams() int {
 	var writers sync.WaitGroup
 	streams := map[*os.File]string{os.Stdout: planStdoutLine, os.Stderr: planStderrLine}
@@ -262,26 +203,118 @@ func eventLines(text string) string {
 	return strings.Join(lines, "\n")
 }
 
-func TestDeployRunsThePlayForAHostOutsideGuestHosts(t *testing.T) {
-	tree := newGatedTree(t, true)
+const (
+	splitSecretVariable  = "CONFIGSCTL_TEST_SPLIT_SECRET"
+	splitBetweenVariable = "CONFIGSCTL_TEST_SPLIT_BETWEEN"
+	splitPlayHostVar     = "CONFIGSCTL_TEST_SPLIT_PLAY_HOST"
+	splitSecretPrefix    = "synthetic-split-marker-"
+	splitSecretKey       = "vault_split_marker"
+	splitSecretBytes     = 8
+	splitStderrText      = "unrelated stderr text\n"
+	splitWritePause      = 200 * time.Millisecond
+	listHostsFlag        = "--list-hosts"
+	playLogNotice        = "Play output streams to "
+	tofuLogNotice        = "Tofu output streams to "
+	listHostsFormat      = "\nplaybook: fixture\n\n  play #1 (all): Fixture\tTAGS: []\n    pattern: [all]\n    hosts (1):\n      %s\n"
+)
 
-	result := runConfigsctl(t, tree, "deploy", gatedPlaybookName, "--limit", "plain-host")
-	requireSuccess(t, result, "deploy", gatedPlaybookName, "--limit", "plain-host")
-	if !strings.Contains(result.stderr, "deploy.gate.hosts_skipped hosts=[plain-host]") {
-		t.Fatalf("stderr = %q, want the gate to skip plain-host", result.stderr)
+func writeSplitSecret(secret, between string, args []string) int {
+	if slices.Contains(args, listHostsFlag) {
+		fmt.Printf(listHostsFormat, os.Getenv(splitPlayHostVar))
+		return 0
 	}
-	if strings.Contains(result.stderr, "deploy.gate.plan") {
-		t.Fatalf("stderr = %q, want no plan for plain-host", result.stderr)
+	half := len(secret) / 2
+	_, _ = os.Stdout.WriteString(secret[:half])
+	time.Sleep(splitWritePause)
+	if between != "" {
+		_, _ = os.Stderr.WriteString(between)
+		time.Sleep(splitWritePause)
 	}
-	requireFile(t, playMarker(tree))
+	_, _ = os.Stdout.WriteString(secret[half:] + "\n")
+	return 1
 }
 
-func TestDeployInCheckModeRunsNoPlan(t *testing.T) {
-	tree := newGatedTree(t, true)
+var splitCases = []struct {
+	name    string
+	between string
+}{
+	{name: "stderr between the halves", between: splitStderrText},
+	{name: "stdout only", between: ""},
+}
 
-	result := runConfigsctl(t, tree, "deploy", gatedPlaybookName, "--check")
-	requireSuccess(t, result, "deploy", gatedPlaybookName, "--check")
-	if strings.Contains(result.stderr, "deploy.gate") {
-		t.Fatalf("stderr = %q, want no plan gate in check mode", result.stderr)
+func linkTestBinary(t *testing.T, name string) string {
+	t.Helper()
+	testBinary, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve the test binary: %v", err)
+	}
+	binDir := t.TempDir()
+	if err := os.Symlink(testBinary, filepath.Join(binDir, name)); err != nil {
+		t.Fatalf("link the test binary as %s: %v", name, err)
+	}
+	return binDir + string(os.PathListSeparator) + os.Getenv("PATH")
+}
+
+func requireSplitSecretRedacted(t *testing.T, log, secret, between string) {
+	t.Helper()
+	requireSplitSecretRedactedAs(t, log, secret, between, splitSecretKey)
+}
+
+func requireSplitSecretRedactedAs(t *testing.T, log, secret, between, label string) {
+	t.Helper()
+	half := len(secret) / 2
+	shown := strings.NewReplacer(
+		secret, "<SECRET>", secret[:half], "<SECRET_FIRST_HALF>", secret[half:], "<SECRET_SECOND_HALF>",
+	).Replace(log)
+	if strings.Contains(log, secret[:half]) || strings.Contains(log, secret[half:]) {
+		t.Fatalf("the run log contains part of the secret: %q", shown)
+	}
+	placeholder := "<redacted:" + label + ">\n"
+	if !strings.Contains(log, placeholder) {
+		t.Fatalf("the run log does not contain %q: %q", placeholder, shown)
+	}
+	if !strings.Contains(log, between) {
+		t.Fatalf("the run log does not contain %q: %q", between, shown)
 	}
 }
+
+func registerSplitSecret(t *testing.T, tree configsTree) string {
+	t.Helper()
+	random := make([]byte, splitSecretBytes)
+	if _, err := rand.Read(random); err != nil {
+		t.Fatalf("generate the secret: %v", err)
+	}
+	secret := splitSecretPrefix + hex.EncodeToString(random)
+	vaultFile := filepath.Join(tree.root, "ansible", "inventory", "group_vars", "all", "vault.yml")
+	content, err := ansiblevault.DecryptFile(vaultFile, vaultUnlockText)
+	if err != nil {
+		t.Fatalf("decrypt the vault: %v", err)
+	}
+	if err := ansiblevault.EncryptFile(vaultFile, content+splitSecretKey+": "+secret+"\n", vaultUnlockText); err != nil {
+		t.Fatalf("encrypt the vault: %v", err)
+	}
+	return secret
+}
+
+func workspaceFixture(t *testing.T, name string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", "workspaces", name))
+	if err != nil {
+		t.Fatalf("read workspace fixture %s: %v", name, err)
+	}
+	return string(data)
+}
+
+func independentGatedTree(t *testing.T) configsTree {
+	t.Helper()
+	tree := newGatedTree(t, true)
+	writeFixtureFile(t, filepath.Join(tree.root, settingsName), workspaceFixture(t, "guest-modules.yml"))
+	root := filepath.Join(tree.workspaces, "suburban", "tack")
+	writeFixtureFile(t, filepath.Join(root, "backend.tf"), fmt.Sprintf(localBackend, "tack.tfstate"))
+	writeFixtureFile(t, filepath.Join(root, "main.tf"), workspaceFixture(t, "gate.tf"))
+	writeFixtureFile(t, filepath.Join(root, "item", "main.tf"), gatedItemModule)
+	applyWorkspace(t, tree, "suburban/tack")
+	return tree
+}
+
+const settingsName = "configsctl.yml"

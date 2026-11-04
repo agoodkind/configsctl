@@ -13,10 +13,10 @@ import (
 	"strings"
 
 	"goodkind.io/configsctl/hostlock"
-	"goodkind.io/configsctl/internal/ansible"
 	"goodkind.io/configsctl/internal/dellcredential"
 	"goodkind.io/configsctl/internal/redact"
 	"goodkind.io/configsctl/internal/statemigration"
+	"goodkind.io/configsctl/internal/tofulock"
 	"goodkind.io/configsctl/internal/vault"
 )
 
@@ -35,6 +35,7 @@ type migrationCredentialBinding struct {
 	workspace   statemigration.Workspace
 	scope       migrationCredentialScope
 	certificate [sha256.Size]byte
+	lockTarget  hostlock.Host
 }
 
 type migrationDeployment struct {
@@ -60,7 +61,7 @@ func (credentials migrationCredentials) patterns() []redact.Pattern {
 
 func prepareMigrationCredentials(ctx context.Context, engine *statemigration.Engine, passwordFile string) (migrationCredentials, error) {
 	slog.InfoContext(ctx, "migration.credential.configuration_check_started")
-	bindings, err := migrationCredentialBindings(engine)
+	bindings, err := migrationCredentialBindings(ctx, engine)
 	if err != nil {
 		return migrationCredentials{}, err
 	}
@@ -108,14 +109,14 @@ func prepareMigrationCredentials(ctx context.Context, engine *statemigration.Eng
 			return migrationCredentials{}, err
 		}
 	}
-	result.hosts, err = migrationCredentialHosts(ctx, bindings)
+	result.hosts, err = migrationCredentialHosts(bindings)
 	if err != nil {
 		return migrationCredentials{}, err
 	}
 	return result, nil
 }
 
-func migrationCredentialBindings(engine *statemigration.Engine) ([]migrationCredentialBinding, error) {
+func migrationCredentialBindings(ctx context.Context, engine *statemigration.Engine) ([]migrationCredentialBinding, error) {
 	var bindings []migrationCredentialBinding
 	roots := map[migrationCredentialScope]string{migrationCredentialCutover: engine.Manifest.ConfigurationDirectory, migrationCredentialOriginal: engine.Manifest.RestoreConfigurationDirectory}
 	if len(engine.RestoreWorkspaces) != 0 {
@@ -150,6 +151,10 @@ func migrationCredentialBindings(engine *statemigration.Engine) ([]migrationCred
 			if err != nil {
 				return nil, err
 			}
+			binding.lockTarget, err = migrationCredentialLockTarget(ctx, loaded.Tofu, root, selector, configured.LockHost)
+			if err != nil {
+				return nil, err
+			}
 			bindings = append(bindings, binding)
 		}
 	}
@@ -178,7 +183,7 @@ func migrationBindingWorkspaces(engine *statemigration.Engine, scope migrationCr
 }
 
 func newMigrationCredentialBinding(root, selector string, scope migrationCredentialScope, configured tofuCredentialSettings, workspace statemigration.Workspace) (migrationCredentialBinding, error) {
-	binding := migrationCredentialBinding{root: root, selector: selector, settings: configured, workspace: workspace, scope: scope, certificate: [sha256.Size]byte{}}
+	binding := migrationCredentialBinding{root: root, selector: selector, settings: configured, workspace: workspace, scope: scope, certificate: [sha256.Size]byte{}, lockTarget: hostlock.Host{}}
 	if configured.UsernameVariable == configured.Dell.RotatorPasswordKey || configured.PasswordVariable == configured.Dell.RotatorPasswordKey {
 		return binding, errors.New("the provider credential variables must differ from the rotator vault key")
 	}
@@ -302,26 +307,12 @@ func stripMigrationRotators(engine *statemigration.Engine, bindings []migrationC
 	return nil
 }
 
-func migrationCredentialHosts(ctx context.Context, bindings []migrationCredentialBinding) ([]hostlock.Host, error) {
+func migrationCredentialHosts(bindings []migrationCredentialBinding) ([]hostlock.Host, error) {
 	var result []hostlock.Host
-	inventories := make(map[string]ansible.Inventory)
 	byName := make(map[string]hostlock.Host)
 	byEndpoint := make(map[string]bool)
 	for _, binding := range bindings {
-		inventory, exists := inventories[binding.root]
-		if !exists {
-			var err error
-			inventory, err = ansible.LoadInventory(ctx, binding.root)
-			if err != nil {
-				slog.ErrorContext(ctx, "migration.credential.inventory_failed", "path", binding.root, "err", fmt.Sprintf("%T", err))
-				return nil, fmt.Errorf("resolve the reviewed credential lock inventory: %w", err)
-			}
-			inventories[binding.root] = inventory
-		}
-		if err := requireLockTargets(inventory, []string{binding.settings.LockHost}); err != nil {
-			return nil, err
-		}
-		target := hostlock.Targets(inventory, []string{binding.settings.LockHost})[0]
+		target := binding.lockTarget
 		if previous, exists := byName[target.Name]; exists {
 			if previous != target {
 				return nil, errors.New("the reviewed configurations disagree on the exact credential host lock target")
@@ -338,4 +329,23 @@ func migrationCredentialHosts(ctx context.Context, bindings []migrationCredentia
 	}
 	slices.SortFunc(result, func(a, b hostlock.Host) int { return strings.Compare(a.Name, b.Name) })
 	return result, nil
+}
+
+func migrationCredentialLockTarget(ctx context.Context, tofu tofuSettings, root, selector, name string) (hostlock.Host, error) {
+	key := tofuWorkspaceKey(filepath.Join(tofu.WorkspacesDir, selector))
+	targets := tofu.LockTargets[key]
+	if tofu.ConfigurationRoot != "" {
+		tofu.WorkspacesDir = filepath.Join(root, tofu.WorkspacesDir)
+		var err error
+		targets, err = evaluateNativeConfigurationAt(ctx, tofu, root, filepath.Join(tofu.WorkspacesDir, selector))
+		if err != nil {
+			return hostlock.Host{}, err
+		}
+	}
+	hosts, err := targets.LockHosts(tofulock.Decision{AllHosts: false, Reason: "", Hosts: []string{name}, GuestLocks: nil})
+	if err != nil {
+		slog.ErrorContext(ctx, "migration.credential.lock_target_failed", "host", name, "err", err)
+		return hostlock.Host{}, fmt.Errorf("resolve the reviewed credential lock endpoint: %w", err)
+	}
+	return hosts[0], nil
 }

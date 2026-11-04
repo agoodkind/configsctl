@@ -121,7 +121,15 @@ func within(directory, path string) bool {
 // selected in root. OpenTofu writes the selected name to workspaceFile and
 // uses the default workspace without that file.
 func checkSelectedWorkspace(root, workspace string) error {
-	body, err := os.ReadFile(filepath.Join(root, workspaceFile))
+	return checkSelectedWorkspaceFile(filepath.Join(root, workspaceFile), workspace)
+}
+
+func checkSelectedWorkspaceData(directory, workspace string) error {
+	return checkSelectedWorkspaceFile(filepath.Join(directory, "environment"), workspace)
+}
+
+func checkSelectedWorkspaceFile(path, workspace string) error {
+	body, err := os.ReadFile(path)
 	selected := strings.TrimSpace(string(body))
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
