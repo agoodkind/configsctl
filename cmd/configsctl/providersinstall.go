@@ -335,7 +335,7 @@ func installProvider(ctx context.Context, row pinRow, mirror, archiveDir string,
 	if err := os.MkdirAll(targetDir, sharedDirectoryMode); err != nil {
 		return providerInstallError("create the package directory", targetDir, err)
 	}
-	action, err := publishCandidate(candidate, targetPath, row)
+	action, err := publishCandidate(candidate, memberDigest, targetPath, row)
 	if err != nil {
 		return err
 	}
@@ -574,7 +574,7 @@ func writeCandidate(member io.Reader, runDir, name string) (candidate, digest st
 // publishCandidate hard links the candidate to the target. The link fails
 // when the target exists, which prevents replacement of an installed binary.
 // An identical existing binary stays in place.
-func publishCandidate(candidate, targetPath string, row pinRow) (string, error) {
+func publishCandidate(candidate, memberDigest, targetPath string, row pinRow) (string, error) {
 	linkErr := os.Link(candidate, targetPath)
 	if linkErr == nil {
 		return "installed", nil
@@ -583,15 +583,11 @@ func publishCandidate(candidate, targetPath string, row pinRow) (string, error) 
 		slog.Error("providers.link_failed", "target_path", targetPath, "err", linkErr)
 		return "", fmt.Errorf("the link command failed and the target file does not exist target_path=%s link_error=%w", targetPath, linkErr)
 	}
-	candidateDigest, err := fileSHA256(candidate)
-	if err != nil {
-		return "", err
-	}
 	targetDigest, err := fileSHA256(targetPath)
 	if err != nil {
 		return "", err
 	}
-	if candidateDigest != targetDigest {
+	if memberDigest != targetDigest {
 		return "", fmt.Errorf("a different binary exists at the target; if providers.pin assigns a different release archive to an installed mirror version, give the release a new mirror version in providers.pin; if the target file is damaged or partial, delete it and run the installer again source_address=%s version=%s platform=%s tag=%s target_path=%s",
 			row.source, row.version, row.platform, row.tag, targetPath)
 	}
