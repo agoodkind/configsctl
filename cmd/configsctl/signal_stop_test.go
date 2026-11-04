@@ -170,6 +170,8 @@ func TestNativeConfigurationStopsItsProcessGroupOnSIGTERM(t *testing.T) {
 			installNativeConfiguration(t, tree)
 			root := filepath.Join(tree.workspaces, "suburban", "tack")
 			writeFixtureFile(t, filepath.Join(root, "backend.tf"), readCredentialFixture(t, "backend.tf"))
+			writeFixtureFile(t, filepath.Join(root, "main.tf"), workspaceFixture(t, "gate.tf"))
+			writeFixtureFile(t, filepath.Join(root, "item/main.tf"), gatedItemModule)
 			format := exec.CommandContext(t.Context(), "tofu", "-chdir="+tree.workspaces, "fmt", "-recursive")
 			if output, err := format.CombinedOutput(); err != nil {
 				t.Fatalf("format the native cancellation fixture: %v\n%s", err, output)

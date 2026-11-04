@@ -10,7 +10,7 @@ Run configsctl from the root of a configuration checkout. The selected workspace
 go run goodkind.io/configsctl/cmd/configsctl@latest tofu <workspace> plan
 ```
 
-Run `configsctl lint` to check native configuration formatting and evaluate each workspace's nonsecret input metadata. Explicit file arguments retain the generic template linter. `version` prints the build commit, checkout state, and binary hash.
+Run `configsctl lint` to check native configuration formatting. Roots with resource, data, or module blocks also require nonsecret ownership metadata. The formatter still checks retained backend-only roots, and every mutation still requires ownership metadata. Explicit file arguments retain the generic template linter. `version` prints the build commit, checkout state, and binary hash.
 
 ## Select an OpenTofu workspace
 
@@ -103,6 +103,8 @@ The native root selects only the requested feature module. Initialization, plann
 Native saved-plan applies forward explicit ephemeral `-var` and `-var-file` inputs to OpenTofu. The public runner continues to reject registered secret values in command arguments.
 
 JSON diagnostic files contain redacted output after the command ends. The runner creates each file with mode `0600` and refuses symbolic links. It replaces an existing owned regular file after successful redaction.
+
+Native manual execution preserves the operator's canonical HOME and optional SSH agent socket. The effective user must own HOME, and group or other users cannot have write access. Only inherited `TF_VAR_` inputs declared by the selected root enter the child environment. Sensitive and ephemeral inputs use the existing redactors. Nonsecret declared inputs may contain an empty value. CI and metadata evaluation retain private HOME directories and their existing environment allowlists.
 
 The `tofu.lock_targets.<workspace>.lock_endpoints` setting maps each lock host name to an object with connection fields. The workspace can declare these keys beside `lock_endpoints`:
 

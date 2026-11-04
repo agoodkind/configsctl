@@ -41,11 +41,14 @@ const (
 //
 // Environment is the source environment, such as [os.Environ]. Run reads only
 // PATH, HOME, TMPDIR, LANG, TF_IN_AUTOMATION, and the names in
-// RequiredEnvironment, SecretEnvironment, and SecretFiles from it. Run never
+// RequiredEnvironment, OptionalEnvironment, SecretEnvironment, and SecretFiles from it. Run never
 // adds the parent environment. Run registers SecretEnvironment values and the
 // contents of SecretFiles with the redactor. SecretFiles maps an environment
 // variable name to the absolute path of a private file, and Environment must
 // assign that exact path to the name.
+// OptionalEnvironment explicitly permits named nonsecret variables when present,
+// including an empty value. ManualHome accepts an owned canonical operator HOME
+// without group or other write access; the default requires a private HOME.
 //
 // OutputMode selects the output destination. JSONPath is the new private file
 // for PrivateJSON. RequiredHosts lists the hosts that a mutation requires in
@@ -55,8 +58,11 @@ type Request struct {
 	// DataDirectory isolates module initialization in a private directory.
 	DataDirectory string
 	// ProgressToStderr preserves stdout for the caller's machine-readable output.
-	ProgressToStderr                                          bool
+	ProgressToStderr bool
+	// ManualHome permits an owned canonical operator HOME without group or other write access.
+	ManualHome                                                bool
 	Args, Environment, RequiredEnvironment, SecretEnvironment []string
+	OptionalEnvironment                                       []string
 	SecretFiles                                               map[string]string
 	OutputMode                                                OutputMode
 	JSONPath                                                  string

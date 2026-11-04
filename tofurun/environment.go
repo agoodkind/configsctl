@@ -57,6 +57,13 @@ func buildEnvironment(request Request) (environment, error) {
 	if err := checkOrdinary(assigned); err != nil {
 		return built, err
 	}
+	if request.ManualHome {
+		if err := checkManualHome(assigned[homeVariable]); err != nil {
+			return built, err
+		}
+	} else if err := checkPrivateDirectory(homeVariable, assigned[homeVariable]); err != nil {
+		return built, err
+	}
 	built.tmpdir = assigned[tmpdirVariable]
 	for _, name := range request.RequiredEnvironment {
 		if assigned[name] == "" {
@@ -97,7 +104,7 @@ func declaredVariables(request Request) ([]string, error) {
 		fileNames = append(fileNames, name)
 	}
 	slices.Sort(fileNames)
-	declared := slices.Concat(request.RequiredEnvironment, request.SecretEnvironment, fileNames)
+	declared := slices.Concat(request.RequiredEnvironment, request.OptionalEnvironment, request.SecretEnvironment, fileNames)
 	for index, name := range declared {
 		if err := checkVariableName(name); err != nil {
 			return nil, err
@@ -151,10 +158,8 @@ func checkOrdinary(assigned map[string]string) error {
 	if assigned[automationVariable] != automationValue {
 		return rejection("tofurun.variable_missing", "the environment must set TF_IN_AUTOMATION=1")
 	}
-	for _, name := range []string{homeVariable, tmpdirVariable} {
-		if err := checkPrivateDirectory(name, assigned[name]); err != nil {
-			return err
-		}
+	if err := checkPrivateDirectory(tmpdirVariable, assigned[tmpdirVariable]); err != nil {
+		return err
 	}
 	return nil
 }
