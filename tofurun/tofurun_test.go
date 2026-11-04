@@ -646,6 +646,7 @@ func TestRunRefusesUnsafeRequestsBeforeStartingOpenTofu(t *testing.T) {
 		{name: "plan output through a link", request: modify(keep, planArgs(filepath.Join(f.tmpdir, "link", "plan"))...)},
 		{name: "existing plan output", request: modify(keep, planArgs(existingPlan)...)},
 		{name: "variable argument contains a declared secret", request: modify(keep, planArgs(planPath, "-var=label="+passphraseValue)...)},
+		{name: "saved apply variable contains a declared secret", request: modify(keep, "apply", "-input=false", "-parallelism=1", "-var=session="+passphraseValue, savedPlan), scope: scope},
 		{name: "unlocked apply", request: modify(keep, "apply", "-input=false", "-parallelism=1", "-lock=false", savedPlan), scope: scope},
 		{name: "apply without a saved plan", request: modify(keep, "apply", "-input=false", "-parallelism=1"), scope: scope},
 		{name: "apply without parallelism", request: modify(keep, "apply", "-input=false", savedPlan), scope: scope},

@@ -100,6 +100,10 @@ The native root selects only the requested feature module. Initialization, plann
 
 `configuration_root` and `lock_targets` cannot both appear in the settings. Native output uses the same ownership and endpoint fields as the static settings below. Native configuration workspaces preserve ordinary apply, destroy, variable arguments, refresh-only planning, diagnostic options, and recorded saved-plan applies. A scoped command accepts `-lock=true` and refuses `-lock=false`. The existing static remote-endpoint path retains its explicit argument restrictions.
 
+Native saved-plan applies forward explicit ephemeral `-var` and `-var-file` inputs to OpenTofu. The public runner continues to reject registered secret values in command arguments.
+
+JSON diagnostic files contain redacted output after the command ends. The runner creates each file with mode `0600` and refuses symbolic links. It replaces an existing owned regular file after successful redaction.
+
 The `tofu.lock_targets.<workspace>.lock_endpoints` setting maps each lock host name to an object with connection fields. The workspace can declare these keys beside `lock_endpoints`:
 
 - `module_hosts`

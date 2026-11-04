@@ -63,6 +63,7 @@ var flagRules = map[string]flagRule{
 			"input", parallelismFlag, "no-color", "lock-timeout", lockFlag,
 			"compact-warnings", "concise", "consolidate-errors", "consolidate-warnings", "deprecation",
 			"json", "json-into", "lint", "show-sensitive", "state", "backup", "state-out", "suppress-forget-errors",
+			"var", "var-file",
 		},
 		required: map[string]string{"input": falseValue},
 	},

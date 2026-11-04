@@ -99,3 +99,69 @@ func TestNativeApplyPreservesRefreshOnlyAndDiagnosticOptions(t *testing.T) {
 		})
 	}
 }
+
+func nativeFixtureFile(t *testing.T, name string) string {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Join("testdata", "nativeconfiguration", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
+}
+
+func TestNativeJSONDiagnosticRedactsDeclaredSecrets(t *testing.T) {
+	fixture := newDirectFixture(t, explicitSettings)
+	installNativeConfiguration(t, fixture.tree)
+	root := filepath.Join(fixture.tree.workspaces, "suburban", "tack")
+	writeFixtureFile(t, filepath.Join(root, "diagnostic.tf"), nativeFixtureFile(t, "diagnostic.tf"))
+	diagnostic := filepath.Join(t.TempDir(), "events.json")
+	if err := os.WriteFile(diagnostic, []byte("previous diagnostics\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result := fixture.apply(t, "-auto-approve", "-json-into="+diagnostic)
+	requireSuccess(t, result)
+	body, err := os.ReadFile(diagnostic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(result.stdout+result.stderr+string(body), vaultAlphaValue) {
+		t.Fatal("the console or JSON diagnostic disclosed a declared secret")
+	}
+	if !strings.Contains(string(body), "<redacted:TF_VAR_vault_alpha>") {
+		t.Fatal("the JSON diagnostic did not use the registered redactor")
+	}
+	info, err := os.Stat(diagnostic)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatal("the redacted JSON diagnostic did not replace the prior file with mode 0600")
+	}
+}
+
+func TestNativeSavedPlanPreservesEphemeralCLIInputs(t *testing.T) {
+	for _, option := range []string{"-var", "-var-file"} {
+		t.Run(option, func(t *testing.T) {
+			fixture := newDirectFixture(t, explicitSettings)
+			installNativeConfiguration(t, fixture.tree)
+			root := filepath.Join(fixture.tree.workspaces, "suburban", "tack")
+			writeFixtureFile(t, filepath.Join(root, "main.tf"), nativeFixtureFile(t, "ephemeral-root.tf"))
+			writeFixtureFile(t, filepath.Join(root, "item/main.tf"), nativeFixtureFile(t, "ephemeral-item.tf"))
+			writeFixtureFile(t, filepath.Join(root, "item/ephemeral-session.sh"), nativeFixtureFile(t, "ephemeral-session.sh"))
+			requireSuccess(t, fixture.mutate(t, "plan", "-input=false", "-var=session=planned-session", "-out=session.plan"))
+			arguments := []string{"apply", "-input=false"}
+			expected := "applied-session-cli"
+			if option == "-var" {
+				arguments = append(arguments, "-var=session="+expected)
+			} else {
+				expected = "applied-session-file"
+				variables := filepath.Join(t.TempDir(), "session.tfvars")
+				writeFixtureFile(t, variables, nativeFixtureFile(t, "apply-session.tfvars"))
+				arguments = append(arguments, "-var-file="+variables)
+			}
+			arguments = append(arguments, "session.plan")
+			requireSuccess(t, fixture.mutate(t, arguments...))
+			actual, err := os.ReadFile(filepath.Join(root, "item/session-result.txt"))
+			if err != nil || strings.TrimSpace(string(actual)) != expected {
+				t.Fatalf("saved-plan apply did not receive its resupplied ephemeral value: %v", err)
+			}
+		})
+	}
+}

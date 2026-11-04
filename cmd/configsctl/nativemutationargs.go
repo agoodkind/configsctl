@@ -27,6 +27,7 @@ func nativeMutationArguments(args []string, planPath string) ([]string, []string
 		plan = append(plan, "-destroy")
 	}
 	parallelism := false
+	saved := savedPlanCandidate(args) != ""
 	for index := 1; index < len(args); index++ {
 		argument := args[index]
 		if !strings.HasPrefix(argument, "-") {
@@ -51,6 +52,11 @@ func nativeMutationArguments(args []string, planPath string) ([]string, []string
 		}
 		parallelism = parallelism || name == "parallelism"
 		switch {
+		case name == "var" || name == "var-file":
+			plan = append(plan, argument)
+			if saved {
+				apply = append(apply, argument)
+			}
 		case nativeApplyFlags[name]:
 			apply = append(apply, argument)
 		case nativeSharedFlags[name]:

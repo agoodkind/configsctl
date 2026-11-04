@@ -105,6 +105,7 @@ type prepared struct {
 	environment environment
 	removals    []string
 	scope       *hostlock.Scope
+	diagnostic  *jsonDiagnostic
 }
 
 func prepare(request Request, scope *hostlock.Scope) (*prepared, error) {
@@ -137,9 +138,13 @@ func prepare(request Request, scope *hostlock.Scope) (*prepared, error) {
 	}
 	result := &prepared{
 		request: request, command: parsed, binary: binary, args: args,
-		environment: built, removals: nil, scope: scope,
+		environment: built, removals: nil, scope: scope, diagnostic: nil,
 	}
 	if err := result.copySavedPlan(); err != nil {
+		result.cleanup()
+		return nil, err
+	}
+	if err := result.prepareJSONDiagnostic(); err != nil {
 		result.cleanup()
 		return nil, err
 	}
@@ -180,6 +185,9 @@ func checkFiles(request Request, parsed command, built environment) error {
 
 // cleanup removes the private saved plan copies.
 func (p *prepared) cleanup() {
+	if p.diagnostic != nil {
+		p.diagnostic.cleanup()
+	}
 	for _, path := range p.removals {
 		if err := os.RemoveAll(path); err != nil {
 			slog.Warn("tofurun.cleanup_failed", "path", path, "err", err)
@@ -209,7 +217,8 @@ func (p *prepared) execute(ctx context.Context) (Result, error) {
 	slog.Info("tofurun.command_started", "root", p.request.Root, "workspace", p.request.Workspace,
 		"subcommand", p.command.name, "mutation", p.command.mutates())
 	exitCode, runErr := localrun.Execute(ctx, cmd)
-	closeErr := sink.close(runErr == nil && exitCode == 0)
+	diagnosticErr := p.publishJSONDiagnostic()
+	closeErr := errors.Join(sink.close(runErr == nil && exitCode == 0), diagnosticErr)
 	result := Result{ExitCode: exitCode, LogPath: sink.logPath}
 	if runErr == nil && exitCode < 0 {
 		runErr = fmt.Errorf("%w: OpenTofu %s ended on a signal", ErrIncomplete, p.command.name)
