@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"maps"
 	"path/filepath"
 	"slices"
@@ -73,20 +72,4 @@ func (t tofuSettings) guestPlanOwners() (map[string]guestPlanOwner, error) {
 		}
 	}
 	return owners, nil
-}
-
-func guestWorkspaceRequest(tofu tofuSettings, guest gatedGuest, passwordFile string) (guestPlanRequest, error) {
-	dir, found, err := selectedWorkspaceDir(tofu.WorkspacesDir, guest.workspace)
-	if err != nil {
-		return guestPlanRequest{}, err
-	}
-	if !found {
-		return guestPlanRequest{}, fmt.Errorf("deployment workspace %s for host %s does not exist", guest.workspace, guest.host)
-	}
-	secretEnv, err := tofuSecretEnv(tofu, dir, defaultVaultFile, passwordFile)
-	if err != nil {
-		slog.Error("deploy.gate.workspace_credentials_failed", "workspace", guest.workspace, "err", err)
-		return guestPlanRequest{}, err
-	}
-	return guestPlanRequest{workspaceDir: dir, env: secretEnv, module: guest.module, output: nil}, nil
 }

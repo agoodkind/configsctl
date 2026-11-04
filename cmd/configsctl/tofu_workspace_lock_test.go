@@ -53,9 +53,8 @@ const independentLockInventory = `all:
 
 func independentLockTree(t *testing.T) configsTree {
 	t.Helper()
-	tree := newGatedTree(t, true)
+	tree := newConfigsTree(t)
 	writeFixtureFile(t, filepath.Join(tree.root, settingsName), independentLockSettings)
-	writeFixtureFile(t, filepath.Join(tree.root, "ansible", "inventory", "hosts.yml"), independentLockInventory)
 	root := filepath.Join(tree.workspaces, "suburban", "tack")
 	writeFixtureFile(t, filepath.Join(root, "backend.tf"), fmt.Sprintf(localBackend, "tack.tfstate"))
 	writeFixtureFile(t, filepath.Join(root, "main.tf"), workspaceFixture(t, "gate.tf"))
@@ -85,15 +84,19 @@ func requireWorkspaceLockRefusal(t *testing.T, tree configsTree, result commandR
 func TestIndependentApplyLocksOnlyItsDeclaredGuest(t *testing.T) {
 	for _, saved := range []bool{false, true} {
 		t.Run(fmt.Sprintf("saved=%t", saved), func(t *testing.T) {
-			tree := independentLockTree(t)
-			args := tofuArgs("suburban/tack", "apply", "-auto-approve", "-input=false", "-target=module.base")
+			fixture := newDirectFixture(t, explicitSettings)
+			installNativeConfiguration(t, fixture.tree)
+			arguments := []string{"apply", "-auto-approve", "-input=false", "-target=module.base"}
 			if saved {
-				plan := tofuArgs("suburban/tack", "plan", "-input=false", "-target=module.base", "-out=guest.plan")
-				requireSuccess(t, runConfigsctl(t, tree, plan...), plan...)
-				args = tofuArgs("suburban/tack", "apply", "-input=false", "guest.plan")
+				requireSuccess(t, fixture.mutate(t, "plan", "-input=false", "-target=module.base", "-out=guest.plan"))
+				arguments = []string{"apply", "-input=false", "guest.plan"}
 			}
-			requireWorkspaceLockRefusal(t, tree, runConfigsctl(t, tree, args...), "guest-alpha")
-			requireNoFile(t, filepath.Join(tree.workspaces, "suburban", "tack", "tack.tfstate"))
+			result := fixture.mutate(t, arguments...)
+			requireSuccess(t, result)
+			if !strings.Contains(result.stderr, "hosts=[guest-alpha]") {
+				t.Fatalf("the native mutation did not select its guest owner: %s", result.stderr)
+			}
+			requireNoFile(t, filepath.Join(fixture.lockDir, "deploy.lock"))
 		})
 	}
 }
@@ -101,44 +104,46 @@ func TestIndependentApplyLocksOnlyItsDeclaredGuest(t *testing.T) {
 func TestIndependentHostAndFirmwareApplyRequireTheirPhysicalHost(t *testing.T) {
 	for _, leaf := range []string{"host", "firmware"} {
 		t.Run(leaf, func(t *testing.T) {
-			tree := independentLockTree(t)
+			fixture := newDirectFixture(t, explicitSettings)
+			installNativeConfiguration(t, fixture.tree)
 			selector := "suburban/" + leaf
-			root := filepath.Join(tree.workspaces, "suburban", leaf)
+			body, err := os.ReadFile(filepath.Join("testdata", "nativeconfiguration", "host-targets.tf"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeFixtureFile(t, filepath.Join(fixture.tree.root, "native", selector, "main.tf"), string(body))
+			root := filepath.Join(fixture.tree.workspaces, "suburban", leaf)
 			writeFixtureFile(t, filepath.Join(root, "backend.tf"), fmt.Sprintf(localBackend, "host.tfstate"))
 			writeFixtureFile(t, filepath.Join(root, "main.tf"), "module \"host\" {\n  source = \"./item\"\n  value = \"host\"\n}\n")
-			writeFixtureFile(t, filepath.Join(root, "item", "main.tf"), lockedItemModule)
-			init := tofuArgs(selector, "init", "-input=false")
-			requireSuccess(t, runConfigsctl(t, tree, init...), init...)
-			publishConfigsTree(t, tree)
-			args := tofuArgs(selector, "apply", "-auto-approve", "-input=false")
-			requireWorkspaceLockRefusal(t, tree, runConfigsctl(t, tree, args...), "hv_alpha")
-			requireNoFile(t, filepath.Join(root, "host.tfstate"))
-			planArgs := tofuArgs(selector, "plan", "-input=false", "-out=host.plan")
-			requireSuccess(t, runConfigsctl(t, tree, planArgs...), planArgs...)
-			show := runConfigsctl(t, tree, tofuArgs(selector, "show", "-json", "host.plan")...)
-			if show.exitCode != 0 {
-				t.Fatal("the native host plan could not be read")
-			}
+			writeFixtureFile(t, filepath.Join(root, "item/main.tf"), lockedItemModule)
+			requireSuccess(t, fixture.mutateWorkspace(t, selector, "init", "-input=false"))
+			requireSuccess(t, fixture.mutateWorkspace(t, selector, "plan", "-input=false", "-out=host.plan"))
+			shown := fixture.mutateWorkspace(t, selector, "show", "-json", "host.plan")
+			requireSuccess(t, shown)
 			targets := tofulock.Targets{ModuleHosts: map[string]string{"module.host": "hv_alpha"}, ModuleKeyHosts: nil, NodeHosts: nil, GuestHosts: nil, LockFreeTypes: nil, LockEndpoints: nil}
-			decision := tofulock.DecideIndependent([]byte(show.stdout), targets)
-			requireRealPlanLock(t, decision, "hv_alpha")
+			requireRealPlanLock(t, tofulock.DecideIndependent([]byte(shown.stdout), targets), "hv_alpha")
+			result := fixture.mutateWorkspace(t, selector, "apply", "-auto-approve", "-input=false")
+			requireSuccess(t, result)
+			if !strings.Contains(result.stderr, "hosts=[hv_alpha]") {
+				t.Fatalf("the native mutation did not lock its physical host: %s", result.stderr)
+			}
+			requireFile(t, filepath.Join(root, "host.tfstate"))
 		})
 	}
 }
 
 func TestIndependentApplyRefusesUnknownOwnership(t *testing.T) {
-	tree := independentLockTree(t)
-	writeFixtureFile(t, filepath.Join(tree.workspaces, "suburban", "tack", "unowned.tf"), "resource \"terraform_data\" \"unowned\" {\n  input = \"unowned\"\n}\n")
-	publishConfigsTree(t, tree)
-	args := tofuArgs("suburban/tack", "apply", "-auto-approve", "-input=false", "-target=terraform_data.unowned")
-	result := runConfigsctl(t, tree, args...)
+	fixture := newDirectFixture(t, explicitSettings)
+	installNativeConfiguration(t, fixture.tree)
+	writeFixtureFile(t, filepath.Join(fixture.tree.workspaces, "suburban/tack/unowned.tf"), "resource \"terraform_data\" \"unowned\" {\n  input = \"unowned\"\n}\n")
+	result := fixture.apply(t, "-auto-approve", "-input=false", "-target=terraform_data.unowned")
 	if result.exitCode == 0 || !strings.Contains(result.stderr, "unknown lock ownership") || !strings.Contains(result.stderr, "terraform_data.unowned matches no lock target") {
 		t.Fatalf("the independent apply did not refuse unknown ownership: %s", result.stderr)
 	}
-	if strings.Contains(result.stderr, "hostlock.acquired") || strings.Contains(result.stderr, "tofu.lock.all_hypervisors") {
-		t.Fatalf("the unknown resource acquired locks: %s", result.stderr)
+	if strings.Contains(result.stderr, "hostlock.acquired") {
+		t.Fatal("the unknown resource acquired locks")
 	}
-	requireNoFile(t, filepath.Join(tree.workspaces, "suburban", "tack", "tack.tfstate"))
+	requireNoFile(t, fixture.stateFile())
 }
 
 func independentUnlockedTree(t *testing.T) configsTree {
@@ -242,24 +247,7 @@ func TestIndependentLockFreeWorkspaceNeedsNoHostMapping(t *testing.T) {
 
 func TestIndependentGuestPlanUsesARealGuestLock(t *testing.T) {
 	tree := independentLockTree(t)
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	platform := runtime.GOOS + "_" + runtime.GOARCH
-	plugin := filepath.Join(home, ".terraform.d", "plugins", "tofu.home.arpa", "agoodkind", "pveguest", "0.1.0", platform, "terraform-provider-pveguest_v0.1.0")
-	if _, err := os.Stat(plugin); errors.Is(err, os.ErrNotExist) {
-		t.Skip("the real pveguest provider must be installed in the local OpenTofu mirror")
-	} else if err != nil {
-		t.Fatal(err)
-	}
-	mirror := filepath.Join(tree.home, ".terraform.d", "plugins", "tofu.home.arpa", "agoodkind", "pveguest", "0.1.0", platform)
-	if err := os.MkdirAll(mirror, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(plugin, filepath.Join(mirror, filepath.Base(plugin))); err != nil {
-		t.Fatal(err)
-	}
+	installGuestProviderMirror(t, tree)
 	root := filepath.Join(tree.workspaces, "suburban", "tack")
 	writeFixtureFile(t, filepath.Join(root, "main.tf"), workspaceFixture(t, "lock-guest.tf"))
 	writeFixtureFile(t, filepath.Join(root, "item", "main.tf"), workspaceFixture(t, "lock-guest-item.tf"))
@@ -291,25 +279,28 @@ func TestIndependentGuestPlanUsesARealGuestLock(t *testing.T) {
 	if unknown := tofulock.DecideIndependent([]byte(shown.stdout), targets); !unknown.AllHosts {
 		t.Fatal("the real guest plan accepted a missing node owner")
 	}
-	apply := tofuArgs("suburban/tack", "apply", "-input=false", "guest.plan")
-	requireWorkspaceLockRefusal(t, tree, runMutationInput(t, tree, "", apply...), "guest-alpha")
-	configuration := independentLockSettings + "    workspaces/suburban/simulator:\n      node_hosts:\n        site: hv_alpha\n"
-	writeFixtureFile(t, filepath.Join(tree.root, settingsName), configuration)
-	simulator := filepath.Join(tree.workspaces, "suburban", "simulator")
-	writeFixtureFile(t, filepath.Join(simulator, "backend.tf"), fmt.Sprintf(localBackend, "simulator.tfstate"))
-	writeFixtureFile(t, filepath.Join(simulator, "main.tf"), workspaceFixture(t, "lock-guest.tf"))
-	writeFixtureFile(t, filepath.Join(simulator, "item", "main.tf"), workspaceFixture(t, "lock-guest-item.tf"))
-	init = tofuArgs("suburban/simulator", "init", "-input=false")
-	requireSuccess(t, runConfigsctl(t, tree, init...), init...)
-	apply = tofuArgs("suburban/simulator", "apply", "-auto-approve", "-input=false", "-refresh=false")
-	routed := runMutationInput(t, tree, "", apply...)
-	if routed.exitCode == 0 || !strings.Contains(routed.stderr, "hosts=[] guest_locks=\"[{Node:site VMID:101 Host:hv_alpha}]\"") || !strings.Contains(routed.stderr, "host hv_alpha from tofu.lock_targets has no ssh lock target") {
-		t.Fatalf("the simulator apply did not require its guest lock through hv_alpha: %s", routed.stderr)
+}
+
+func installGuestProviderMirror(t *testing.T, tree configsTree) {
+	t.Helper()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(routed.stderr, "tofu.lock.all_hypervisors") {
-		t.Fatalf("the simulator apply selected a global host lock: %s", routed.stderr)
+	platform := runtime.GOOS + "_" + runtime.GOARCH
+	plugin := filepath.Join(home, ".terraform.d", "plugins", "tofu.home.arpa", "agoodkind", "pveguest", "0.1.0", platform, "terraform-provider-pveguest_v0.1.0")
+	if _, err := os.Stat(plugin); errors.Is(err, os.ErrNotExist) {
+		t.Skip("the real pveguest provider must be installed in the local OpenTofu mirror")
+	} else if err != nil {
+		t.Fatal(err)
 	}
-	requireNoFile(t, filepath.Join(simulator, "simulator.tfstate"))
+	mirror := filepath.Join(tree.home, ".terraform.d", "plugins", "tofu.home.arpa", "agoodkind", "pveguest", "0.1.0", platform)
+	if err := os.MkdirAll(mirror, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(plugin, filepath.Join(mirror, filepath.Base(plugin))); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestIndependentApplyPreservesVariableFlags(t *testing.T) {

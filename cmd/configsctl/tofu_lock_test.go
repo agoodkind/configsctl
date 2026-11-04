@@ -2,6 +2,7 @@ package main_test
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -53,21 +54,21 @@ const lockTargetsSettings = `  lock_targets:
         module.beta: hv_beta
 `
 
-func newLockedTree(t *testing.T) configsTree {
+func newLockedFixture(t *testing.T) explicitFixture {
 	t.Helper()
-	tree := newConfigsTree(t)
-	writeFixtureFile(t, filepath.Join(tree.root, "configsctl.yml"), settingsContent+lockTargetsSettings)
-	locked := filepath.Join(tree.workspaces, "locked")
+	fixture := newDirectFixture(t, explicitSettings)
+	installNativeConfiguration(t, fixture.tree)
+	body, err := os.ReadFile(filepath.Join("testdata", "nativeconfiguration", "locked-targets.tf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFixtureFile(t, filepath.Join(fixture.tree.root, "native/locked/main.tf"), string(body))
+	locked := filepath.Join(fixture.tree.workspaces, "locked")
 	writeFixtureFile(t, filepath.Join(locked, "backend.tf"), fmt.Sprintf(localBackend, "locked.tfstate"))
 	writeFixtureFile(t, filepath.Join(locked, "main.tf"), lockedWorkspace)
-	writeFixtureFile(t, filepath.Join(locked, "item", "main.tf"), lockedItemModule)
-	writeFixtureFile(t, filepath.Join(tree.root, "ansible", "ansible.cfg"), lockedAnsibleConfig)
-	writeFixtureFile(t, filepath.Join(tree.root, "ansible", "inventory", "hosts.yml"), lockedInventory)
-
-	initArgs := tofuArgs("locked", "init", "-input=false")
-	requireSuccess(t, runConfigsctl(t, tree, initArgs...), initArgs...)
-	publishConfigsTree(t, tree)
-	return tree
+	writeFixtureFile(t, filepath.Join(locked, "item/main.tf"), lockedItemModule)
+	requireSuccess(t, fixture.mutateWorkspace(t, "locked", "init", "-input=false"))
+	return fixture
 }
 
 func planTarget(t *testing.T, tree configsTree, module, planFile string) {
@@ -89,150 +90,54 @@ func requireNoPlanCopies(t *testing.T, tree configsTree) {
 }
 
 func TestTofuApplyOfSavedPlanLocksTheDeclaredHost(t *testing.T) {
-	requireTofu(t)
-	cases := map[string][]string{
-		"input flag":        {"-input=false", "alpha.tfplan"},
-		"auto-approve flag": {"-auto-approve", "alpha.tfplan"},
-	}
-	for name, applyArgs := range cases {
-		t.Run(name, func(t *testing.T) {
-			tree := newLockedTree(t)
-			planTarget(t, tree, "module.alpha", "alpha.tfplan")
-
-			args := append([]string{"tofu", "locked", "apply"}, applyArgs...)
-			result := runConfigsctl(t, tree, args...)
-			if result.exitCode == 0 {
-				t.Fatalf("Apply succeeded. The test expected a refusal for hv_alpha without an ssh lock target.\nstderr: %s", result.stderr)
+	for _, flags := range [][]string{{"-input=false"}, {"-auto-approve"}} {
+		t.Run(flags[0], func(t *testing.T) {
+			fixture := newLockedFixture(t)
+			planTarget(t, fixture.tree, "module.alpha", "alpha.tfplan")
+			arguments := append([]string{"apply"}, flags...)
+			arguments = append(arguments, "alpha.tfplan")
+			result := fixture.mutateWorkspace(t, "locked", arguments...)
+			requireSuccess(t, result)
+			if !strings.Contains(result.stderr, "hosts=[hv_alpha]") {
+				t.Fatalf("the saved plan did not select its native owner: %s", result.stderr)
 			}
-			if !strings.Contains(result.stderr, "tofu.lock.plan_hosts") || !strings.Contains(result.stderr, "hosts=[hv_alpha]") {
-				t.Fatalf("stderr = %q, want the plan lock set [hv_alpha]", result.stderr)
-			}
-			if !strings.Contains(result.stderr, "host hv_alpha from tofu.lock_targets has no ssh lock target") {
-				t.Fatalf("stderr = %q, want the refusal for hv_alpha", result.stderr)
-			}
-			requireNoPlanCopies(t, tree)
-			requireNoFile(t, filepath.Join(tree.workspaces, "locked", "locked.tfstate"))
+			requireNoFile(t, filepath.Join(fixture.lockDir, "deploy.lock"))
+			requireFile(t, filepath.Join(fixture.tree.workspaces, "locked/locked.tfstate"))
 		})
 	}
 }
 
-func TestTofuApplyOfUnmatchedPlanLocksEveryHypervisor(t *testing.T) {
-	requireTofu(t)
-	tree := newLockedTree(t)
-	planTarget(t, tree, "module.gamma", "gamma.tfplan")
-
-	args := tofuArgs("locked", "apply", "-input=false", "gamma.tfplan")
-	result := runConfigsctl(t, tree, args...)
-	requireSuccess(t, result, args...)
-	if !strings.Contains(result.stderr, "tofu.lock.all_hypervisors") || !strings.Contains(result.stderr, "matches no lock target") {
-		t.Fatalf("stderr = %q, want the fallback to every hypervisor", result.stderr)
+func TestTofuApplyOfUnmatchedPlanRefusesUndeclaredOwnership(t *testing.T) {
+	fixture := newLockedFixture(t)
+	planTarget(t, fixture.tree, "module.gamma", "gamma.tfplan")
+	result := fixture.mutateWorkspace(t, "locked", "apply", "-input=false", "gamma.tfplan")
+	if result.exitCode == 0 || !strings.Contains(result.stderr, "unknown lock ownership") {
+		t.Fatalf("the saved plan accepted undeclared ownership: %s", result.stderr)
 	}
-	requireNoPlanCopies(t, tree)
-	requireFile(t, filepath.Join(tree.workspaces, "locked", "locked.tfstate"))
+	if strings.Contains(result.stderr, "hostlock.acquired") {
+		t.Fatal("the unmatched saved plan acquired locks")
+	}
+	requireNoFile(t, filepath.Join(fixture.tree.workspaces, "locked/locked.tfstate"))
 }
 
 func TestTofuApplyOfMissingSavedPlanIsRefusedBeforeLocking(t *testing.T) {
-	requireTofu(t)
-	tree := newLockedTree(t)
-
-	result := runConfigsctl(t, tree, tofuArgs("locked", "apply", "-auto-approve", "missing.plan")...)
-	if result.exitCode == 0 {
-		t.Fatalf("Apply succeeded. The test expected a refusal for the missing saved plan.\nstderr: %s", result.stderr)
-	}
-	missingPath := filepath.Join("workspaces", "locked", "missing.plan")
-	if !strings.Contains(result.stderr, "read the saved plan "+missingPath) ||
-		!strings.Contains(result.stderr, "no such file or directory") {
-		t.Fatalf("stderr = %q, want the stat error for %s", result.stderr, missingPath)
-	}
-	for _, fragment := range []string{"hostlock.acquired", "tofu.lock.plan_copied", "tofu.lock.show_failed"} {
-		if strings.Contains(result.stderr, fragment) {
-			t.Fatalf("stderr = %q, want no %s", result.stderr, fragment)
-		}
-	}
-}
-
-func TestTofuApplyWithVarFileValueLocksEveryHypervisor(t *testing.T) {
-	requireTofu(t)
-	tree := newLockedTree(t)
-	writeFixtureFile(t, filepath.Join(tree.workspaces, "locked", "extra.tfvars"), "# no variables\n")
-	publishConfigsTree(t, tree)
-
-	args := tofuArgs("locked", "apply", "-auto-approve", "-input=false", "-var-file", "extra.tfvars")
-	result := runConfigsctl(t, tree, args...)
-	requireSuccess(t, result, args...)
-	if !strings.Contains(result.stderr, "the apply has no saved plan") {
-		t.Fatalf("stderr = %q, want the fallback for an apply without a saved plan", result.stderr)
-	}
-	if strings.Contains(result.stderr, "tofu.lock.plan_copied") || strings.Contains(result.stderr, "tofu.lock.show_failed") {
-		t.Fatalf("stderr = %q, want no tofu show of extra.tfvars", result.stderr)
-	}
-	if !strings.Contains(result.stderr, `hostlock.targets_skipped hosts="[hv_alpha hv_beta]"`) {
-		t.Fatalf("stderr = %q, want the lock set [hv_alpha hv_beta]", result.stderr)
-	}
-	requireFile(t, filepath.Join(tree.workspaces, "locked", "locked.tfstate"))
-}
-
-const lockOnlyInventory = `all:
-  children:
-    proxmox_servers:
-      hosts:
-        hv_alpha:
-          ansible_connection: local
-    tofu_lock_hosts:
-      hosts:
-        lock_only:
-          ansible_connection: local
-`
-
-const lockOnlyTargetsSettings = `  lock_targets:
-    workspaces/locked:
-      module_hosts:
-        module.alpha: lock_only
-`
-
-func newLockOnlyTree(t *testing.T) configsTree {
-	t.Helper()
-	tree := newLockedTree(t)
-	writeFixtureFile(t, filepath.Join(tree.root, "configsctl.yml"), settingsContent+lockOnlyTargetsSettings)
-	writeFixtureFile(t, filepath.Join(tree.root, "ansible", "inventory", "hosts.yml"), lockOnlyInventory)
-	publishConfigsTree(t, tree)
-	return tree
-}
-
-func TestTofuApplyWithoutSavedPlanRefusesAnUntargetedLockOnlyHost(t *testing.T) {
-	requireTofu(t)
-	tree := newLockOnlyTree(t)
-
-	result := runConfigsctl(t, tree, tofuArgs("locked", "apply", "-auto-approve", "-input=false")...)
-	if result.exitCode == 0 {
-		t.Fatalf("Apply succeeded. The test expected a refusal for lock_only without an ssh lock target.\nstderr: %s", result.stderr)
-	}
-	if !strings.Contains(result.stderr, `hostlock.targets_skipped hosts="[hv_alpha lock_only]"`) {
-		t.Fatalf("stderr = %q, want the lock set [hv_alpha lock_only]", result.stderr)
-	}
-	if !strings.Contains(result.stderr, "host lock_only from inventory group tofu_lock_hosts has no ssh lock target") {
-		t.Fatalf("stderr = %q, want the refusal for lock_only from tofu_lock_hosts", result.stderr)
+	fixture := newLockedFixture(t)
+	result := fixture.mutateWorkspace(t, "locked", "apply", "-auto-approve", "missing.plan")
+	if result.exitCode == 0 || !strings.Contains(result.stderr, "read the saved plan") {
+		t.Fatalf("the CLI did not refuse the missing saved plan: %s", result.stderr)
 	}
 	if strings.Contains(result.stderr, "hostlock.acquired") {
-		t.Fatalf("stderr = %q, want no lock before the refusal", result.stderr)
+		t.Fatal("the missing saved plan acquired locks")
 	}
-	requireNoFile(t, filepath.Join(tree.workspaces, "locked", "locked.tfstate"))
 }
 
-func TestTofuApplyOfSavedPlanSelectsALockOnlyTarget(t *testing.T) {
-	requireTofu(t)
-	tree := newLockOnlyTree(t)
-	planTarget(t, tree, "module.alpha", "alpha.tfplan")
-
-	result := runConfigsctl(t, tree, tofuArgs("locked", "apply", "-input=false", "alpha.tfplan")...)
-	if result.exitCode == 0 {
-		t.Fatalf("Apply succeeded. The test expected a refusal for lock_only without an ssh lock target.\nstderr: %s", result.stderr)
+func TestTofuApplyWithVarFilePreservesTheNativePlanAndDeclaredLocks(t *testing.T) {
+	fixture := newLockedFixture(t)
+	writeFixtureFile(t, filepath.Join(fixture.tree.workspaces, "locked/extra.tfvars"), "# The fixture does not declare variables.\n")
+	result := fixture.mutateWorkspace(t, "locked", "apply", "-auto-approve", "-input=false", "-var-file", "extra.tfvars", "-target=module.alpha")
+	requireSuccess(t, result)
+	if !strings.Contains(result.stderr, "hosts=[hv_alpha]") {
+		t.Fatalf("the variable-file apply did not select its declared owner: %s", result.stderr)
 	}
-	if !strings.Contains(result.stderr, "tofu.lock.plan_hosts") || !strings.Contains(result.stderr, "hosts=[lock_only]") {
-		t.Fatalf("stderr = %q, want the plan lock set [lock_only]", result.stderr)
-	}
-	if !strings.Contains(result.stderr, "host lock_only from tofu.lock_targets has no ssh lock target") {
-		t.Fatalf("stderr = %q, want the refusal for lock_only", result.stderr)
-	}
-	requireNoFile(t, filepath.Join(tree.workspaces, "locked", "locked.tfstate"))
+	requireFile(t, filepath.Join(fixture.tree.workspaces, "locked/locked.tfstate"))
 }

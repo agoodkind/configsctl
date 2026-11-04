@@ -80,7 +80,11 @@ func newDirectFixture(t *testing.T, settings string) explicitFixture {
 func newFixture(t *testing.T, settings string, observed bool) explicitFixture {
 	t.Helper()
 	requireTofu(t)
-	tree := newConfigsTree(t)
+	return newFixtureWithTree(t, settings, observed, newConfigsTree(t))
+}
+
+func newFixtureWithTree(t *testing.T, settings string, observed bool, tree configsTree) explicitFixture {
+	t.Helper()
 	writeFixtureFile(t, filepath.Join(tree.root, settingsName), explicitSettings)
 	root := filepath.Join(tree.workspaces, "suburban", "tack")
 	writeFixtureFile(t, filepath.Join(root, "backend.tf"), fmt.Sprintf(localBackend, "tack.tfstate"))
@@ -147,13 +151,18 @@ func (f explicitFixture) apply(t *testing.T, args ...string) commandResult {
 // mutate runs "configsctl tofu suburban/tack" with the given OpenTofu arguments.
 func (f explicitFixture) mutate(t *testing.T, args ...string) commandResult {
 	t.Helper()
+	return f.mutateWorkspace(t, explicitWorkspace, args...)
+}
+
+func (f explicitFixture) mutateWorkspace(t *testing.T, workspace string, args ...string) commandResult {
+	t.Helper()
 	publishConfigsTree(t, f.tree)
 	path := f.binDir + string(os.PathListSeparator) + "/usr/bin" + string(os.PathListSeparator) + "/bin"
 	tempDir := filepath.Join(f.tree.root, "tmp")
 	if err := os.MkdirAll(tempDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	commandArgs := tofuArgs(explicitWorkspace, args...)
+	commandArgs := tofuArgs(workspace, args...)
 	command := exec.CommandContext(t.Context(), configsctlBinary, commandArgs...)
 	command.Dir = f.tree.root
 	command.Env = append([]string{
@@ -475,16 +484,14 @@ func TestTofuMutationRefusesTheInventoryLockPath(t *testing.T) {
 	}
 }
 
-func TestSettingsRefuseEndpointsWithACredential(t *testing.T) {
+func TestEndpointCredentialRequiresEphemeralInputsBeforeAuthentication(t *testing.T) {
 	fixture := newDirectFixture(t, explicitSettings+explicitCredentialSettings)
 	result := fixture.mutate(t, "plan", "-input=false")
-	if result.exitCode == 0 {
-		t.Fatalf("configsctl loaded settings with endpoints and a credential: %s", result.stderr)
+	if result.exitCode == 0 || !strings.Contains(result.stderr, "credential variable deployment_user does not exist") {
+		t.Fatalf("the endpoint credential accepted missing ephemeral inputs: %s", result.stderr)
 	}
-	for _, fragment := range []string{"workspaces/suburban/tack", "lock_endpoints", "tofu.credentials"} {
-		if !strings.Contains(result.stderr, fragment) {
-			t.Fatalf("the refusal omitted %q: %s", fragment, result.stderr)
-		}
+	if strings.Contains(result.stderr, "hostlock.acquired") {
+		t.Fatal("the invalid endpoint credential acquired a host lock")
 	}
 	requireOpenTofuNotStarted(t, result)
 }

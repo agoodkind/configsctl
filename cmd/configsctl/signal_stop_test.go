@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -41,6 +42,7 @@ type signalRun struct {
 	stderr  *bytes.Buffer
 	standIn int
 	worker  int
+	tempDir string
 }
 
 // startSignalRun starts configsctl in a new session with the named stand-ins
@@ -65,6 +67,16 @@ func startSignalRun(t *testing.T, tree configsTree, standIns []string, extraEnv 
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(tempDir) })
 	pidFile := filepath.Join(t.TempDir(), "child.pids")
+	writeFixtureFile(t, filepath.Join(binDir, "pids-path"), pidFile+"\n")
+	if slices.Contains(standIns, "tofu") {
+		realTofu, err := exec.LookPath("tofu")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(realTofu, filepath.Join(binDir, "real-tofu")); err != nil {
+			t.Fatal(err)
+		}
+	}
 	ctx, cancel := context.WithTimeout(t.Context(), signalStartWait+signalExitWait)
 	t.Cleanup(cancel)
 	command := exec.CommandContext(ctx, configsctlBinary, args...)
@@ -76,7 +88,7 @@ func startSignalRun(t *testing.T, tree configsTree, standIns []string, extraEnv 
 		"FIXTURE_PIDS=" + pidFile,
 	}, extraEnv...)
 	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	run := signalRun{command: command, exited: make(chan error, 1), stderr: &bytes.Buffer{}, standIn: 0, worker: 0}
+	run := signalRun{command: command, exited: make(chan error, 1), stderr: &bytes.Buffer{}, standIn: 0, worker: 0, tempDir: tempDir}
 	command.Stdout = &bytes.Buffer{}
 	command.Stderr = run.stderr
 	if err := command.Start(); err != nil {
@@ -144,26 +156,34 @@ func stopSignalRun(t *testing.T, run signalRun, wantError string) {
 	requireProcessGone(t, run.worker)
 }
 
-func TestDeployStopsThePlayAndReleasesTheLockOnSIGTERM(t *testing.T) {
-	if _, err := exec.LookPath("ansible-inventory"); err != nil {
-		t.Skip("ansible-inventory is not installed")
-	}
-	tree := newConfigsTree(t)
-	writeFixtureFile(t, filepath.Join(tree.root, "ansible", "ansible.cfg"), lockedAnsibleConfig)
-	writeFixtureFile(t, filepath.Join(tree.root, "ansible", "inventory", "hosts.yml"), signalInventory)
-	writeFixtureFile(t, filepath.Join(tree.root, "ansible", "playbooks", signalPlaybookName+".yml"), signalPlaybook)
-	lockDir := t.TempDir()
-	extraEnv := []string{"FIXTURE_PLAY_HOST=" + signalHost, "FIXTURE_LOCK_DIR=" + lockDir}
-
-	run := startSignalRun(t, tree, []string{"ansible-playbook", "ssh"}, extraEnv, "deploy", signalPlaybookName)
-	requireFile(t, filepath.Join(lockDir, signalLockFile))
-	stopSignalRun(t, run, "deploy "+signalPlaybookName+" stopped on a signal: terminated signal received")
-	requireNoFile(t, filepath.Join(lockDir, signalLockFile))
-}
-
 func TestTofuStopsItsProcessGroupOnSIGTERM(t *testing.T) {
 	tree := newConfigsTree(t)
 
 	run := startSignalRun(t, tree, []string{"tofu"}, nil, "tofu", "alpha", "plan")
 	stopSignalRun(t, run, "tofu stopped: terminated signal received")
+}
+
+func TestNativeConfigurationStopsItsProcessGroupOnSIGTERM(t *testing.T) {
+	for _, command := range []string{"tofu", "lint"} {
+		t.Run(command, func(t *testing.T) {
+			tree := newConfigsTree(t)
+			installNativeConfiguration(t, tree)
+			root := filepath.Join(tree.workspaces, "suburban", "tack")
+			writeFixtureFile(t, filepath.Join(root, "backend.tf"), readCredentialFixture(t, "backend.tf"))
+			format := exec.CommandContext(t.Context(), "tofu", "-chdir="+tree.workspaces, "fmt", "-recursive")
+			if output, err := format.CombinedOutput(); err != nil {
+				t.Fatalf("format the native cancellation fixture: %v\n%s", err, output)
+			}
+			arguments := []string{command}
+			if command == "tofu" {
+				arguments = append(arguments, "suburban/tack", "plan")
+			}
+			run := startSignalRun(t, tree, []string{"tofu"}, nil, arguments...)
+			stopSignalRun(t, run, "evaluate native configuration")
+			leftovers, err := filepath.Glob(filepath.Join(run.tempDir, "configsctl-configuration-*"))
+			if err != nil || len(leftovers) > 0 {
+				t.Fatalf("native evaluation retained its private directory: %v, %v", leftovers, err)
+			}
+		})
+	}
 }

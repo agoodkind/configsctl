@@ -645,7 +645,8 @@ func TestRunRefusesUnsafeRequestsBeforeStartingOpenTofu(t *testing.T) {
 		{name: "plan output outside TMPDIR", request: modify(keep, planArgs(filepath.Join(f.root, "plan"))...)},
 		{name: "plan output through a link", request: modify(keep, planArgs(filepath.Join(f.tmpdir, "link", "plan"))...)},
 		{name: "existing plan output", request: modify(keep, planArgs(existingPlan)...)},
-		{name: "plan with a variable argument", request: modify(keep, planArgs(planPath, "-var=label=other")...)},
+		{name: "variable argument contains a declared secret", request: modify(keep, planArgs(planPath, "-var=label="+passphraseValue)...)},
+		{name: "saved apply variable contains a declared secret", request: modify(keep, "apply", "-input=false", "-parallelism=1", "-var=session="+passphraseValue, savedPlan), scope: scope},
 		{name: "unlocked apply", request: modify(keep, "apply", "-input=false", "-parallelism=1", "-lock=false", savedPlan), scope: scope},
 		{name: "apply without a saved plan", request: modify(keep, "apply", "-input=false", "-parallelism=1"), scope: scope},
 		{name: "apply without parallelism", request: modify(keep, "apply", "-input=false", savedPlan), scope: scope},
@@ -686,6 +687,19 @@ func TestRunRefusesUnsafeRequestsBeforeStartingOpenTofu(t *testing.T) {
 		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("check that the refused plan %s does not exist: %v", path, err)
 		}
+	}
+	requireNoState(t, f)
+}
+
+func TestRunChecksTheWorkspaceInItsPrivateDataDirectory(t *testing.T) {
+	f := newFixture(t, encryptedRoot)
+	f.initialize(t)
+	request := f.request(planArgs(filepath.Join(f.tmpdir, "private-data.plan"))...)
+	request.DataDirectory = privateDirectory(t)
+	writeFile(t, filepath.Join(request.DataDirectory, "environment"), "different")
+	_, err := tofurun.Run(t.Context(), request, nil)
+	if !errors.Is(err, tofurun.ErrRejected) || !strings.Contains(err.Error(), `selected workspace is "different"`) {
+		t.Fatalf("Run did not check its private data directory workspace: %v", err)
 	}
 	requireNoState(t, f)
 }

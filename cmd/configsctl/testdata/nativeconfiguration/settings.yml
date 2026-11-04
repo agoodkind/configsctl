@@ -1,0 +1,6 @@
+tofu:
+  workspaces_dir: workspaces
+  configuration_root: native
+  env_key_prefix: fixture_env_
+  guest_modules:
+    suburban/tack: module.base

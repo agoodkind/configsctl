@@ -80,6 +80,12 @@ func buildEnvironment(request Request) (environment, error) {
 			built.values = append(built.values, name+"="+value)
 		}
 	}
+	if request.DataDirectory != "" {
+		if err := checkPrivateDirectory("DataDirectory", request.DataDirectory); err != nil {
+			return built, err
+		}
+		built.values = append(built.values, "TF_DATA_DIR="+request.DataDirectory)
+	}
 	return built, nil
 }
 

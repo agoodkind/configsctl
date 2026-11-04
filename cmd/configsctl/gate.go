@@ -43,6 +43,7 @@ func runGate(_ cmdEnv, args []string) error {
 		Self:              self,
 		Out:               os.Stdout,
 		VaultPasswordFile: passwordFile,
+		ResolveLockTarget: nativeLockTarget,
 	}
 	if err := server.Serve(context.Background(), os.Getenv("SSH_ORIGINAL_COMMAND"), os.Stdin); err != nil {
 		slog.Error("gate.request.refused", "requester", args[1], "err", err)

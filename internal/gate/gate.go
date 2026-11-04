@@ -14,7 +14,6 @@ import (
 	"strings"
 
 	"goodkind.io/configsctl/hostlock"
-	"goodkind.io/configsctl/internal/ansible"
 	"goodkind.io/configsctl/internal/clock"
 	"goodkind.io/configsctl/internal/runid"
 )
@@ -38,6 +37,7 @@ type Server struct {
 	Self              string
 	Out               io.Writer
 	VaultPasswordFile string
+	ResolveLockTarget func(context.Context, string, string, string) (hostlock.Host, error)
 }
 
 type outcome struct {
@@ -251,16 +251,18 @@ func unitState(ctx context.Context, run string) string {
 }
 
 func (s Server) unlock(ctx context.Context, req Request) error {
-	inv, err := ansible.LoadInventory(ctx, s.Repo.Dir)
+	if s.ResolveLockTarget == nil {
+		return errors.New("unlock requires a native lock endpoint resolver")
+	}
+	record, err := s.Runs.Read(req.Run)
 	if err != nil {
-		slog.Error("gate.unlock.inventory_failed", "err", err)
-		return fmt.Errorf("load the inventory for unlock: %w", err)
+		return err
 	}
-	targets := hostlock.Targets(inv, []string{req.Host})
-	if len(targets) == 0 {
-		return fmt.Errorf("host %s has no ssh lock target", req.Host)
+	target, err := s.ResolveLockTarget(ctx, s.Repo.Dir, record.Request.Workspace, req.Host)
+	if err != nil {
+		return err
 	}
-	if err := hostlock.Do(ctx, targets[0], hostlock.Unlock, req.Run, s.Controller); err != nil {
+	if err := hostlock.Do(ctx, target, hostlock.Unlock, req.Run, s.Controller); err != nil {
 		slog.Error("gate.unlock.failed", "host", req.Host, "run", req.Run, "err", err)
 		return fmt.Errorf("unlock %s: %w", req.Host, err)
 	}

@@ -9,14 +9,13 @@ import (
 	"log/slog"
 	"maps"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 
 	"goodkind.io/configsctl/hostlock"
+	"goodkind.io/configsctl/internal/redact"
 	"goodkind.io/configsctl/internal/tofuargs"
 	"goodkind.io/configsctl/internal/tofulock"
 	"goodkind.io/configsctl/tofurun"
@@ -50,11 +49,11 @@ type explicitOptions struct {
 
 func explicitLockTargets(request tofuLockRequest) (tofulock.Targets, bool) {
 	var none tofulock.Targets
-	if len(request.args) == 0 || request.args[0] != string(tofuargs.Apply) {
+	if len(request.args) == 0 {
 		return none, false
 	}
 	targets, declared := request.lockTargets[tofuWorkspaceKey(request.workspaceDir)]
-	if !declared || len(targets.LockEndpoints) == 0 {
+	if !declared || (len(targets.LockEndpoints) == 0 && len(targets.LockFreeTypes) == 0) {
 		return none, false
 	}
 	return targets, true
@@ -73,11 +72,14 @@ func requireExplicitLockPath(tofu tofuSettings, workspaceDir string, args []stri
 		return nil
 	}
 	workspace := tofuWorkspaceKey(workspaceDir)
-	targets := tofu.LockTargets[workspace]
-	if len(targets.LockEndpoints) == 0 {
+	targets, declared := tofu.LockTargets[workspace]
+	if !declared || (len(targets.LockEndpoints) == 0 && len(targets.LockFreeTypes) == 0) {
+		return fmt.Errorf("workspace %s requires native lock_endpoints or lock_free_types; configure tofu.configuration_root", workspace)
+	}
+	if !strictExplicitSettings(tofu, targets) {
 		return nil
 	}
-	reason := explicitRefusalReason(tofu, args, command)
+	reason := explicitRefusalReason(tofu, targets, args, command)
 	if reason == "" {
 		return nil
 	}
@@ -87,6 +89,10 @@ func requireExplicitLockPath(tofu tofuSettings, workspaceDir string, args []stri
 	slog.Error("tofu.mutation.explicit_path_unavailable", "workspace", workspace,
 		"lock_endpoints", endpoints, "command", string(command), "reason", reason, "err", err)
 	return err
+}
+
+func strictExplicitSettings(tofu tofuSettings, targets tofulock.Targets) bool {
+	return tofu.ConfigurationRoot == "" && slices.ContainsFunc(slices.Collect(maps.Values(targets.LockEndpoints)), func(endpoint tofulock.LockEndpoint) bool { return !endpoint.Local })
 }
 
 func requiredCredentialHosts(credential tofuCredentialSettings, usesCredential bool, workspaceDir string, childEnv []string) ([]string, error) {
@@ -102,7 +108,7 @@ func requiredCredentialHosts(credential tofuCredentialSettings, usesCredential b
 // runEndpointHelp runs the OpenTofu help command for apply or destroy in a
 // workspace that declares lock_endpoints. The help command takes no lock and
 // reads no inventory. The first result reports whether it handled the command.
-func runEndpointHelp(env cmdEnv, tofu tofuSettings, workspaceDir string, args, childEnv []string) (bool, error) {
+func runEndpointHelp(ctx context.Context, env cmdEnv, tofu tofuSettings, workspaceDir string, args, childEnv []string) (bool, error) {
 	help := tofuargs.BooleanArgument(args, "help", false) || tofuargs.BooleanArgument(args, "h", false)
 	if !help || !tofuMutates(args) {
 		return false, nil
@@ -110,34 +116,31 @@ func runEndpointHelp(env cmdEnv, tofu tofuSettings, workspaceDir string, args, c
 	if len(tofu.LockTargets[tofuWorkspaceKey(workspaceDir)].LockEndpoints) == 0 {
 		return false, nil
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	return true, executeTofu(ctx, env, workspaceDir, args, args, childEnv)
 }
 
-// validateEndpointCredentials refuses a workspace that declares both
-// lock_endpoints and a credential. The credential path locks through the
-// inventory, which the explicit lock path does not read.
+// validateEndpointCredentials requires the credential host in the declared endpoints.
 func validateEndpointCredentials(tofu tofuSettings) error {
 	for _, workspace := range slices.Sorted(maps.Keys(tofu.LockTargets)) {
 		if len(tofu.LockTargets[workspace].LockEndpoints) == 0 {
 			continue
 		}
-		if _, credential := tofu.Credentials[workspace]; !credential {
+		credential, configured := tofu.Credentials[workspace]
+		if !configured {
 			continue
 		}
-		err := fmt.Errorf("workspace %s declares both tofu.lock_targets lock_endpoints and tofu.credentials; the credential path locks through the inventory", workspace)
-		slog.Error("tofu.settings.endpoints_with_credential", "workspace", workspace, "err", err)
-		return err
+		if _, declared := tofu.LockTargets[workspace].LockEndpoints[credential.LockHost]; !declared {
+			return fmt.Errorf("workspace %s must declare lock_endpoints for credential host %s", workspace, credential.LockHost)
+		}
 	}
 	return nil
 }
 
-func explicitRefusalReason(tofu tofuSettings, args []string, command tofuargs.Command) string {
+func explicitRefusalReason(tofu tofuSettings, targets tofulock.Targets, args []string, command tofuargs.Command) string {
 	switch {
 	case command == tofuargs.Destroy:
 		return "the explicit lock path runs apply only, and destroy would use the inventory lock path"
-	case tofu.GuestModules == nil:
+	case tofu.GuestModules == nil && slices.ContainsFunc(slices.Collect(maps.Values(targets.LockEndpoints)), func(endpoint tofulock.LockEndpoint) bool { return !endpoint.Local }):
 		return "tofu.guest_modules is unset, and the command would use the inventory lock path"
 	case args[0] != string(tofuargs.Apply):
 		return "the command must start with apply, and any other order would use the inventory lock path"
@@ -151,23 +154,35 @@ func explicitRefusalReason(tofu tofuSettings, args []string, command tofuargs.Co
 // applies the recorded plan. It does not read the Ansible inventory or run an
 // Ansible program, and it gives OpenTofu an explicit environment.
 func runExplicitMutation(ctx context.Context, settings tofuSettings, request tofuLockRequest, targets tofulock.Targets, passwordFile string) error {
-	options, err := parseExplicitArguments(request.args)
+	return runPlannedMutation(ctx, settings, request, targets, passwordFile, false)
+}
+
+func runNativeMutation(ctx context.Context, settings tofuSettings, request tofuLockRequest, targets tofulock.Targets, passwordFile string) error {
+	return runPlannedMutation(ctx, settings, request, targets, passwordFile, true)
+}
+
+func runPlannedMutation(ctx context.Context, settings tofuSettings, request tofuLockRequest, targets tofulock.Targets, passwordFile string, native bool) error {
+	_, _, err := mutationCommands(request.args, "", native)
 	if err != nil {
 		return err
 	}
+	ctx, credentialLocks, releaseCredential, err := prepareExplicitCredential(ctx, settings, &request, targets, passwordFile)
+	if err != nil {
+		return err
+	}
+	defer releaseCredential()
 	runner, cleanup, err := newExplicitRunner(settings, request, passwordFile)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
-	planArgs := explicitPlanArguments(options, runner.planPath)
-	planResult, err := runner.run(ctx, "plan", planArgs, tofurun.RedactedProgress, "", nil, nil)
+	planArgs, applyArgs, err := mutationCommands(request.args, runner.planPath, native)
 	if err != nil {
 		return err
 	}
-	changed := planResult.ExitCode == tofuPendingExitCode
-	if planResult.ExitCode != 0 && !changed {
-		return tofuFailure(ctx, &exitCodeError{code: planResult.ExitCode}, planResult.LogPath)
+	changed, err := prepareMutationPlan(ctx, runner, request, planArgs)
+	if err != nil {
+		return err
 	}
 	plannedDigest, err := planDigest(runner.planPath)
 	if err != nil {
@@ -193,7 +208,8 @@ func runExplicitMutation(ctx context.Context, settings tofuSettings, request tof
 	}
 	names := lockHostNames(hosts)
 	slog.Info("tofu.mutation.explicit_lock_hosts", "workspace", request.workspaceDir, "hosts", names)
-	lockedCtx, scope, release, err := acquireExplicitLocks(ctx, hosts)
+	names = slices.Compact(slices.Sorted(slices.Values(append(names, request.requiredHosts...))))
+	lockedCtx, scope, release, err := lockPlannedMutation(ctx, hosts, credentialLocks)
 	if err != nil {
 		return err
 	}
@@ -201,7 +217,6 @@ func runExplicitMutation(ctx context.Context, settings tofuSettings, request tof
 	if err := requirePlanDigest(runner.planPath, plannedDigest); err != nil {
 		return err
 	}
-	applyArgs := explicitApplyArguments(options, runner.planPath)
 	applyResult, err := runner.run(lockedCtx, "apply", applyArgs, tofurun.RedactedProgress, "", scope, names)
 	if err != nil {
 		return err
@@ -210,6 +225,92 @@ func runExplicitMutation(ctx context.Context, settings tofuSettings, request tof
 		return tofuFailure(lockedCtx, &exitCodeError{code: applyResult.ExitCode}, applyResult.LogPath)
 	}
 	return nil
+}
+
+func mutationCommands(args []string, path string, native bool) ([]string, []string, error) {
+	if native {
+		return nativeMutationArguments(args, path)
+	}
+	options, err := parseExplicitArguments(args)
+	if err != nil {
+		return nil, nil, err
+	}
+	return explicitPlanArguments(options, path), explicitApplyArguments(options, path), nil
+}
+
+func prepareMutationPlan(ctx context.Context, runner explicitRunner, request tofuLockRequest, args []string) (bool, error) {
+	if candidate := savedPlanCandidate(request.args); candidate != "" {
+		source := workspacePath(request.workspaceDir, candidate)
+		if err := copyPrivateFile(source, runner.planPath); err != nil {
+			return false, err
+		}
+		return false, requireTofuPlanSource(ctx, request.workspaceDir, runner.planPath)
+	}
+	result, err := runner.run(ctx, "plan", args, tofurun.RedactedProgress, "", nil, nil)
+	if err != nil {
+		return false, err
+	}
+	changed := result.ExitCode == tofuPendingExitCode
+	if result.ExitCode != 0 && !changed {
+		return false, tofuFailure(ctx, &exitCodeError{code: result.ExitCode}, result.LogPath)
+	}
+	return changed, nil
+}
+
+func prepareExplicitCredential(ctx context.Context, settings tofuSettings, request *tofuLockRequest, targets tofulock.Targets, passwordFile string) (context.Context, *hostlock.Set, func(), error) {
+	credential, configured := settings.Credentials[tofuWorkspaceKey(request.workspaceDir)]
+	if !configured {
+		return ctx, nil, func() {}, nil
+	}
+	decision := tofulock.Decision{AllHosts: false, Reason: "", Hosts: slices.Sorted(maps.Keys(targets.LockEndpoints)), GuestLocks: nil}
+	hosts, err := targets.LockHosts(decision)
+	if err != nil {
+		slog.Error("tofu.credential.lock_targets_failed", "workspace", request.workspaceDir, "err", err)
+		return nil, nil, nil, fmt.Errorf("select credential lock targets: %w", err)
+	}
+	locked, set, release, err := acquireRenewedLocks(ctx, hosts)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	scope, err := set.Scope()
+	if err != nil {
+		release()
+		slog.Error("tofu.credential.scope_failed", "workspace", request.workspaceDir, "err", err)
+		return nil, nil, nil, fmt.Errorf("create the credential lock scope: %w", err)
+	}
+	if err := scope.Check([]string{credential.LockHost}); err != nil {
+		release()
+		slog.Error("tofu.credential.scope_failed", "workspace", request.workspaceDir, "err", err)
+		return nil, nil, nil, fmt.Errorf("check the credential lock scope: %w", err)
+	}
+	var patterns []redact.Pattern
+	request.env, patterns, err = prepareMutationCredential(locked, credential, request.env, passwordFile)
+	if err != nil {
+		release()
+		return nil, nil, nil, err
+	}
+	restore, err := installRedaction(patterns)
+	if err != nil {
+		release()
+		return nil, nil, nil, err
+	}
+	return locked, set, func() { restore(); release() }, nil
+}
+
+func lockPlannedMutation(ctx context.Context, hosts []hostlock.Host, existing *hostlock.Set) (context.Context, *hostlock.Scope, func(), error) {
+	if existing == nil {
+		return acquireExplicitLocks(ctx, hosts)
+	}
+	if err := existing.AcquireAdditional(ctx, hosts); err != nil {
+		slog.Error("tofu.credential.additional_locks_failed", "err", err)
+		return nil, nil, nil, fmt.Errorf("acquire the selected mutation locks: %w", err)
+	}
+	scope, err := existing.Scope()
+	if err != nil {
+		slog.Error("tofu.credential.scope_failed", "err", err)
+		return nil, nil, nil, fmt.Errorf("create the selected mutation lock scope: %w", err)
+	}
+	return ctx, scope, func() {}, nil
 }
 
 // parseExplicitArguments accepts the options of "apply" that the public
@@ -302,6 +403,25 @@ func newExplicitRunner(settings tofuSettings, request tofuLockRequest, passwordF
 	if err != nil {
 		return runner, nil, err
 	}
+	if credential, configured := settings.Credentials[tofuWorkspaceKey(request.workspaceDir)]; configured {
+		rotator := tofuVariablePrefix + credential.Dell.RotatorPasswordKey
+		prepared := make([]string, 0, len(assignments)+2)
+		for _, assignment := range assignments {
+			name, _, _ := strings.Cut(assignment, "=")
+			if name != rotator && name != tofuVariablePrefix+credential.UsernameVariable && name != tofuVariablePrefix+credential.PasswordVariable {
+				prepared = append(prepared, assignment)
+			}
+		}
+		for _, name := range []string{credential.UsernameVariable, credential.PasswordVariable} {
+			key := tofuVariablePrefix + name
+			value := environmentValue(request.env, key)
+			if value == "" {
+				return runner, nil, fmt.Errorf("prepared deployment credential %s is missing", name)
+			}
+			prepared = append(prepared, key+"="+value)
+		}
+		assignments = prepared
+	}
 	binary, err := tofuBinary()
 	if err != nil {
 		return runner, nil, err
@@ -339,6 +459,11 @@ func newExplicitRunner(settings tofuSettings, request tofuLockRequest, passwordF
 		environment = append(environment, "LANG="+language)
 	}
 	required, redacted := splitExplicitAssignments(assignments)
+	if credential, configured := settings.Credentials[tofuWorkspaceKey(request.workspaceDir)]; configured {
+		username := tofuVariablePrefix + credential.UsernameVariable
+		redacted = slices.DeleteFunc(redacted, func(name string) bool { return name == username })
+		required = append(required, username)
+	}
 	runner = explicitRunner{
 		base: tofurun.Request{
 			Binary: binary, Root: root, Workspace: workspace,
@@ -475,16 +600,24 @@ func requirePlanDigest(path string, recorded [sha256.Size]byte) error {
 func acquireExplicitLocks(
 	ctx context.Context, hosts []hostlock.Host,
 ) (locked context.Context, scope *hostlock.Scope, release func(), err error) {
-	set, run, err := acquireLockSet(ctx, hosts)
+	lockedCtx, set, release, err := acquireRenewedLocks(ctx, hosts)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	scope, err = set.Scope()
 	if err != nil {
-		set.ReleaseAll(context.WithoutCancel(ctx))
-		slog.Error("lock.scope_failed", "run", run, "err", err)
+		release()
+		slog.Error("lock.scope_failed", "err", err)
 		return nil, nil, nil, fmt.Errorf("create the host lock scope: %w", err)
 	}
-	lockedCtx, release := keepLocksRenewed(ctx, set)
 	return lockedCtx, scope, release, nil
+}
+
+func acquireRenewedLocks(ctx context.Context, hosts []hostlock.Host) (context.Context, *hostlock.Set, func(), error) {
+	set, _, err := acquireLockSet(ctx, hosts)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	lockedCtx, release := keepLocksRenewed(ctx, set)
+	return lockedCtx, set, release, nil
 }

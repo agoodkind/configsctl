@@ -29,7 +29,7 @@ func TestTofuCredentialRequiresItsHostLockBeforeAuthentication(t *testing.T) {
 	writeFixtureFile(t, filepath.Join(tree.root, "ansible", "inventory", "hosts.yml"), lockedInventory)
 	publishConfigsTree(t, tree)
 	result := runConfigsctl(t, tree, "tofu", "alpha", "plan", "-input=false")
-	if result.exitCode == 0 || !strings.Contains(result.stderr, "host hv_alpha from tofu.lock_targets has no ssh lock target") {
+	if result.exitCode == 0 || !strings.Contains(result.stderr, "host hv_alpha has no declared lock endpoint") {
 		t.Fatalf("the CLI did not require the credential host lock: %s", result.stderr)
 	}
 	if strings.Contains(result.stderr, "iDRAC credential GET") {

@@ -174,7 +174,7 @@ func newConfigsTreeAt(t *testing.T, base string) configsTree {
 		home:       filepath.Join(base, "home"),
 		workspaces: filepath.Join(base, "configs", "workspaces"),
 	}
-	writeFixtureFile(t, filepath.Join(tree.root, "configsctl.yml"), settingsContent)
+	writeFixtureFile(t, filepath.Join(tree.root, "configsctl.yml"), workspaceFixture(t, "native-defaults.yml"))
 
 	writeFixtureFile(t, filepath.Join(tree.workspaces, "backend.tf"), fmt.Sprintf(localBackend, "root.tfstate"))
 	writeFixtureFile(t, filepath.Join(tree.workspaces, "main.tf"), rootWorkspace)

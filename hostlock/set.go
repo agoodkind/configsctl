@@ -46,6 +46,8 @@ type Set struct {
 	lease      Lease
 	stateDir   string
 	mu         sync.Mutex
+	membership sync.Mutex
+	changed    chan struct{}
 	held       []Host
 	deadlines  map[string]time.Time
 	// acquired records that AcquireAll locked every host and wrote the state file.
@@ -68,7 +70,7 @@ func AcquireAll(ctx context.Context, hosts []Host, run, controller string, lease
 	}
 	set := &Set{
 		run: run, controller: controller, lease: lease, stateDir: stateDir,
-		mu: sync.Mutex{}, held: nil, deadlines: map[string]time.Time{},
+		mu: sync.Mutex{}, membership: sync.Mutex{}, changed: make(chan struct{}, 1), held: nil, deadlines: map[string]time.Time{},
 		acquired: false, released: false, lost: nil, renewalDone: nil,
 	}
 	request := command{op: Acquire, run: run, controller: controller, lease: lease.TTL}
@@ -292,13 +294,20 @@ func (s *Set) watchDeadlines(ctx context.Context, report func(error)) {
 			return
 		}
 		if deadline.IsZero() {
-			return
+			select {
+			case <-ctx.Done():
+				return
+			case <-s.changed:
+				continue
+			}
 		}
 		timer := time.NewTimer(deadline.Sub(now))
 		select {
 		case <-ctx.Done():
 			timer.Stop()
 			return
+		case <-s.changed:
+			timer.Stop()
 		case <-timer.C:
 		}
 	}
@@ -306,6 +315,8 @@ func (s *Set) watchDeadlines(ctx context.Context, report func(error)) {
 
 // ReleaseAll deletes every lock file that this run took.
 func (s *Set) ReleaseAll(ctx context.Context) {
+	s.membership.Lock()
+	defer s.membership.Unlock()
 	s.mu.Lock()
 	hosts := s.held
 	s.held = nil

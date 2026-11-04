@@ -33,11 +33,15 @@ func openOutput(request Request, parsed command, built environment) (*output, er
 		slog.Error("tofurun.log_open_failed", "root", request.Root, "err", err)
 		return nil, fmt.Errorf("open the OpenTofu run log: %w", err)
 	}
-	log.Announce("Tofu")
 	console := os.Stdout
-	if request.OutputMode == PrivateJSON {
+	if request.ProgressToStderr || request.OutputMode == PrivateJSON {
 		console = os.Stderr
 	}
+	announcement := os.Stdout
+	if request.ProgressToStderr {
+		announcement = os.Stderr
+	}
+	log.AnnounceTo(announcement, "Tofu")
 	sink := &output{
 		stdout: nil, stderr: nil, logPath: log.Path(), log: log,
 		logStreams: log.Streams(), consoleStreams: runlog.NewStreamPair(console, patterns), json: nil,

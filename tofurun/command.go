@@ -45,7 +45,10 @@ var flagRules = map[string]flagRule{
 	workspaceCommand: {allowed: []string{"no-color"}, required: nil},
 	planCommand: {
 		allowed: []string{
-			"input", "no-color", "detailed-exitcode", parallelismFlag, outFlag, "var-file", lockFlag, "lock-timeout",
+			"input", "no-color", "detailed-exitcode", parallelismFlag, outFlag, "var", "var-file", "target", "replace", "destroy", lockFlag, "lock-timeout", "refresh",
+			"refresh-only", "exclude", "exclude-file", "target-file", "generate-config-out",
+			"compact-warnings", "concise", "consolidate-errors", "consolidate-warnings", "deprecation",
+			"json", "json-into", "lint", "show-sensitive", "state",
 		},
 		required: map[string]string{"input": falseValue, "no-color": trueValue, "detailed-exitcode": trueValue},
 	},
@@ -56,7 +59,12 @@ var flagRules = map[string]flagRule{
 		required: map[string]string{"check": trueValue},
 	},
 	applyCommand: {
-		allowed:  []string{"input", parallelismFlag, "no-color", "lock-timeout"},
+		allowed: []string{
+			"input", parallelismFlag, "no-color", "lock-timeout", lockFlag,
+			"compact-warnings", "concise", "consolidate-errors", "consolidate-warnings", "deprecation",
+			"json", "json-into", "lint", "show-sensitive", "state", "backup", "state-out", "suppress-forget-errors",
+			"var", "var-file",
+		},
 		required: map[string]string{"input": falseValue},
 	},
 }
@@ -156,13 +164,16 @@ func (c command) check(request Request, scoped bool) error {
 			return rejection("tofurun.flag_missing", fmt.Sprintf("OpenTofu %s requires -%s=%s", c.name, name, want))
 		}
 	}
+	if err := c.checkBackendLock(scoped); err != nil {
+		return err
+	}
 	switch c.name {
 	case workspaceCommand:
 		if len(c.positionals) != 1 || c.positionals[0] != request.Workspace {
 			return rejection("tofurun.workspace_refused", fmt.Sprintf("workspace select requires exactly the workspace %q", request.Workspace))
 		}
 	case planCommand:
-		if err := c.checkPlan(scoped); err != nil {
+		if err := c.checkPlan(); err != nil {
 			return err
 		}
 	case showCommand:
@@ -193,12 +204,16 @@ func (c command) check(request Request, scoped bool) error {
 // lock scope and -lock are present, checkPlan requires the -lock value to
 // parse as true with [strconv.ParseBool]. OpenTofu uses [strconv.ParseBool]
 // for boolean flags.
-func (c command) checkPlan(scoped bool) error {
+func (c command) checkBackendLock(scoped bool) error {
 	if lock, found := c.value(lockFlag); scoped && found {
 		if enabled, err := strconv.ParseBool(lock); err != nil || !enabled {
-			return rejection("tofurun.lock_refused", "a plan with a host lock scope requires backend locking")
+			return rejection("tofurun.lock_refused", "a command with a host lock scope requires backend locking")
 		}
 	}
+	return nil
+}
+
+func (c command) checkPlan() error {
 	if len(c.positionals) != 0 {
 		return rejection("tofurun.positional_refused", "OpenTofu plan does not accept a positional argument")
 	}

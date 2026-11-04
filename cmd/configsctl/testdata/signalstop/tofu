@@ -4,6 +4,10 @@
 # process ID to FIXTURE_PIDS, and waits for the worker.
 # SIGTERM stops the stand-in, as it stops tofu.
 trap 'exit 143' TERM
+if [ "$1" = "fmt" ]; then
+    exec "${0%/*}/real-tofu" "$@"
+fi
+IFS= read -r FIXTURE_PIDS < "${0%/*}/pids-path"
 sleep 300 </dev/null >/dev/null 2>&1 &
 echo "$$ $!" > "$FIXTURE_PIDS.partial"
 mv "$FIXTURE_PIDS.partial" "$FIXTURE_PIDS"

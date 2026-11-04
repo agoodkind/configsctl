@@ -31,6 +31,7 @@ type deploySettings struct {
 }
 
 type tofuSettings struct {
+	ConfigurationRoot string `yaml:"configuration_root"`
 	// WorkspacesDir is a path relative to the repository root.
 	WorkspacesDir string `yaml:"workspaces_dir"`
 	// ProviderMirror resolves relative to the settings file directory.
@@ -68,6 +69,14 @@ func loadSettings(path string) (settings, error) {
 }
 
 func loadSettingsWithMirror(path string, mirror *string) (settings, error) {
+	return loadSettingsWithProviderMirror(path, mirror, true)
+}
+
+func loadNativeSettings(path string) (settings, error) {
+	return loadSettingsWithProviderMirror(path, nil, false)
+}
+
+func loadSettingsWithProviderMirror(path string, mirror *string, resolveMirror bool) (settings, error) {
 	var loaded settings
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -89,7 +98,7 @@ func loadSettingsWithMirror(path string, mirror *string) (settings, error) {
 	if mirror != nil {
 		loaded.Tofu.ProviderMirror = mirror
 	}
-	if loaded.Tofu.ProviderMirror != nil {
+	if loaded.Tofu.ProviderMirror != nil && resolveMirror {
 		mirror, err := resolveProviderMirror(path, *loaded.Tofu.ProviderMirror)
 		if err != nil {
 			return loaded, err
@@ -98,6 +107,9 @@ func loadSettingsWithMirror(path string, mirror *string) (settings, error) {
 	}
 	if err := validateLockTargets(path, loaded.Tofu.LockTargets); err != nil {
 		return loaded, err
+	}
+	if loaded.Tofu.ConfigurationRoot != "" && loaded.Tofu.LockTargets != nil {
+		return loaded, errors.New("tofu.configuration_root and tofu.lock_targets cannot both be set")
 	}
 	if err := validateTofuCredentials(loaded.Tofu.Credentials); err != nil {
 		return loaded, err
@@ -111,8 +123,10 @@ func loadSettingsWithMirror(path string, mirror *string) (settings, error) {
 			path, tofuWorkspaceKey(loaded.Tofu.guestWorkspaceDir()),
 		)
 	}
-	if err := validateGuestPlans(loaded.Tofu); err != nil {
-		return loaded, err
+	if loaded.Tofu.ConfigurationRoot == "" {
+		if err := validateGuestPlans(loaded.Tofu); err != nil {
+			return loaded, err
+		}
 	}
 	return loaded, validateDeploySettings(path, loaded.Deploy)
 }
