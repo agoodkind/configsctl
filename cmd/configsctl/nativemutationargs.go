@@ -17,6 +17,7 @@ var nativeSharedFlags = map[string]bool{
 	"state": true, "no-color": true, "compact-warnings": true, "concise": true,
 	"consolidate-warnings": true, "consolidate-errors": true, "show-sensitive": true,
 	"json": true, "json-into": true, "deprecation": true,
+	"lint": true,
 }
 
 func nativeMutationArguments(args []string, planPath string) ([]string, []string, error) {

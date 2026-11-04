@@ -72,3 +72,30 @@ func TestNativeEvaluationPreservesTofuJSONOutput(t *testing.T) {
 		t.Fatal("the CLI did not print the actual OpenTofu JSON document")
 	}
 }
+
+func TestNativeApplyPreservesRefreshOnlyAndDiagnosticOptions(t *testing.T) {
+	for name, options := range map[string][]string{
+		"refresh only": {"-refresh-only", "-lock=true", "-compact-warnings", "-concise", "-consolidate-errors", "-consolidate-warnings=false", "-deprecation=module:none"},
+		"json":         {"-json", "-lock=true"},
+		"json file":    {"-json-into=events.json", "-lock=true"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fixture := newDirectFixture(t, explicitSettings)
+			installNativeConfiguration(t, fixture.tree)
+			arguments := append([]string{"-auto-approve"}, options...)
+			requireSuccess(t, fixture.apply(t, arguments...))
+			state := fixture.mutate(t, "state", "list")
+			requireSuccess(t, state)
+			if name == "refresh only" {
+				if strings.TrimSpace(state.stdout) != "" {
+					t.Fatal("refresh-only created a configured resource")
+				}
+			} else if !strings.Contains(state.stdout, `module.base["guest_alpha"].terraform_data.item`) {
+				t.Fatal("the diagnostic apply did not create its configured resource")
+			}
+			if name == "json file" {
+				requireFile(t, filepath.Join(fixture.tree.workspaces, "suburban/tack/events.json"))
+			}
+		})
+	}
+}
