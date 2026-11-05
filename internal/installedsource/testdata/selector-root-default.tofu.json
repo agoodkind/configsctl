@@ -1,0 +1,1 @@
+{"variable":{"workspace":{"type":"string"}},"module":{"child":{"source":"../child"}},"output":{"marker":{"value":"${module.child.marker}"}}}

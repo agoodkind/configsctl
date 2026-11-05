@@ -315,30 +315,29 @@ func (s *Source) walk(tree string, copyFile func(string, []byte) error) error {
 // Native sources use the same validated workspace selector as native evaluation.
 func (s *Source) CheckModuleSources(workspace, nativeRoot, selector string) error {
 	if workspace != "" {
-		if err := s.checkModuleDirectory(workspace, "", make(map[string]bool)); err != nil {
+		if err := s.checkModuleDirectory(workspace, nil, make(map[string]bool)); err != nil {
 			return err
 		}
 	}
 	if nativeRoot != "" {
-		return s.checkModuleDirectory(nativeRoot, selector, make(map[string]bool))
+		return s.checkModuleDirectory(nativeRoot, map[string]cty.Value{"workspace": cty.StringVal(selector)}, make(map[string]bool))
 	}
 	return nil
 }
 
-func (s *Source) checkModuleDirectory(path, selector string, visited map[string]bool) error {
+func (s *Source) checkModuleDirectory(path string, inputs map[string]cty.Value, ancestors map[string]bool) error {
 	directory, err := s.Path(path)
 	if err != nil {
 		return err
 	}
-	if visited[directory] {
-		return nil
+	if ancestors[directory] {
+		return fmt.Errorf("installed module dependency cycle at %s", directory)
 	}
-	visited[directory] = true
-	var context *hcl.EvalContext
-	if selector != "" {
-		context = &hcl.EvalContext{Variables: map[string]cty.Value{
-			"var": cty.ObjectVal(map[string]cty.Value{"workspace": cty.StringVal(selector)}),
-		}}
+	ancestors[directory] = true
+	defer delete(ancestors, directory)
+	context, err := s.moduleContext(directory, inputs)
+	if err != nil {
+		return err
 	}
 	native, jsonFiles, err := tofufiles.Discover(directory)
 	if err != nil {
@@ -355,7 +354,7 @@ func (s *Source) checkModuleDirectory(path, selector string, visited map[string]
 			return err
 		}
 		for _, dependency := range dependencies {
-			if err := s.checkModuleDirectory(dependency, selector, visited); err != nil {
+			if err := s.checkModuleDirectory(dependency.directory, dependency.inputs, ancestors); err != nil {
 				return err
 			}
 		}
@@ -363,7 +362,7 @@ func (s *Source) checkModuleDirectory(path, selector string, visited map[string]
 	return nil
 }
 
-func (s *Source) checkModules(path string, data []byte, context *hcl.EvalContext) ([]string, error) {
+func (s *Source) checkModules(path string, data []byte, context *hcl.EvalContext) ([]moduleDependency, error) {
 	file, err := parseInputFile(path, data)
 	if err != nil {
 		return nil, err
@@ -374,7 +373,7 @@ func (s *Source) checkModules(path string, data []byte, context *hcl.EvalContext
 		slog.Error("tofu.source.module_failed", "path", path, "err", diagnostics.Error())
 		return nil, fmt.Errorf("read installed modules %s: %w", path, diagnostics)
 	}
-	var dependencies []string
+	var dependencies []moduleDependency
 	for _, block := range content.Blocks {
 		attributes, _, diagnostics := block.Body.PartialContent(&hcl.BodySchema{Attributes: []hcl.AttributeSchema{{Name: "source", Required: true}}})
 		if diagnostics.HasErrors() {
@@ -382,7 +381,7 @@ func (s *Source) checkModules(path string, data []byte, context *hcl.EvalContext
 			return nil, fmt.Errorf("read installed module source %s: %w", path, diagnostics)
 		}
 		value, diagnostics := attributes.Attributes["source"].Expr.Value(context)
-		if diagnostics.HasErrors() || value.IsNull() || !value.Type().Equals(cty.String) {
+		if diagnostics.HasErrors() || !value.IsKnown() || value.IsNull() || !value.Type().Equals(cty.String) {
 			return nil, fmt.Errorf("installed module in %s requires a local source from the validated workspace selector", path)
 		}
 		module := value.AsString()
@@ -401,7 +400,11 @@ func (s *Source) checkModules(path string, data []byte, context *hcl.EvalContext
 		if !inside {
 			return nil, fmt.Errorf("installed module %s must be inside a complete input tree", modulePath)
 		}
-		dependencies = append(dependencies, modulePath)
+		inputs, err := childModuleInputs(block.Body, context)
+		if err != nil {
+			return nil, err
+		}
+		dependencies = append(dependencies, moduleDependency{directory: modulePath, inputs: inputs})
 	}
 	return dependencies, nil
 }

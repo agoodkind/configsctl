@@ -40,6 +40,18 @@ func TestTofuUsesSelectedNativeGuestOwnership(t *testing.T) {
 	}
 }
 
+func TestNativeSelectorCannotBeOverriddenByAutomaticVariables(t *testing.T) {
+	fixture := newDirectFixture(t, explicitSettings)
+	installNativeConfiguration(t, fixture.tree)
+	writeFixtureFile(t, filepath.Join(fixture.tree.root, "native", "workspace.auto.tfvars.json"), nativeFixtureFile(t, "selector-override.auto.tfvars.json"))
+	writeFixtureFile(t, filepath.Join(fixture.tree.root, "native", "unrelated", "main.tf"), "invalid unselected configuration")
+	result := fixture.apply(t, "-auto-approve")
+	requireSuccess(t, result)
+	if !strings.Contains(result.stderr, "hosts=[guest-alpha]") {
+		t.Fatal("automatic variable input replaced the selected native lock ownership")
+	}
+}
+
 func TestTofuRefusesMissingSelectedNativeInputs(t *testing.T) {
 	fixture := newDirectFixture(t, explicitSettings)
 	installNativeConfiguration(t, fixture.tree)

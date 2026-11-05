@@ -39,7 +39,7 @@ type flagRule struct {
 
 var flagRules = map[string]flagRule{
 	initCommand: {
-		allowed:  []string{"input", "lockfile", "backend-config", "backend", "no-color", "reconfigure"},
+		allowed:  []string{"input", "lockfile", "backend-config", "backend", "no-color", "reconfigure", "var", "var-file"},
 		required: map[string]string{"input": falseValue, "lockfile": "readonly"},
 	},
 	workspaceCommand: {allowed: []string{"no-color"}, required: nil},

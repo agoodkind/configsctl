@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 
 	"goodkind.io/configsctl/internal/procgroup"
+	"goodkind.io/configsctl/internal/tofuargs"
 )
 
 // ModuleCacheRequest selects the verified root and its persistent runtime data.
@@ -90,7 +91,7 @@ func resolvePrivateModules(ctx context.Context, request ModuleCacheRequest, root
 	}
 	defer removeModuleDirectory(directory)
 	// #nosec G204 -- Binary uses the existing absolute executable selection.
-	command := exec.CommandContext(ctx, request.Binary, "get", "-no-color")
+	command := exec.CommandContext(ctx, request.Binary, tofuargs.WithWorkspaceSelector([]string{"get", "-no-color"}, request.WorkspaceSelector)...)
 	command.Dir = root
 	command.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + directory, "TF_DATA_DIR=" + directory, "TF_IN_AUTOMATION=1"}
 	if request.WorkspaceSelector != "" {

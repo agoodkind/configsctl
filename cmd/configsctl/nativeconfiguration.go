@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 
 	"goodkind.io/configsctl/hostlock"
+	"goodkind.io/configsctl/internal/installedsource"
+	"goodkind.io/configsctl/internal/tofuargs"
 	"goodkind.io/configsctl/internal/tofulock"
 	"goodkind.io/configsctl/tofurun"
 )
@@ -161,7 +163,12 @@ func evaluateNativeConfigurationAt(ctx context.Context, tofu tofuSettings, repos
 		{"init", "-backend=false", "-input=false", "-lockfile=readonly", "-no-color"},
 		{"plan", "-refresh=false", "-lock=false", "-input=false", "-no-color", "-detailed-exitcode", "-parallelism=1", "-out=" + plan},
 	} {
-		request.Args = args
+		if args[0] == "plan" {
+			if err := checkNativeResolvedModules(ctx, tofu, binary, data, selector); err != nil {
+				return targets, err
+			}
+		}
+		request.Args = tofuargs.WithWorkspaceSelector(args, selector)
 		result, err := tofurun.Run(ctx, request, nil)
 		if err != nil {
 			return targets, fmt.Errorf("evaluate native configuration for %s: %w", selector, err)
@@ -201,6 +208,21 @@ func evaluateNativeConfigurationAt(ctx context.Context, tofu tofuSettings, repos
 		return targets, fmt.Errorf("native configuration for %s must export lock_endpoints", selector)
 	}
 	return targets, nil
+}
+
+func checkNativeResolvedModules(ctx context.Context, tofu tofuSettings, binary, data, selector string) error {
+	if tofu.source == nil {
+		return nil
+	}
+	request := installedsource.ModuleCacheRequest{
+		Binary: binary, Workspace: tofu.ConfigurationRoot, CopyRoot: tofu.source.copyRoot,
+		DataDirectory: data, WorkspaceSelector: selector, AllowMissing: false,
+	}
+	if err := tofu.source.verified.CheckModuleCache(ctx, request); err != nil {
+		slog.Error("tofu.configuration.module_resolution_refused", "err", err)
+		return fmt.Errorf("verify resolved native modules before planning: %w", err)
+	}
+	return nil
 }
 
 func nativeWorkspaceSelector(tofu tofuSettings, workspace string) (string, error) {
