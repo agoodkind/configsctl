@@ -25,7 +25,7 @@ func Discover(directory string) (native, jsonFiles []string, err error) {
 	}
 	for _, entry := range entries {
 		name := entry.Name()
-		if entry.IsDir() || ignored(name) || !sourceFile(name) || replaced(name, names) {
+		if entry.IsDir() || !Active(name, names) {
 			continue
 		}
 		path := filepath.Join(directory, name)
@@ -36,6 +36,11 @@ func Discover(directory string) (native, jsonFiles []string, err error) {
 		}
 	}
 	return native, jsonFiles, nil
+}
+
+// Active reports whether OpenTofu loads name among the files in one directory.
+func Active(name string, names map[string]bool) bool {
+	return !ignored(name) && sourceFile(name) && !replaced(name, names)
 }
 
 func ignored(name string) bool {
