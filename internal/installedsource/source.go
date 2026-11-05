@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -157,6 +158,21 @@ func validHex(value string, length int) bool {
 
 func cleanAbsolute(path string) bool {
 	return filepath.IsAbs(path) && filepath.Clean(path) == path
+}
+
+// InputFiles returns exact installed files inside the runtime root.
+// Credential paths and generated plans or state stay at their original locations.
+func (s *Source) InputFiles(credentialPaths []string) []string {
+	paths := make([]string, 0, len(s.files))
+	for path := range s.files {
+		relative, err := filepath.Rel(s.Identity.Root, path)
+		if err != nil || !filepath.IsLocal(relative) || slices.Contains(credentialPaths, path) || generatedFile(filepath.Base(path)) {
+			continue
+		}
+		paths = append(paths, path)
+	}
+	slices.Sort(paths)
+	return paths
 }
 
 // AddTree verifies another complete nonsecret input directory.

@@ -31,3 +31,28 @@ func TestTofuRefusesIncompleteInstalledSource(t *testing.T) {
 		})
 	}
 }
+
+func TestTofuRefusesInstalledSourceWithStaticRemoteEndpoints(t *testing.T) {
+	tree := newConfigsTree(t)
+	configuration := settingsContent + fmt.Sprintf(`  installed_source:
+    root: %q
+    workspace: node/service
+    node: node
+    environment: testbed
+  lock_targets:
+    workspaces/alpha:
+      node_hosts:
+        node: hv_alpha
+      lock_endpoints:
+        hv_alpha:
+          address: host.example.invalid
+`, tree.root)
+	writeFixtureFile(t, filepath.Join(tree.root, settingsName), configuration)
+	result := runConfigsctl(t, tree, tofuArgs("alpha", "init", "-input=false")...)
+	if result.exitCode == 0 || !strings.Contains(result.stderr, "use Git source for static remote lock endpoints") {
+		t.Fatalf("the CLI did not refuse conflicting source modes: %s", result.stderr)
+	}
+	if strings.Contains(result.stderr, "command_started") || strings.Contains(result.stderr, "pvesh") {
+		t.Fatalf("the CLI started a command before refusing conflicting source modes: %s", result.stderr)
+	}
+}

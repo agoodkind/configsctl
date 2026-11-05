@@ -18,8 +18,10 @@ import (
 )
 
 const (
-	fixtureRevision = "0123456789012345678901234567890123456789"
-	fixtureManifest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	fixtureRevision     = "0123456789012345678901234567890123456789"
+	fixtureManifest     = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	fixtureVault        = "ansible/inventory/group_vars/all/vault.yml"
+	fixturePasswordPath = "bound-password"
 )
 
 type fixture struct {
@@ -42,6 +44,9 @@ func newFixture(t *testing.T) fixture {
 		"workspace/item/main.tf":        "variable \"value\" { type = string }\n",
 		"native/main.tf":                "output \"lock_targets\" { value = {} }\n",
 		"operations/backend.hcl":        "address = \"https://localhost/state\"\n",
+		"operations/non-hcl.tf":         "This operational file is not an OpenTofu module.\n",
+		fixtureVault:                    "synthetic encrypted Vault file\n",
+		fixturePasswordPath:             "synthetic bound password file\n",
 	}
 	files := make([]map[string]any, 0, len(inputs))
 	for relative, content := range inputs {
@@ -219,6 +224,44 @@ func TestCopyRechecksInstalledBytes(t *testing.T) {
 	}
 }
 
+func TestCopyIncludesExactOperationalFilesAndExcludesCredentials(t *testing.T) {
+	f := newFixture(t)
+	if err := os.WriteFile(filepath.Join(f.settings.Root, "unlisted-runtime.tf"), []byte("unlisted operational data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source, err := f.verify(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials := []string{filepath.Join(f.settings.Root, fixtureVault), filepath.Join(f.settings.Root, fixturePasswordPath)}
+	paths := source.InputFiles(credentials)
+	destination := t.TempDir()
+	if err := source.Copy(destination, paths); err != nil {
+		t.Fatal(err)
+	}
+	for _, relative := range []string{"operations/backend.hcl", "operations/non-hcl.tf"} {
+		original, err := os.ReadFile(filepath.Join(f.settings.Root, relative))
+		if err != nil {
+			t.Fatal(err)
+		}
+		copied, err := os.ReadFile(filepath.Join(destination, relative))
+		if err != nil || string(copied) != string(original) {
+			t.Fatalf("the source copy did not preserve exact operational file %s: %v", relative, err)
+		}
+	}
+	for _, relative := range []string{fixtureVault, fixturePasswordPath, "unlisted-runtime.tf"} {
+		if _, err := os.Lstat(filepath.Join(destination, relative)); !os.IsNotExist(err) {
+			t.Fatalf("the source copy included excluded input %s: %v", relative, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(f.settings.Root, "operations/backend.hcl"), []byte("changed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Copy(t.TempDir(), paths); err == nil {
+		t.Fatal("the source copy accepted changed operational input bytes")
+	}
+}
+
 func (f fixture) replaceFile(t *testing.T, relative, content string) {
 	t.Helper()
 	path := filepath.Join(f.settings.Root, relative)
@@ -337,6 +380,44 @@ func TestInstalledBackendRequiresPersistentState(t *testing.T) {
 				}
 			} else if err != nil {
 				t.Fatalf("the installed backend refused persistent state storage: %v", err)
+			}
+		})
+	}
+}
+
+func TestInstalledBackendOverridesRequirePersistentState(t *testing.T) {
+	cases := []struct {
+		name    string
+		backend string
+		option  string
+		file    string
+		refused bool
+	}{
+		{name: "relative inline path", backend: "local", option: "path=state.tfstate", file: "", refused: true},
+		{name: "relative inline workspace directory", backend: "local", option: "workspace_dir=states", file: "", refused: true},
+		{name: "absolute inline path", backend: "local", option: "path=/var/lib/configs/state.tfstate", file: "", refused: false},
+		{name: "relative option file", backend: "local", option: "../operations/backend.hcl", file: "path = \"state.tfstate\"\n", refused: true},
+		{name: "absolute option file", backend: "local", option: "../operations/backend.hcl", file: "path = \"/var/lib/configs/state.tfstate\"\n", refused: false},
+		{name: "remote path option", backend: "consul", option: "path=state/prefix", file: "", refused: false},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.replaceFile(t, "workspace/main.tf", fmt.Sprintf("terraform {\n backend %q {}\n}\n", test.backend))
+			if test.file != "" {
+				f.replaceFile(t, "operations/backend.hcl", test.file)
+			}
+			source, err := f.verify(t)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = source.RequireBackendOverride("workspace", test.option, t.TempDir())
+			if test.refused {
+				if err == nil || !strings.Contains(err.Error(), "set the local backend") {
+					t.Fatalf("the backend override did not require persistent state: %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("the backend override refused persistent state: %v", err)
 			}
 		})
 	}

@@ -18,11 +18,12 @@ import (
 )
 
 type installedTofuSource struct {
-	settings installedsource.Settings
-	verified *installedsource.Source
-	copyRoot string
-	trees    []string
-	required []string
+	settings        installedsource.Settings
+	verified        *installedsource.Source
+	copyRoot        string
+	trees           []string
+	required        []string
+	credentialPaths []string
 }
 
 type installedSourceKey struct{}
@@ -75,6 +76,11 @@ func prepareInstalledTofuSource(ctx context.Context) (context.Context, func(), e
 		return ctx, func() {}, nil
 	}
 	settings := *loaded.Tofu.InstalledSource
+	passwordFile, err := vaultPassPath()
+	if err != nil {
+		return ctx, nil, err
+	}
+	credentialPaths := []string{filepath.Join(settings.Root, defaultVaultFile), passwordFile}
 	trees := []string{loaded.Tofu.WorkspacesDir}
 	if loaded.Tofu.ConfigurationRoot != "" {
 		trees = append(trees, loaded.Tofu.ConfigurationRoot)
@@ -83,9 +89,11 @@ func prepareInstalledTofuSource(ctx context.Context) (context.Context, func(), e
 		if !filepath.IsLocal(tree) || tree == "." {
 			return ctx, nil, errors.New("installed source input trees must be relative directories below the installed root")
 		}
-		vaultRelative, err := filepath.Rel(tree, defaultVaultFile)
-		if err != nil || filepath.IsLocal(vaultRelative) {
-			return ctx, nil, errors.New("installed source input trees must not include the encrypted Vault")
+		for _, credentialPath := range credentialPaths {
+			relative, err := filepath.Rel(filepath.Join(settings.Root, tree), credentialPath)
+			if err != nil || filepath.IsLocal(relative) {
+				return ctx, nil, errors.New("installed source input trees must not include credential files")
+			}
 		}
 	}
 	data, err := readInstalledTofuSource(ctx, settings)
@@ -109,6 +117,7 @@ func prepareInstalledTofuSource(ctx context.Context) (context.Context, func(), e
 	if !bytes.Equal(settingsBytes, verifiedSettings) {
 		return ctx, nil, errors.New("the installed settings changed during source verification")
 	}
+	required = verified.InputFiles(credentialPaths)
 	directory, err := os.MkdirTemp("", explicitDirectoryPattern)
 	if err != nil {
 		return ctx, nil, fmt.Errorf("create the private installed source directory: %w", err)
@@ -118,7 +127,10 @@ func prepareInstalledTofuSource(ctx context.Context) (context.Context, func(), e
 		cleanup()
 		return ctx, nil, fmt.Errorf("copy installed OpenTofu inputs: %w", err)
 	}
-	source := &installedTofuSource{settings: settings, verified: verified, copyRoot: directory, trees: trees, required: required}
+	source := &installedTofuSource{
+		settings: settings, verified: verified, copyRoot: directory,
+		trees: trees, required: required, credentialPaths: credentialPaths,
+	}
 	return context.WithValue(ctx, installedSourceKey{}, source), cleanup, nil
 }
 
@@ -211,10 +223,16 @@ func (s *installedTofuSource) arguments(workspace string, args []string) ([]stri
 			value = result[index]
 		}
 		if name == "backend-config" && strings.Contains(value, "=") {
+			if err := s.requireBackendOverride(workspace, name, value); err != nil {
+				return nil, err
+			}
 			continue
 		}
 		path, err := s.argumentPath(workspace, name, value)
 		if err != nil {
+			return nil, err
+		}
+		if err := s.requireBackendOverride(workspace, name, value); err != nil {
 			return nil, err
 		}
 		if assigned {
@@ -232,6 +250,17 @@ func (s *installedTofuSource) arguments(workspace string, args []string) ([]stri
 		result[len(result)-1] = absolute
 	}
 	return result, nil
+}
+
+func (s *installedTofuSource) requireBackendOverride(workspace, name, value string) error {
+	if name != string(installedBackendConfig) {
+		return nil
+	}
+	if err := s.verified.RequireBackendOverride(workspace, value, s.copyRoot); err != nil {
+		slog.Error("tofu.source.backend_override_refused", "err", err)
+		return fmt.Errorf("validate the installed local backend override: %w", err)
+	}
+	return nil
 }
 
 func installedPositionalFile(args []string) bool {
@@ -260,6 +289,9 @@ func (s *installedTofuSource) argumentPath(workspace, name, value string) (strin
 	case installedVarFile, installedBackendConfig:
 		return s.copyInput(path)
 	case installedPluginDir, installedTestDirectory:
+		if err := s.requireNonsecretDirectory(path); err != nil {
+			return "", err
+		}
 		if err := s.verified.AddTree(path); err != nil {
 			return "", fmt.Errorf("verify installed OpenTofu input directory: %w", err)
 		}
@@ -283,6 +315,13 @@ func (s *installedTofuSource) argumentPath(workspace, name, value string) (strin
 }
 
 func (s *installedTofuSource) copyInput(path string) (string, error) {
+	absolute, err := s.verified.Path(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve the installed OpenTofu file argument: %w", err)
+	}
+	if slices.Contains(s.credentialPaths, absolute) {
+		return "", errors.New("credential files must retain their original paths and cannot be OpenTofu source arguments")
+	}
 	if _, err := s.verified.Read(path); err != nil {
 		slog.Error("tofu.source.file_argument_failed", "err", err)
 		return "", fmt.Errorf("verify the installed OpenTofu file argument: %w", err)
@@ -293,6 +332,21 @@ func (s *installedTofuSource) copyInput(path string) (string, error) {
 		return "", fmt.Errorf("copy the installed OpenTofu file argument: %w", err)
 	}
 	return s.path(path), nil
+}
+
+func (s *installedTofuSource) requireNonsecretDirectory(path string) error {
+	absolute, err := s.verified.Path(path)
+	if err != nil {
+		slog.Error("tofu.source.input_directory_failed", "err", err)
+		return fmt.Errorf("resolve the installed OpenTofu input directory: %w", err)
+	}
+	for _, credentialPath := range s.credentialPaths {
+		relative, err := filepath.Rel(absolute, credentialPath)
+		if err != nil || filepath.IsLocal(relative) {
+			return errors.New("installed source input directories must not include credential files")
+		}
+	}
+	return nil
 }
 
 func (s *installedTofuSource) environment(environment []string) ([]string, error) {

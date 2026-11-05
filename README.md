@@ -93,9 +93,11 @@ tofu:
 
 `root` is the canonical working directory. `workspace` is the original artifact selector and does not change when a command selects a relative OpenTofu workspace. Every command that uses installed source, including `init`, queries the existing local `pvesh` host-artifact endpoint before evaluating OpenTofu configuration. The current and saved installation identities must match the settings. Incomplete settings, interrupted installations, missing saved identity, and changed installed files refuse execution.
 
+Installed mode requires native configuration or local static lock endpoints. Static remote lock endpoints retain the Git source mode.
+
 Installed mode verifies complete nonsecret workspace and native configuration trees, including provider locks and local modules. Additional input files, such as `-var-file`, `-backend-config`, and an explicit `TF_CLI_CONFIG_FILE`, must also appear in the installed file set. Unlisted inputs and symbolic links refuse execution. Module sources must use relative local paths inside the verified trees. The `-chdir`, `-from-module`, and `-config` options cannot select another source.
 
-OpenTofu executes verified input copies in private directories. Vault and password reads keep their original paths. OpenTofu data remains outside the source copy in the validated `TF_DATA_DIR`, or in the original workspace's private `.terraform` directory. A local backend requires an absolute state path outside the source copy. Named OpenTofu workspaces also require an absolute local `workspace_dir`. Remote backends retain their existing configuration.
+OpenTofu executes copies of verified input trees and exact installed operational files in private directories. Vault and password reads keep their original paths. OpenTofu data remains outside the source copy in the validated `TF_DATA_DIR`, or in the original workspace's private `.terraform` directory. A local backend requires an absolute state path outside the source copy. Named OpenTofu workspaces also require an absolute local `workspace_dir`. Remote backends retain their existing configuration.
 
 Plans from installed source record the selected installation identity and manifest digest in the same cache keyed by plan bytes. Planning checks the installation before and after execution. Apply checks it again under the mutation locks and refuses a plan after another installed artifact replaces its source. Existing Git plan records remain readable.
 
