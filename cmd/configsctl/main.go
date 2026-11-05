@@ -270,6 +270,15 @@ func runTofu(env cmdEnv, args []string) error {
 	if len(args) == 0 {
 		return errors.New(tofuUsage)
 	}
+	ctx, cleanupSource, err := prepareInstalledTofuSource(ctx)
+	if err != nil {
+		return err
+	}
+	defer cleanupSource()
+	return runTofuWithSource(ctx, env, args)
+}
+
+func runTofuWithSource(ctx context.Context, env cmdEnv, args []string) error {
 	passwordFile, err := vaultPassPath()
 	if err != nil {
 		return err
@@ -304,9 +313,14 @@ func runTofu(env cmdEnv, args []string) error {
 	}
 	defer releaseMigration()
 	slog.Info("tofu run", "dir", workspaceDir, "args", strings.Join(safeArgs, " "))
-	requiredHosts, err := requiredCredentialHosts(credential, usesCredential, workspaceDir, childEnv)
+	requiredHosts, err := requiredCredentialHosts(credential, usesCredential, sourceExecutionPath(ctx, workspaceDir), childEnv)
 	if err != nil {
 		return err
+	}
+	if usesCredential {
+		if err := requireInstalledModuleCache(ctx, workspaceDir, environmentValue(childEnv, "TF_DATA_DIR"), safeArgs); err != nil {
+			return err
+		}
 	}
 	if tofuMutates(safeArgs) {
 		request := tofuLockRequest{
@@ -325,6 +339,9 @@ func runTofu(env cmdEnv, args []string) error {
 		return err
 	}
 	defer release()
+	if err := requireCurrentInstalledSource(ctx, workspaceDir); err != nil {
+		return err
+	}
 	if usesCredential {
 		rotatorPassword, err := vault.Secret(credential.Dell.RotatorPasswordKey, defaultVaultFile, passwordFile)
 		if err != nil {
@@ -332,7 +349,7 @@ func runTofu(env cmdEnv, args []string) error {
 			return fmt.Errorf("read rotator credential: %w", err)
 		}
 		var patterns []redact.Pattern
-		childEnv, patterns, err = credential.prepare(ctx, rotatorPassword, childEnv)
+		childEnv, patterns, err = credential.prepare(ctx, workspaceDir, rotatorPassword, childEnv)
 		if err != nil {
 			return err
 		}
@@ -347,6 +364,9 @@ func runTofu(env cmdEnv, args []string) error {
 }
 
 func executeTofu(ctx context.Context, env cmdEnv, workspaceDir string, safeArgs, commandArgs, childEnv []string) error {
+	if err := requireInstalledModuleCache(ctx, workspaceDir, environmentValue(childEnv, "TF_DATA_DIR"), commandArgs); err != nil {
+		return err
+	}
 	planPath := tofuPlanOutput(commandArgs)
 	var source tofuPlanSource
 	if planPath != "" {
@@ -357,7 +377,7 @@ func executeTofu(ctx context.Context, env cmdEnv, workspaceDir string, safeArgs,
 		}
 	}
 	request := tofurun.Request{
-		Root: workspaceDir, Args: commandArgs, Environment: childEnv, DisplayArgs: safeArgs, Patterns: env.secrets,
+		Root: sourceExecutionPath(ctx, workspaceDir), Args: commandArgs, Environment: childEnv, DisplayArgs: safeArgs, Patterns: env.secrets,
 	}
 	result, err := tofurun.Run(ctx, request)
 	if errors.Is(err, tofurun.ErrIncomplete) {

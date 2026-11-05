@@ -214,6 +214,9 @@ func runPlannedMutation(ctx context.Context, settings tofuSettings, request tofu
 		return err
 	}
 	defer release()
+	if err := requireCurrentInstalledSource(lockedCtx, request.workspaceDir); err != nil {
+		return err
+	}
 	if err := requirePlanDigest(runner.planPath, plannedDigest); err != nil {
 		return err
 	}
@@ -246,6 +249,14 @@ func prepareMutationPlan(ctx context.Context, runner explicitRunner, request tof
 		}
 		return false, requireTofuPlanSource(ctx, request.workspaceDir, runner.planPath)
 	}
+	var source tofuPlanSource
+	if installedSourceFrom(ctx) != nil {
+		var err error
+		source, err = inspectTofuPlanSource(ctx, request.workspaceDir)
+		if err != nil {
+			return false, err
+		}
+	}
 	result, err := runner.run(ctx, "plan", args, tofurun.RedactedProgress, "", nil, nil)
 	if err != nil {
 		return false, err
@@ -253,6 +264,11 @@ func prepareMutationPlan(ctx context.Context, runner explicitRunner, request tof
 	changed := result.ExitCode == tofuPendingExitCode
 	if result.ExitCode != 0 && !changed {
 		return false, tofuFailure(ctx, &exitCodeError{code: result.ExitCode}, result.LogPath)
+	}
+	if installedSourceFrom(ctx) != nil {
+		if err := recordTofuPlanSource(ctx, request.workspaceDir, runner.planPath, source); err != nil {
+			return false, err
+		}
 	}
 	return changed, nil
 }
@@ -283,8 +299,12 @@ func prepareExplicitCredential(ctx context.Context, settings tofuSettings, reque
 		slog.Error("tofu.credential.scope_failed", "workspace", request.workspaceDir, "err", err)
 		return nil, nil, nil, fmt.Errorf("check the credential lock scope: %w", err)
 	}
+	if err := requireCurrentInstalledSource(locked, request.workspaceDir); err != nil {
+		release()
+		return nil, nil, nil, err
+	}
 	var patterns []redact.Pattern
-	request.env, patterns, err = prepareMutationCredential(locked, credential, request.env, passwordFile)
+	request.env, patterns, err = prepareMutationCredential(locked, credential, request.workspaceDir, request.env, passwordFile)
 	if err != nil {
 		release()
 		return nil, nil, nil, err
@@ -438,6 +458,9 @@ func newExplicitRunner(settings tofuSettings, request tofuLockRequest, passwordF
 	if err != nil {
 		return runner, nil, err
 	}
+	if settings.source != nil {
+		root = settings.source.path(root)
+	}
 	directory, err := os.MkdirTemp("", explicitDirectoryPattern)
 	if err != nil {
 		slog.Error("tofu.mutation.explicit_directory_failed", "err", err)
@@ -454,7 +477,7 @@ func newExplicitRunner(settings tofuSettings, request tofuLockRequest, passwordF
 	}
 	inputs := operatorInputs{home: home, assignments: assignments, publicNames: nil}
 	if manual {
-		inputs, err = manualOperatorInputs(request, assignments)
+		inputs, err = manualSourceOperatorInputs(settings, request, assignments)
 		if err != nil {
 			cleanup()
 			return runner, nil, err
@@ -508,7 +531,10 @@ func prepareNativeDataDirectory(settings tofuSettings, workspace string, environ
 	}
 	directory := environmentValue(environment, "TF_DATA_DIR")
 	if directory == "" {
-		return "", nil
+		if settings.source == nil {
+			return "", nil
+		}
+		directory = ".terraform"
 	}
 	if !filepath.IsAbs(directory) {
 		directory = filepath.Join(workspace, directory)
@@ -527,6 +553,18 @@ func prepareNativeDataDirectory(settings tofuSettings, workspace string, environ
 	if err := tofurun.CheckDataDirectory(directory); err != nil {
 		slog.Error("tofu.native.data_directory_failed", "directory", directory, "err", err)
 		return "", fmt.Errorf("validate the native OpenTofu data directory: %w", err)
+	}
+	if settings.source != nil {
+		selected, err := selectedTofuWorkspace(workspace, directory)
+		if err != nil {
+			return "", err
+		}
+		if requested := environmentValue(environment, "TF_WORKSPACE"); requested != "" {
+			selected = requested
+		}
+		if err := settings.source.verified.RequireCommandBackend(workspace, selected, settings.source.copyRoot, args); err != nil {
+			return "", fmt.Errorf("validate installed source state storage: %w", err)
+		}
 	}
 	return directory, nil
 }
@@ -597,6 +635,9 @@ func (r explicitRunner) run(
 	ctx context.Context, step string, args []string, mode tofurun.OutputMode, jsonPath string,
 	scope *hostlock.Scope, requiredHosts []string,
 ) (tofurun.Result, error) {
+	if err := requireInstalledModuleCache(ctx, r.base.Root, r.base.DataDirectory, args); err != nil {
+		return tofurun.Result{}, err
+	}
 	request := r.base
 	request.Args = args
 	request.OutputMode = mode

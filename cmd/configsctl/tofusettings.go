@@ -11,6 +11,7 @@ import (
 	"slices"
 
 	"go.yaml.in/yaml/v3"
+	"goodkind.io/configsctl/internal/installedsource"
 	"goodkind.io/configsctl/internal/tofulock"
 )
 
@@ -31,6 +32,8 @@ type deploySettings struct {
 }
 
 type tofuSettings struct {
+	InstalledSource   *installedsource.Settings `yaml:"installed_source"`
+	source            *installedTofuSource
 	ConfigurationRoot string `yaml:"configuration_root"`
 	// WorkspacesDir is a path relative to the repository root.
 	WorkspacesDir string `yaml:"workspaces_dir"`
@@ -77,12 +80,16 @@ func loadNativeSettings(path string) (settings, error) {
 }
 
 func loadSettingsWithProviderMirror(path string, mirror *string, resolveMirror bool) (settings, error) {
-	var loaded settings
 	data, err := os.ReadFile(path)
 	if err != nil {
 		slog.Error("settings file read failed", "path", path, "err", err)
-		return loaded, fmt.Errorf("read %s: %w", path, err)
+		return settings{}, fmt.Errorf("read %s: %w", path, err)
 	}
+	return parseSettings(data, path, mirror, resolveMirror)
+}
+
+func parseSettings(data []byte, path string, mirror *string, resolveMirror bool) (settings, error) {
+	var loaded settings
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&loaded); err != nil {
@@ -94,6 +101,9 @@ func loadSettingsWithProviderMirror(path string, mirror *string, resolveMirror b
 	}
 	if loaded.Tofu.EnvKeyPrefix == "" {
 		return loaded, errors.New(path + ": tofu.env_key_prefix is empty")
+	}
+	if err := validateInstalledSourceSettings(loaded.Tofu); err != nil {
+		return loaded, err
 	}
 	if mirror != nil {
 		loaded.Tofu.ProviderMirror = mirror
@@ -129,6 +139,22 @@ func loadSettingsWithProviderMirror(path string, mirror *string, resolveMirror b
 		}
 	}
 	return loaded, validateDeploySettings(path, loaded.Deploy)
+}
+
+func validateInstalledSourceSettings(tofu tofuSettings) error {
+	if tofu.InstalledSource == nil {
+		return nil
+	}
+	if err := tofu.InstalledSource.Validate(); err != nil {
+		slog.Error("tofu.source.settings_invalid", "err", err)
+		return fmt.Errorf("validate the installed source setting: %w", err)
+	}
+	for _, targets := range tofu.LockTargets {
+		if strictExplicitSettings(tofu, targets) {
+			return errors.New("tofu.installed_source requires native configuration or local lock endpoints; use Git source for static remote lock endpoints")
+		}
+	}
+	return nil
 }
 
 func validateLockTargets(path string, lockTargets map[string]tofulock.Targets) error {

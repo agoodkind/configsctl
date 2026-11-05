@@ -1,0 +1,1 @@
+{"variable":{"workspace":{"type":"string","default":"approved"}},"module":{"leaf":{"source":"./${var.workspace}"}},"output":{"marker":{"value":"${module.leaf.marker}"}}}

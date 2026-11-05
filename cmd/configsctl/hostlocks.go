@@ -22,20 +22,6 @@ type tofuLockRequest struct {
 	guestModule           string
 }
 
-func requireRegularPlan(path string) error {
-	info, err := os.Stat(path)
-	if err != nil {
-		slog.Error("tofu.lock.plan_stat_failed", "plan", path, "err", err)
-		return fmt.Errorf("read the saved plan %s: %w", path, err)
-	}
-	if !info.Mode().IsRegular() {
-		err := fmt.Errorf("the saved plan %s is not a regular file", path)
-		slog.Error("tofu.lock.plan_not_regular", "plan", path, "err", err)
-		return err
-	}
-	return nil
-}
-
 // Run locked work with the returned context and call release after it returns.
 // Lock loss cancels that context with hostlock.ErrLost.
 func takeLocks(ctx context.Context, hosts []hostlock.Host) (locked context.Context, release func(), err error) {

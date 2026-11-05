@@ -1,0 +1,1 @@
+module "outside" { source = %q }

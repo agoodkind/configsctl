@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 
 	"goodkind.io/configsctl/hostlock"
+	"goodkind.io/configsctl/internal/installedsource"
+	"goodkind.io/configsctl/internal/tofuargs"
 	"goodkind.io/configsctl/internal/tofulock"
 	"goodkind.io/configsctl/tofurun"
 )
@@ -64,16 +66,43 @@ func runNativeLint(ctx context.Context, tofu tofuSettings) error {
 }
 
 func loadTofuWorkspace(ctx context.Context, args []string) (settings, string, []string, error) {
-	loaded, err := loadSettings(settingsFile)
+	loaded, err := loadNativeSettings(sourceExecutionPath(ctx, settingsFile))
 	if err != nil {
 		return loaded, "", nil, err
 	}
-	directory, arguments, err := selectTofuWorkspace(loaded.Tofu.WorkspacesDir, args)
+	loaded.Tofu.source = installedSourceFrom(ctx)
+	if loaded.Tofu.ProviderMirror != nil {
+		mirror, err := resolveProviderMirror(settingsFile, *loaded.Tofu.ProviderMirror)
+		if err != nil {
+			return loaded, "", nil, err
+		}
+		loaded.Tofu.ProviderMirror = &mirror
+	}
+	directory, arguments, err := selectTofuWorkspace(sourceExecutionPath(ctx, loaded.Tofu.WorkspacesDir), args)
 	if err != nil {
 		return loaded, "", nil, err
+	}
+	if loaded.Tofu.source != nil {
+		directory, err = filepath.Rel(loaded.Tofu.source.copyRoot, directory)
+		if err != nil {
+			slog.Error("tofu.source.workspace_failed", "err", err)
+			return loaded, "", nil, fmt.Errorf("resolve the installed workspace selector: %w", err)
+		}
 	}
 	if len(arguments) == 0 {
 		return loaded, "", nil, fmt.Errorf("%s", tofuUsage)
+	}
+	if loaded.Tofu.source != nil {
+		selector := ""
+		if loaded.Tofu.ConfigurationRoot != "" {
+			selector, err = nativeWorkspaceSelector(loaded.Tofu, directory)
+			if err != nil {
+				return loaded, "", nil, err
+			}
+		}
+		if err := loaded.Tofu.source.verified.CheckModuleSources(directory, loaded.Tofu.ConfigurationRoot, selector); err != nil {
+			return loaded, "", nil, fmt.Errorf("verify installed module selections: %w", err)
+		}
 	}
 	loaded.Tofu, err = loaded.Tofu.withNativeConfiguration(ctx, directory)
 	return loaded, directory, arguments, err
@@ -98,16 +127,12 @@ func evaluateNativeConfigurationAt(ctx context.Context, tofu tofuSettings, repos
 	if err := validateWorkspaceSelector(tofu.ConfigurationRoot); err != nil {
 		return targets, err
 	}
-	root, err := repositoryDirectory(filepath.Join(repository, tofu.ConfigurationRoot))
+	root, err := repositoryDirectory(sourceExecutionPath(ctx, filepath.Join(repository, tofu.ConfigurationRoot)))
 	if err != nil {
 		return targets, err
 	}
-	selector, err := filepath.Rel(tofu.WorkspacesDir, workspaceDir)
+	selector, err := nativeWorkspaceSelector(tofu, workspaceDir)
 	if err != nil {
-		return targets, fmt.Errorf("resolve the native workspace selector: %w", err)
-	}
-	selector = filepath.ToSlash(selector)
-	if err := validateWorkspaceSelector(selector); err != nil {
 		return targets, err
 	}
 	binary, err := tofuBinary()
@@ -138,7 +163,12 @@ func evaluateNativeConfigurationAt(ctx context.Context, tofu tofuSettings, repos
 		{"init", "-backend=false", "-input=false", "-lockfile=readonly", "-no-color"},
 		{"plan", "-refresh=false", "-lock=false", "-input=false", "-no-color", "-detailed-exitcode", "-parallelism=1", "-out=" + plan},
 	} {
-		request.Args = args
+		if args[0] == "plan" {
+			if err := checkNativeResolvedModules(ctx, tofu, binary, data, selector); err != nil {
+				return targets, err
+			}
+		}
+		request.Args = tofuargs.WithWorkspaceSelector(args, selector)
 		result, err := tofurun.Run(ctx, request, nil)
 		if err != nil {
 			return targets, fmt.Errorf("evaluate native configuration for %s: %w", selector, err)
@@ -178,6 +208,34 @@ func evaluateNativeConfigurationAt(ctx context.Context, tofu tofuSettings, repos
 		return targets, fmt.Errorf("native configuration for %s must export lock_endpoints", selector)
 	}
 	return targets, nil
+}
+
+func checkNativeResolvedModules(ctx context.Context, tofu tofuSettings, binary, data, selector string) error {
+	if tofu.source == nil {
+		return nil
+	}
+	request := installedsource.ModuleCacheRequest{
+		Binary: binary, Workspace: tofu.ConfigurationRoot, CopyRoot: tofu.source.copyRoot,
+		DataDirectory: data, WorkspaceSelector: selector, AllowMissing: false,
+	}
+	if err := tofu.source.verified.CheckModuleCache(ctx, request); err != nil {
+		slog.Error("tofu.configuration.module_resolution_refused", "err", err)
+		return fmt.Errorf("verify resolved native modules before planning: %w", err)
+	}
+	return nil
+}
+
+func nativeWorkspaceSelector(tofu tofuSettings, workspace string) (string, error) {
+	selector, err := filepath.Rel(tofu.WorkspacesDir, workspace)
+	if err != nil {
+		slog.Error("tofu.configuration.selector_failed", "err", err)
+		return "", fmt.Errorf("resolve the native workspace selector: %w", err)
+	}
+	selector = filepath.ToSlash(selector)
+	if err := validateWorkspaceSelector(selector); err != nil {
+		return "", err
+	}
+	return selector, nil
 }
 
 func repositoryDirectory(path string) (string, error) {

@@ -25,7 +25,11 @@ func registerOperatorRedaction(env cmdEnv, settings tofuSettings, workspace stri
 	if !tofuMutates(args) || strictExplicitSettings(settings, settings.LockTargets[tofuWorkspaceKey(workspace)]) {
 		return env, func() {}, nil
 	}
-	protection, err := tofuVariableProtection(workspace)
+	inputWorkspace := workspace
+	if settings.source != nil {
+		inputWorkspace = settings.source.path(workspace)
+	}
+	protection, err := tofuVariableProtection(inputWorkspace)
 	if err != nil {
 		return env, nil, err
 	}
@@ -88,6 +92,13 @@ func manualOperatorInputs(request tofuLockRequest, assignments []string) (operat
 		result.publicNames = append(result.publicNames, "SSH_AUTH_SOCK")
 	}
 	return result, nil
+}
+
+func manualSourceOperatorInputs(settings tofuSettings, request tofuLockRequest, assignments []string) (operatorInputs, error) {
+	if settings.source != nil {
+		request.workspaceDir = settings.source.path(request.workspaceDir)
+	}
+	return manualOperatorInputs(request, assignments)
 }
 
 func assignedEnvironmentValue(environment []string, name string) (string, bool) {

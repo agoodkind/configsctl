@@ -83,8 +83,18 @@ func (s tofuCredentialSettings) requireEphemeral(workspace string) error {
 	return nil
 }
 
-func (s tofuCredentialSettings) prepare(ctx context.Context, password string, childEnv []string) ([]string, []redact.Pattern, error) {
-	credential, err := s.Dell.Prepare(ctx, password)
+func (s tofuCredentialSettings) prepare(ctx context.Context, workspace, password string, childEnv []string) ([]string, []redact.Pattern, error) {
+	var credential dellcredential.Credential
+	var err error
+	if source := installedSourceFrom(ctx); source != nil {
+		request, requestErr := source.moduleCacheRequest(workspace, environmentValue(childEnv, "TF_DATA_DIR"), false)
+		if requestErr != nil {
+			return nil, nil, requestErr
+		}
+		credential, err = source.verified.PrepareCredential(ctx, request, *s.Dell, password)
+	} else {
+		credential, err = s.Dell.Prepare(ctx, password)
+	}
 	if err != nil {
 		slog.Error("tofu.credential.prepare_failed", "err", err)
 		return nil, nil, fmt.Errorf("prepare deployment credential: %w", err)
