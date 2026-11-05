@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"time"
 
 	"goodkind.io/configsctl/internal/clock"
@@ -92,15 +93,18 @@ func (server Server) Serve(ctx context.Context, input io.Reader, output io.Write
 		return errors.New("host lock request exceeds the input limit or cannot be read")
 	}
 	var request wireRequest
-	if err := unmarshalStrict(body, &request); err != nil {
+	if err := unmarshalStrict(body, &request, "protocol_version", "operation", "run_id", "lease_seconds"); err != nil {
 		return errors.New("host lock request must contain exactly the supported JSON fields")
 	}
 	if err := request.validate(); err != nil {
 		return err
 	}
+	if filepath.Clean(directory) != directory {
+		return errors.New("host lock server requires a clean directory path")
+	}
 	result, operationErr := runScript(ctx, Host{Name: principal, Dir: directory}, command{
 		op: request.Operation, run: principal + ":" + request.Run, controller: principal,
-		lease: time.Duration(request.LeaseSeconds) * time.Second, restricted: true,
+		lease: time.Duration(request.LeaseSeconds) * time.Second, server: true,
 	})
 	response := wireResponse{Status: statusOK, HostTime: clock.NowUTC().Unix(), ExpiresAt: result.expiry.Unix()}
 	var held *HeldError
@@ -125,7 +129,7 @@ func (server Server) Serve(ctx context.Context, input io.Reader, output io.Write
 }
 
 // unmarshalStrict rejects repeated fields before decoding the typed object.
-func unmarshalStrict[T wireRequest | wireResponse](body []byte, target *T) error {
+func unmarshalStrict[T wireRequest | wireResponse](body []byte, target *T, fields ...string) error {
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	start, err := decoder.Token()
 	if err != nil || start != json.Delim('{') {
@@ -139,8 +143,8 @@ func unmarshalStrict[T wireRequest | wireResponse](body []byte, target *T) error
 			return fmt.Errorf("read JSON field: %w", err)
 		}
 		key, ok := token.(string)
-		if !ok || seen[key] {
-			return errors.New("repeated JSON field")
+		if !ok || !slices.Contains(fields, key) || seen[key] {
+			return errors.New("unknown or repeated JSON field")
 		}
 		seen[key] = true
 		var value json.RawMessage
@@ -150,6 +154,9 @@ func unmarshalStrict[T wireRequest | wireResponse](body []byte, target *T) error
 		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
 			return errors.New("null JSON field")
 		}
+	}
+	if len(seen) != len(fields) {
+		return errors.New("missing JSON field")
 	}
 	if _, err := decoder.Token(); err != nil {
 		return fmt.Errorf("read JSON object end: %w", err)

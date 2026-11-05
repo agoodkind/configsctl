@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -40,16 +41,16 @@ type Options struct {
 	RequestTimeout time.Duration
 }
 
-func (s *Set) operation(ctx context.Context, host Host, request command) (answer, error) {
-	if s.options.RequestTimeout > 0 {
+func (options Options) operation(ctx context.Context, host Host, request command) (answer, error) {
+	if options.RequestTimeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, s.options.RequestTimeout)
+		ctx, cancel = context.WithTimeout(ctx, options.RequestTimeout)
 		defer cancel()
 	}
-	if s.options.Transport == nil {
+	if options.Transport == nil {
 		return runScript(ctx, host, request)
 	}
-	response, err := s.options.Transport.Do(ctx, host, Request{
+	response, err := options.Transport.Do(ctx, host, Request{
 		Operation: request.op, Run: request.run, Controller: request.controller, Lease: request.lease,
 	})
 	if err != nil {
@@ -80,21 +81,39 @@ func (RestrictedSSHTransport) Do(ctx context.Context, host Host, request Request
 		slog.Error("hostlock.request_encode_failed", "host", host.Name, "err", err)
 		return Response{}, fmt.Errorf("encode host lock request: %w", err)
 	}
-	cmd := exec.CommandContext(ctx, "ssh", args...)
+	sshCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cmd := exec.CommandContext(sshCtx, "ssh", args...)
 	cmd.Stdin = bytes.NewReader(body)
 	cmd.WaitDelay = exitWait
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return Response{}, fmt.Errorf("open restricted SSH response: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return Response{}, fmt.Errorf("start restricted SSH: %w", err)
+	}
+	const maximumReplyBytes = 4096
+	reply, readErr := io.ReadAll(io.LimitReader(stdout, maximumReplyBytes+1))
+	if readErr != nil || len(reply) > maximumReplyBytes {
+		cancel()
+	}
+	if err := cmd.Wait(); err != nil {
 		slog.Error("hostlock.restricted_ssh_failed", "host", host.Name, "operation", request.Operation, "err", err)
 		if ctx.Err() != nil {
 			return Response{}, fmt.Errorf("restricted host lock operation ended: %w", context.Cause(ctx))
 		}
 		return Response{}, fmt.Errorf("restricted host lock SSH command failed: %w", err)
 	}
+	if readErr != nil || len(reply) > maximumReplyBytes {
+		return Response{}, errors.New("restricted host lock response exceeds the input limit or cannot be read")
+	}
 	var response wireResponse
-	if err := unmarshalStrict(stdout.Bytes(), &response); err != nil {
+	if err := unmarshalStrict(reply, &response, "status", "host_time", "expires_at"); err != nil {
 		return Response{}, errors.New("restricted host lock returned an invalid response")
+	}
+	if !response.validFor(message) {
+		return Response{}, errors.New("restricted host lock returned invalid status or times for the operation")
 	}
 	switch response.Status {
 	case statusOK:
@@ -107,6 +126,37 @@ func (RestrictedSSHTransport) Do(ctx context.Context, host Host, request Request
 		return Response{}, errors.New("restricted host lock refused the operation")
 	default:
 		return Response{}, errors.New("restricted host lock refused the operation")
+	}
+}
+
+func (response wireResponse) validFor(request wireRequest) bool {
+	const maximumEpoch = 999999999999 // The lock record permits twelve decimal digits.
+	if response.HostTime <= 0 || response.HostTime > maximumEpoch || response.ExpiresAt < 0 || response.ExpiresAt > maximumEpoch {
+		return false
+	}
+	switch response.Status {
+	case statusOK:
+		remaining := response.ExpiresAt - response.HostTime
+		switch request.Operation {
+		case Release:
+			return response.ExpiresAt == 0
+		case Acquire:
+			return remaining == request.LeaseSeconds
+		case Renew, extend:
+			return remaining >= request.LeaseSeconds && remaining <= maximumAcquireSeconds
+		case Unlock:
+			return false
+		default:
+			return false
+		}
+	case statusHeld:
+		return request.Operation == Acquire && response.ExpiresAt >= response.HostTime
+	case statusNotHeld:
+		return request.Operation != Acquire && response.ExpiresAt == 0
+	case statusFailed:
+		return response.ExpiresAt == 0
+	default:
+		return false
 	}
 }
 

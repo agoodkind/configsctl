@@ -112,6 +112,7 @@ type command struct {
 	controller string
 	lease      time.Duration
 	restricted bool
+	server     bool
 }
 
 // answer is the lease that the lock script wrote on the host.
@@ -130,8 +131,11 @@ func runScript(ctx context.Context, host Host, request command) (answer, error) 
 		dir = DefaultDir
 	}
 	operation := string(request.op)
-	if request.restricted && request.op == Release {
+	if (request.restricted || request.server) && request.op == Release {
 		operation = "release-checked"
+	}
+	if request.server {
+		operation = "server-" + operation
 	}
 	script := []string{
 		"-s", "--", operation, request.run, request.controller,

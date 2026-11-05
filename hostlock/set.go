@@ -53,11 +53,12 @@ type Set struct {
 	// acquired records that AcquireAll locked every host and wrote the state file.
 	acquired bool
 	// released, lost, and renewalDone record conditions that invalidate a Scope.
-	released    bool
-	lost        error
-	renewalDone <-chan struct{}
-	options     Options
-	stopRenewal context.CancelFunc
+	released         bool
+	lost             error
+	notifyStrictLoss func(error)
+	renewalDone      <-chan struct{}
+	options          Options
+	stopRenewal      context.CancelFunc
 }
 
 // AcquireAll requires a lock on every host. On failure, it attempts to release
@@ -87,7 +88,7 @@ func AcquireAllWithOptions(ctx context.Context, hosts []Host, run, controller st
 	request := command{op: Acquire, run: run, controller: controller, lease: lease.TTL}
 	for _, host := range hosts {
 		asked := clock.NowUTC()
-		granted, err := set.operation(ctx, host, request)
+		granted, err := set.options.operation(ctx, host, request)
 		if err != nil {
 			set.ReleaseAll(context.WithoutCancel(ctx))
 			slog.Error("hostlock.acquire_failed", "host", host.Name, "run", run, "err", err)
@@ -96,7 +97,7 @@ func AcquireAllWithOptions(ctx context.Context, hosts []Host, run, controller st
 		set.held = append(set.held, host)
 		set.advance(host.Name, asked, granted.remaining)
 	}
-	if err := writeState(stateDir, run, controller, set.held); err != nil {
+	if err := set.writeState(set.held); err != nil {
 		set.ReleaseAll(context.WithoutCancel(ctx))
 		return nil, err
 	}
@@ -159,6 +160,11 @@ func (s *Set) deadline(name string) time.Time {
 // or a host has not answered before its loss deadline.
 func (s *Set) RenewAll(ctx context.Context) error {
 	s.mu.Lock()
+	if s.options.StrictRenewal && s.lost != nil {
+		err := s.lost
+		s.mu.Unlock()
+		return err
+	}
 	hosts := append([]Host{}, s.held...)
 	s.mu.Unlock()
 	roundCtx, endRound := context.WithCancel(ctx)
@@ -202,9 +208,15 @@ func (s *Set) RenewAll(ctx context.Context) error {
 // markLost records the first lock loss for Scope.
 func (s *Set) markLost(err error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.lost == nil {
-		s.lost = err
+	if s.lost != nil {
+		s.mu.Unlock()
+		return
+	}
+	s.lost = err
+	notify := s.notifyStrictLoss
+	s.mu.Unlock()
+	if notify != nil {
+		notify(err)
 	}
 }
 
@@ -224,7 +236,7 @@ func (s *Set) renewHost(ctx context.Context, host Host, request command) (answer
 	}
 	attemptCtx, cancel := context.WithTimeoutCause(ctx, timeout, fmt.Errorf("%w within %s", errNoAnswer, timeout))
 	defer cancel()
-	return s.operation(attemptCtx, host, request)
+	return s.options.operation(attemptCtx, host, request)
 }
 
 // record moves the loss deadline of a renewed host and logs a failed renewal
@@ -255,17 +267,29 @@ func (s *Set) record(result renewal) error {
 // renewing when RenewAll returns ErrLost or a host's loss deadline passes.
 func (s *Set) KeepRenewed(ctx context.Context, lost func(error)) (stop func()) {
 	renewCtx, cancel := context.WithCancel(ctx)
+	var once sync.Once
+	notify := func(err error) {
+		once.Do(func() {
+			if renewCtx.Err() == nil {
+				lost(err)
+			}
+			cancel()
+		})
+	}
 	s.mu.Lock()
 	s.renewalDone = renewCtx.Done()
 	s.stopRenewal = cancel
+	priorLoss := s.lost
+	if s.options.StrictRenewal {
+		s.notifyStrictLoss = notify
+	}
 	s.mu.Unlock()
-	var once sync.Once
+	if s.options.StrictRenewal && priorLoss != nil {
+		notify(priorLoss)
+	}
 	report := func(err error) {
 		s.markLost(err)
-		if renewCtx.Err() == nil {
-			once.Do(func() { lost(err) })
-		}
-		cancel()
+		notify(err)
 	}
 	var running sync.WaitGroup
 	for _, loop := range []func(context.Context, func(error)){s.renewEachInterval, s.watchDeadlines} {
@@ -281,6 +305,11 @@ func (s *Set) KeepRenewed(ctx context.Context, lost func(error)) (stop func()) {
 	return func() {
 		cancel()
 		running.Wait()
+		s.mu.Lock()
+		if s.renewalDone == renewCtx.Done() {
+			s.notifyStrictLoss = nil
+		}
+		s.mu.Unlock()
 	}
 }
 
@@ -359,7 +388,7 @@ func (s *Set) releaseAll(ctx context.Context, checked bool) error {
 	var failures error
 	var retained []Host
 	for _, host := range hosts {
-		if _, err := s.operation(ctx, host, command{op: Release, run: s.run, controller: s.controller, lease: s.lease.TTL, restricted: checked}); err != nil {
+		if _, err := s.options.operation(ctx, host, command{op: Release, run: s.run, controller: s.controller, lease: s.lease.TTL, restricted: checked}); err != nil {
 			failures = errors.Join(failures, fmt.Errorf("release %s: %w", host.Name, err))
 			if checked {
 				retained = append(retained, host)

@@ -13,9 +13,39 @@ CONTROLLER=$3
 TTL=$4
 LOCK_DIR=$5
 EXTEND_CAP=$6
+GUARD_WAIT_SECONDS=30
+
+enter_server_directory() {
+    local component expected=""
+    local -a components
+    IFS=/ read -r -a components <<< "$LOCK_DIR"
+    cd -P /
+    for component in "${components[@]}"; do
+        if [[ -z "$component" ]]; then
+            continue
+        fi
+        if [[ -L "$component" ]]; then
+            echo "lock directory components must not be symbolic links" >&2
+            exit 2
+        fi
+        mkdir -p "./$component"
+        cd -P "./$component"
+        expected="$expected/$component"
+        if [[ "$(pwd -P)" != "$expected" ]]; then
+            echo "lock directory changed during traversal" >&2
+            exit 2
+        fi
+    done
+    # Resolve guard and record paths relative to the directory opened above.
+    LOCK_DIR=.
+}
+
+if [[ "$OPERATION" == server-* ]]; then
+    OPERATION=${OPERATION#server-}
+    enter_server_directory
+fi
 LOCK_FILE="$LOCK_DIR/deploy.lock"
 GUARD_PREFIX="$LOCK_DIR/deploy.lock.guard"
-GUARD_WAIT_SECONDS=30
 
 boot_id() {
     local boot_time
@@ -107,7 +137,7 @@ main() {
             exit 2
         fi
         exec 3<&-
-        if [[ -z "$holder" || -z "$holder_controller" || ! "$expiry" =~ ^[0-9]{1,12}$ || -n "$extra" ]]; then
+        if [[ -z "$holder" || -z "$holder_controller" || ! "$expiry" =~ ^(0|[1-9][0-9]{0,11})$ || -n "$extra" ]]; then
             echo "lock record is malformed" >&2
             exit 2
         fi
@@ -139,7 +169,7 @@ main() {
             write_later_expiry "$current_time" "$expiry"
             ;;
         release|release-checked)
-            if [[ "$OPERATION" == release-checked && "$holder" != "$RUN" ]]; then
+            if [[ "$OPERATION" == release-checked && -n "$holder" && "$holder" != "$RUN" ]]; then
                 echo "$holder $holder_controller $expiry"
                 exit 4
             fi

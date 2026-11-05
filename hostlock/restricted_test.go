@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -21,8 +22,34 @@ import (
 // The test subprocess uses the production endpoint with an isolated lock directory.
 func TestRestrictedEndpointProcess(t *testing.T) {
 	for index, argument := range os.Args {
+		if argument == "--host-lock-reply" {
+			if _, err := io.Copy(io.Discard, os.Stdin); err != nil {
+				t.Fatal(err)
+			}
+			body, err := os.ReadFile(os.Args[index+1])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stderr.Write(bytes.Repeat([]byte("x"), 65536)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stdout.Write(body); err != nil {
+				t.Fatal(err)
+			}
+			os.Exit(0)
+		}
 		if argument == "--host-lock-test" {
-			err := (hostlock.Server{Principal: os.Args[index+1], Directory: os.Args[index+2]}).Serve(context.Background(), os.Stdin, os.Stdout)
+			var output io.Writer = os.Stdout
+			if len(os.Args) > index+3 {
+				_, err := os.Stat(os.Args[index+2])
+				switch {
+				case err == nil:
+					output = io.Discard
+				case !errors.Is(err, os.ErrNotExist):
+					t.Fatal(err)
+				}
+			}
+			err := (hostlock.Server{Principal: os.Args[index+1], Directory: os.Args[len(os.Args)-1]}).Serve(context.Background(), os.Stdin, output)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -57,10 +84,16 @@ func TestRestrictedSSHUsesPinnedIdentityAndSharedLocks(t *testing.T) {
 	if _, err := transport.Do(t.Context(), host, request); err == nil {
 		t.Fatal("the restricted client acquired the legacy client's lock")
 	}
+	if err := hostlock.Do(t.Context(), legacy, hostlock.Release, "legacy-run", "local"); err != nil {
+		t.Fatal(err)
+	}
 	wrongIdentity := host
 	wrongIdentity.Address = "untrusted.example.invalid"
 	if _, err := transport.Do(t.Context(), wrongIdentity, request); err == nil {
 		t.Fatal("SSH accepted an unpinned endpoint identity")
+	}
+	if _, err := transport.Do(t.Context(), host, request); err != nil {
+		t.Fatalf("the pinned identity could not acquire the free lock: %v", err)
 	}
 	wrongKey := host
 	wrongKey.PrivateKeyFile = filepath.Join(t.TempDir(), "missing-key")
@@ -70,7 +103,7 @@ func TestRestrictedSSHUsesPinnedIdentityAndSharedLocks(t *testing.T) {
 }
 
 func TestRestrictedServerRejectsInvalidInputAndOtherPrincipal(t *testing.T) {
-	directory := t.TempDir()
+	directory := physicalTempDir(t)
 	valid := `{"protocol_version":1,"operation":"acquire","run_id":"attempt","lease_seconds":30}`
 	var output bytes.Buffer
 	if err := (hostlock.Server{Principal: "planning", Directory: directory}).Serve(t.Context(), strings.NewReader(valid), &output); err != nil {
@@ -88,6 +121,9 @@ func TestRestrictedServerRejectsInvalidInputAndOtherPrincipal(t *testing.T) {
 	}
 	invalid := []string{
 		valid + valid,
+		strings.Replace(valid, `"operation":"acquire"`, `"operation":"acquire","OPERATION":"release"`, 1),
+		strings.Replace(valid, `"run_id"`, `"Run_Id"`, 1),
+		strings.Replace(valid, `,"lease_seconds":30`, "", 1),
 		strings.Replace(valid, `"protocol_version":1`, `"protocol_version":1,"protocol_version":1`, 1),
 		strings.Replace(valid, `"run_id":"attempt"`, `"run_id":"attempt","directory":"/tmp"`, 1),
 		strings.Replace(valid, `"lease_seconds":30`, `"lease_seconds":4201`, 1),
@@ -184,11 +220,15 @@ func TestRestrictedSetCleansPartialAcquisitionAndReportsReleaseFailure(t *testin
 }
 
 func TestRestrictedServerPreservesUnsafeFilesystemEntries(t *testing.T) {
-	for _, kind := range []string{"symlink", "malformed", "extra-record", "nonempty-guard"} {
+	for _, kind := range []string{"symlink", "malformed", "extra-record", "nonempty-guard", "leading-zero-epoch"} {
 		t.Run(kind, func(t *testing.T) {
-			directory := t.TempDir()
+			directory := physicalTempDir(t)
 			path := filepath.Join(directory, "deploy.lock")
 			switch kind {
+			case "leading-zero-epoch":
+				if err := os.WriteFile(path, []byte("prior owner 02000000009\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
 			case "symlink":
 				if err := os.Symlink(filepath.Join(t.TempDir(), "target"), path); err != nil {
 					t.Fatal(err)
@@ -221,6 +261,12 @@ func TestRestrictedServerPreservesUnsafeFilesystemEntries(t *testing.T) {
 			}
 			if _, err := os.Lstat(path); err != nil {
 				t.Fatal("server removed unsafe filesystem entry:", err)
+			}
+			if kind == "leading-zero-epoch" {
+				body, err := os.ReadFile(path)
+				if err != nil || string(body) != "prior owner 02000000009\n" {
+					t.Fatalf("conflicting acquire changed the existing record: %q, %v", body, err)
+				}
 			}
 		})
 	}
@@ -284,13 +330,201 @@ func TestAbandonStopsRenewalAndPreservesRemoteRecord(t *testing.T) {
 	}
 }
 
+func TestRestrictedServerRefusesSymlinkedAncestor(t *testing.T) {
+	root, target := physicalTempDir(t), physicalTempDir(t)
+	alias := filepath.Join(root, "alias")
+	if err := os.Symlink(target, alias); err != nil {
+		t.Fatal(err)
+	}
+	server := hostlock.Server{Principal: "planning", Directory: filepath.Join(alias, "missing", "locks")}
+	body := `{"protocol_version":1,"operation":"acquire","run_id":"attempt","lease_seconds":30}`
+	var output bytes.Buffer
+	if err := server.Serve(t.Context(), strings.NewReader(body), &output); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), `"status":"failed"`) {
+		t.Fatal("the server followed a symlinked ancestor:", output.String())
+	}
+	if _, err := os.Stat(filepath.Join(target, "missing")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the server created a directory through a symlink: %v", err)
+	}
+}
+
+func TestRestrictedExtendUsesSavedEndpointAndTimeout(t *testing.T) {
+	host, directory := restrictedServer(t, "planning")
+	options := hostlock.Options{Transport: &hostlock.RestrictedSSHTransport{}, RequestTimeout: 4 * time.Second}
+	set, err := hostlock.AcquireAllWithOptions(t.Context(), nil, "attempt", "runner", hostlock.DefaultLease(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.ReleaseAll(t.Context())
+	if err := set.AcquireAdditional(t.Context(), []hostlock.Host{host}); err != nil {
+		t.Fatal(err)
+	}
+	expiry, err := hostlock.Extend(t.Context(), set.StateDir(), host.Name, hostlock.MaxExtend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored := lockExpiry(t, filepath.Join(directory, "deploy.lock"), "planning:attempt"); !stored.Equal(expiry) {
+		t.Fatalf("the server stored expiry %s but Extend reported %s", stored, expiry)
+	}
+	t.Run("saved deadline", func(t *testing.T) {
+		holdGuard(t, hostlock.Host{Name: host.Name, Dir: directory})
+		_, err := hostlock.Extend(t.Context(), set.StateDir(), host.Name, hostlock.MaxExtend)
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("the blocked extension did not report its saved timeout: %v", err)
+		}
+	})
+}
+
+func TestExtendRefusesAnUnsavedCustomTransport(t *testing.T) {
+	host, _ := restrictedServer(t, "planning")
+	options := hostlock.Options{Transport: struct {
+		hostlock.RestrictedSSHTransport
+	}{}}
+	set, err := hostlock.AcquireAllWithOptions(t.Context(), []hostlock.Host{host}, "attempt", "runner", hostlock.DefaultLease(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.ReleaseAll(t.Context())
+	if _, err := hostlock.Extend(t.Context(), set.StateDir(), host.Name, hostlock.MaxExtend); err == nil || !strings.Contains(err.Error(), "child processes cannot extend") {
+		t.Fatalf("child extension did not refuse the custom transport: %v", err)
+	}
+}
+
+func TestCheckedReleaseRetriesAfterServerDeletesLock(t *testing.T) {
+	marker := filepath.Join(physicalTempDir(t), "discard-reply")
+	host, directory := restrictedSSHServer(t, "--host-lock-test applying "+marker)
+	set, err := hostlock.AcquireAllWithOptions(t.Context(), []hostlock.Host{host}, "attempt", "runner", hostlock.DefaultLease(), hostlock.Options{Transport: hostlock.RestrictedSSHTransport{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Abandon()
+	if err := os.WriteFile(marker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := set.ReleaseAllChecked(t.Context()); err == nil {
+		t.Fatal("checked release accepted an empty SSH reply")
+	}
+	if _, err := os.Stat(filepath.Join(directory, "deploy.lock")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the server did not delete the lock before losing the reply: %v", err)
+	}
+	if err := os.Remove(marker); err != nil {
+		t.Fatal(err)
+	}
+	other := hostlock.Host{Name: "legacy", Dir: directory}
+	if err := hostlock.Do(t.Context(), other, hostlock.Acquire, "other-run", "local"); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(directory, "deploy.lock")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := set.ReleaseAllChecked(t.Context()); !errors.Is(err, hostlock.ErrNotHeld) {
+		t.Fatalf("retry did not report the replacement owner: %v", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("retry changed the replacement owner's record: %q, %v", after, err)
+	}
+	if err := hostlock.Do(t.Context(), other, hostlock.Release, "other-run", "local"); err != nil {
+		t.Fatal(err)
+	}
+	if err := set.ReleaseAllChecked(t.Context()); err != nil {
+		t.Fatalf("the server refused a retry after deleting the lock: %v", err)
+	}
+}
+
+func TestManualStrictRenewalCancelsSupervisedWork(t *testing.T) {
+	host := localHost(t)
+	set, err := hostlock.AcquireAllWithOptions(t.Context(), []hostlock.Host{host}, "attempt", "runner", hostlock.DefaultLease(), hostlock.Options{StrictRenewal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Abandon()
+	scope, err := set.Scope()
+	if err != nil {
+		t.Fatal(err)
+	}
+	work, cancel := context.WithCancelCause(t.Context())
+	defer cancel(nil)
+	stop := set.KeepRenewed(t.Context(), cancel)
+	defer stop()
+	if err := hostlock.Do(t.Context(), host, hostlock.Release, "attempt", "runner"); err != nil {
+		t.Fatal(err)
+	}
+	if err := set.RenewAll(t.Context()); !errors.Is(err, hostlock.ErrLost) {
+		t.Fatalf("manual renewal did not report loss: %v", err)
+	}
+	select {
+	case <-work.Done():
+		if !errors.Is(context.Cause(work), hostlock.ErrLost) {
+			t.Fatal(context.Cause(work))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the supervisor continued after manual renewal failed")
+	}
+	if err := scope.Check([]string{host.Name}); !errors.Is(err, hostlock.ErrScope) {
+		t.Fatalf("scope accepted work after manual renewal failed: %v", err)
+	}
+}
+
+func TestRestrictedSSHValidatesBoundedReplies(t *testing.T) {
+	reply := filepath.Join(physicalTempDir(t), "reply")
+	host, _ := restrictedSSHServer(t, "--host-lock-reply "+reply)
+	const valid = `{"status":"ok","host_time":1000,"expires_at":1030}`
+	for _, test := range []struct {
+		name  string
+		op    hostlock.Operation
+		reply string
+		ok    bool
+	}{
+		{"complete acquire", hostlock.Acquire, valid, true},
+		{"missing host time", hostlock.Acquire, `{"status":"ok","expires_at":1030}`, false},
+		{"missing release expiry", hostlock.Release, `{"status":"ok","host_time":1000}`, false},
+		{"alias", hostlock.Acquire, strings.Replace(valid, "host_time", "HOST_TIME", 1), false},
+		{"excess output", hostlock.Acquire, valid + strings.Repeat(" ", 4096), false},
+		{"invalid clock", hostlock.Acquire, `{"status":"ok","host_time":0,"expires_at":30}`, false},
+		{"long acquire", hostlock.Acquire, `{"status":"ok","host_time":1,"expires_at":1030}`, false},
+		{"expired renewal", hostlock.Renew, `{"status":"ok","host_time":1000,"expires_at":999}`, false},
+		{"excess renewal", hostlock.Renew, `{"status":"ok","host_time":1000,"expires_at":9999999999}`, false},
+		{"preserved expiry", hostlock.Operation("extend"), `{"status":"ok","host_time":1000,"expires_at":5200}`, true},
+		{"release with lease", hostlock.Release, valid, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := os.WriteFile(reply, []byte(test.reply), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := (hostlock.RestrictedSSHTransport{}).Do(t.Context(), host, hostlock.Request{Operation: test.op, Run: "attempt", Lease: 30 * time.Second})
+			if (err == nil) != test.ok {
+				t.Fatalf("reply acceptance differed from %t: %v", test.ok, err)
+			}
+		})
+	}
+}
+
+func physicalTempDir(t *testing.T) string {
+	t.Helper()
+	directory, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return directory
+}
+
 func restrictedServer(t *testing.T, principal string) (hostlock.Host, string) {
+	t.Helper()
+	return restrictedSSHServer(t, "--host-lock-test "+principal)
+}
+
+func restrictedSSHServer(t *testing.T, endpointArgs string) (hostlock.Host, string) {
 	t.Helper()
 	sshd, err := exec.LookPath("sshd")
 	if err != nil {
 		t.Fatal("install OpenSSH sshd to run restricted host lock acceptance")
 	}
-	directory := t.TempDir()
+	directory := physicalTempDir(t)
 	key := filepath.Join(directory, "client")
 	hostKey := filepath.Join(directory, "host")
 	for _, path := range []string{key, hostKey} {
@@ -320,7 +554,7 @@ func restrictedServer(t *testing.T, principal string) (hostlock.Host, string) {
 		t.Fatal(err)
 	}
 	lockDirectory := filepath.Join(directory, "locks")
-	config := fmt.Sprintf("Port %s\nListenAddress 127.0.0.1\nHostKey %s\nPidFile %s\nAuthorizedKeysFile %s.pub\nStrictModes no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nUsePAM no\nAllowUsers %s\nForceCommand %s -test.run=TestRestrictedEndpointProcess -- --host-lock-test %s %s\n", port, hostKey, filepath.Join(directory, "pid"), key, current.Username, executable, principal, lockDirectory)
+	config := fmt.Sprintf("Port %s\nListenAddress 127.0.0.1\nHostKey %s\nPidFile %s\nAuthorizedKeysFile %s.pub\nStrictModes no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nUsePAM no\nAllowUsers %s\nForceCommand %s -test.run=TestRestrictedEndpointProcess -- %s %s\n", port, hostKey, filepath.Join(directory, "pid"), key, current.Username, executable, endpointArgs, lockDirectory)
 	configPath := filepath.Join(directory, "sshd_config")
 	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
