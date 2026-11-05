@@ -17,6 +17,7 @@ import (
 	"syscall"
 
 	"goodkind.io/configsctl/internal/baseline"
+	"goodkind.io/configsctl/internal/hclsources"
 	"goodkind.io/configsctl/internal/lint"
 	"goodkind.io/configsctl/internal/redact"
 	"goodkind.io/configsctl/internal/tofuargs"
@@ -76,6 +77,16 @@ func run(args []string) error {
 		return errors.New("usage: configsctl <command>")
 	}
 	command := args[0]
+	if command == "lint-hcl-sources" {
+		if len(args) != 2 {
+			return errors.New("usage: configsctl lint-hcl-sources <request.json>")
+		}
+		if err := hclsources.CheckRequest(args[1]); err != nil {
+			slog.Error("hcl.source_check_failed", "err", err)
+			return fmt.Errorf("check HCL sources: %w", err)
+		}
+		return nil
+	}
 	if command == "ci" {
 		return runCI(args[1:])
 	}
