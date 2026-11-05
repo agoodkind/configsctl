@@ -6,6 +6,7 @@ import (
 	"path"
 	"regexp"
 	"slices"
+	"strings"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
@@ -69,6 +70,9 @@ func (s *source) declare(declarations map[installedVariable]string, active bool)
 			return fmt.Errorf("%s: declare the variable with sensitive = true and without a default", label)
 		}
 		if active {
+			if isOverride(s.file.Destination) {
+				return fmt.Errorf("%s: declare the sensitive variable in a primary file", label)
+			}
 			key := installedVariable{path.Dir(s.file.Destination), block.Labels[0]}
 			if _, exists := declarations[key]; exists {
 				return fmt.Errorf("%s: declare the sensitive variable only once per installed module", label)
@@ -79,6 +83,11 @@ func (s *source) declare(declarations map[installedVariable]string, active bool)
 		s.allowedEnds[label.End.Byte-1] = true
 	}
 	return nil
+}
+
+func isOverride(destination string) bool {
+	stem := strings.TrimSuffix(path.Base(destination), path.Ext(destination))
+	return stem == "override" || strings.HasSuffix(stem, "_override")
 }
 
 func literalTrue(attribute *hclsyntax.Attribute) bool {

@@ -124,6 +124,33 @@ func TestHCLSourceModule(t *testing.T) {
 	})
 }
 
+func TestHCLSourceOverrides(t *testing.T) {
+	requireTofu(t)
+	for _, name := range []string{"override.tf", "certificate_override.tf", "override.tofu", "certificate_override.tofu"} {
+		t.Run(name, func(t *testing.T) {
+			declaration := hclFixture(t, "variable.tf")
+			reference := hclFixture(t, "reference.tf")
+			override := declaration
+			override.Destination = "/installed/" + name
+			dir := t.TempDir()
+			writeFixtureFile(t, filepath.Join(dir, name), override.Content)
+			writeFixtureFile(t, filepath.Join(dir, "reference.tf"), reference.Content)
+			cmd := exec.CommandContext(t.Context(), "tofu", "validate", "-no-color")
+			cmd.Dir = dir
+			cmd.Env = []string{"HOME=" + dir}
+			result, err := cmd.CombinedOutput()
+			if err == nil || !bytes.Contains(result, []byte("Missing base variable declaration to override")) {
+				t.Fatalf("OpenTofu returned %v, output %q", err, result)
+			}
+			runHCLCheck(t, []artifactSource{reference, override}, "primary file")
+			base := hclFixture(t, "output.tf")
+			override = hclFixture(t, "output-reference.tf")
+			override.Destination = "/installed/" + name
+			runHCLCheck(t, []artifactSource{override, declaration, base}, "")
+		})
+	}
+}
+
 func TestHCLSourceRequest(t *testing.T) {
 	dir := t.TempDir()
 	runHCLCommand(t, dir, "usage:")
