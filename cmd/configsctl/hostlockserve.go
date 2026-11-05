@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -18,7 +19,22 @@ func runHostLockServer(args []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := hostlock.Serve(ctx, args[2], os.Stdin, os.Stdout); err != nil {
+	input, writer := io.Pipe()
+	defer input.Close()
+	interruptRead := context.AfterFunc(ctx, func() { _ = input.CloseWithError(ctx.Err()) })
+	defer interruptRead()
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				err := fmt.Errorf("read host lock request panicked: %v", recovered)
+				slog.Error("hostlock.input_failed", "err", err)
+				_ = writer.CloseWithError(err)
+			}
+		}()
+		_, err := io.Copy(writer, os.Stdin)
+		_ = writer.CloseWithError(err)
+	}()
+	if err := hostlock.Serve(ctx, args[2], input, os.Stdout); err != nil {
 		slog.Error("hostlock.server_failed", "err", err)
 		return fmt.Errorf("serve host lock request: %w", err)
 	}
