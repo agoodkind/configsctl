@@ -51,6 +51,14 @@ func cleanAbsolute(path string) bool {
 	return filepath.IsAbs(path) && filepath.Clean(path) == path
 }
 
+// CheckDataDirectory requires an existing OpenTofu data directory that the
+// current user owns, that is not a symbolic link, and that denies group and
+// other access. Callers can check it before preparing credentials or reading
+// workspace selection. Run repeats this check before starting OpenTofu.
+func CheckDataDirectory(path string) error {
+	return checkPrivateDirectory("DataDirectory", path)
+}
+
 // checkPrivateDirectory requires an existing directory that the current user
 // owns, that is not a symbolic link, and that denies group and other access.
 func checkPrivateDirectory(label, path string) error {
