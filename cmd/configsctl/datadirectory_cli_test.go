@@ -4,9 +4,12 @@ package main_test
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -18,9 +21,6 @@ func TestNativeExecutionUsesExternalDataDirectory(t *testing.T) {
 			root := filepath.Join(fixture.tree.workspaces, "suburban", "tack")
 			stateDirectory := t.TempDir()
 			dataDirectory := filepath.Join(stateDirectory, "terraform")
-			if err := os.Mkdir(dataDirectory, 0o700); err != nil {
-				t.Fatal(err)
-			}
 			backend := nativeFixtureFile(t, "external-backend.tf")
 			writeFixtureFile(t, filepath.Join(root, "backend.tf"), fmt.Sprintf(backend, filepath.Join(stateDirectory, "default.tfstate"), filepath.Join(stateDirectory, "states")))
 			selected := dataDirectory
@@ -56,10 +56,43 @@ func TestNativeExecutionUsesExternalDataDirectory(t *testing.T) {
 			if err := os.Chmod(dataDirectory, 0o755); err != nil {
 				t.Fatal(err)
 			}
-			refused := fixture.apply(t, "-auto-approve")
-			if refused.exitCode == 0 || !strings.Contains(refused.stderr, "DataDirectory") || !strings.Contains(refused.stderr, "group and other users must not have access") {
-				t.Fatalf("native apply accepted an unsafe external data directory: %s", refused.stderr)
+			for _, args := range [][]string{{"init", "-input=false"}, {"plan", "-input=false"}, {"show", "-json"}, {"workspace", "show"}, {"apply", "-auto-approve"}} {
+				refused := fixture.mutate(t, args...)
+				if refused.exitCode == 0 || !strings.Contains(refused.stderr, "DataDirectory") || !strings.Contains(refused.stderr, "group and other users must not have access") {
+					t.Fatalf("native %s accepted an unsafe external data directory: %s", args[0], refused.stderr)
+				}
+			}
+			info, err := os.Stat(dataDirectory)
+			if err != nil || info.Mode().Perm() != 0o755 {
+				t.Fatal("native preflight changed the unsafe directory permissions")
 			}
 		})
 	}
+}
+
+func TestNativeDataDirectoryPreflightPreventsCredentialPreparation(t *testing.T) {
+	fixture := newDirectFixture(t, explicitSettings)
+	var requests atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		writer.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	installNativeCredential(t, fixture, server)
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(directory, "environment"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fixture.extraEnv = []string{"TF_DATA_DIR=" + directory}
+	refused := fixture.apply(t, "-auto-approve")
+	if refused.exitCode == 0 || !strings.Contains(refused.stderr, "DataDirectory") || !strings.Contains(refused.stderr, "group and other users must not have access") {
+		t.Fatalf("native apply did not validate its data directory before reading workspace selection: %s", refused.stderr)
+	}
+	if requests.Load() != 0 {
+		t.Fatal("native apply contacted the credential controller before validating its data directory")
+	}
+	requireNoFile(t, filepath.Join(fixture.lockDir, "deploy.lock"))
 }

@@ -88,7 +88,7 @@ func buildEnvironment(request Request) (environment, error) {
 		}
 	}
 	if request.DataDirectory != "" {
-		if err := checkPrivateDirectory("DataDirectory", request.DataDirectory); err != nil {
+		if err := CheckDataDirectory(request.DataDirectory); err != nil {
 			return built, err
 		}
 		built.values = append(built.values, "TF_DATA_DIR="+request.DataDirectory)

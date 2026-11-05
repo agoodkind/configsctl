@@ -488,12 +488,9 @@ func newExplicitRunner(settings tofuSettings, request tofuLockRequest, passwordF
 }
 
 func selectedMutationWorkspace(settings tofuSettings, request tofuLockRequest, root string) (string, string, error) {
-	directory := ""
-	if !strictExplicitSettings(settings, request.lockTargets[tofuWorkspaceKey(request.workspaceDir)]) {
-		directory = environmentValue(request.env, "TF_DATA_DIR")
-		if directory != "" && !filepath.IsAbs(directory) {
-			directory = filepath.Join(root, directory)
-		}
+	directory, err := prepareNativeDataDirectory(settings, request.workspaceDir, request.env, request.args)
+	if err != nil {
+		return "", "", err
 	}
 	workspace, err := selectedTofuWorkspace(root, directory)
 	if err != nil {
@@ -503,6 +500,35 @@ func selectedMutationWorkspace(settings tofuSettings, request tofuLockRequest, r
 		return "", "", err
 	}
 	return workspace, directory, nil
+}
+
+func prepareNativeDataDirectory(settings tofuSettings, workspace string, environment, args []string) (string, error) {
+	if strictExplicitSettings(settings, settings.LockTargets[tofuWorkspaceKey(workspace)]) {
+		return "", nil
+	}
+	directory := environmentValue(environment, "TF_DATA_DIR")
+	if directory == "" {
+		return "", nil
+	}
+	if !filepath.IsAbs(directory) {
+		directory = filepath.Join(workspace, directory)
+	}
+	directory, err := filepath.Abs(directory)
+	if err != nil {
+		slog.Error("tofu.native.data_directory_failed", "workspace", workspace, "err", err)
+		return "", fmt.Errorf("resolve the native OpenTofu data directory: %w", err)
+	}
+	if tofuargs.Subcommand(args) == "init" && !tofuCommandHelp(args) {
+		if err := os.MkdirAll(directory, explicitDirectoryMode); err != nil {
+			slog.Error("tofu.native.data_directory_failed", "directory", directory, "err", err)
+			return "", fmt.Errorf("create the native OpenTofu data directory: %w", err)
+		}
+	}
+	if err := tofurun.CheckDataDirectory(directory); err != nil {
+		slog.Error("tofu.native.data_directory_failed", "directory", directory, "err", err)
+		return "", fmt.Errorf("validate the native OpenTofu data directory: %w", err)
+	}
+	return directory, nil
 }
 
 // splitExplicitAssignments separates the provider mirror configuration path,

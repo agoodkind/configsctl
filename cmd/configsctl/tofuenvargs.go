@@ -33,6 +33,9 @@ func prepareTofuInvocation(settings tofuSettings, workspace, passwordFile string
 	if err != nil {
 		return nil, nil, err
 	}
+	if _, err := prepareNativeDataDirectory(settings, workspace, childEnv, expanded); err != nil {
+		return nil, nil, err
+	}
 	safeArgs, err = sanitizeTofuArgs(expanded)
 	if err != nil {
 		return nil, nil, err
