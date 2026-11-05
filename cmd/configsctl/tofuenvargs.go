@@ -33,6 +33,18 @@ func prepareTofuInvocation(settings tofuSettings, workspace, passwordFile string
 	if err != nil {
 		return nil, nil, err
 	}
+	if settings.source != nil {
+		if settings.ProviderMirror == nil {
+			childEnv, err = settings.source.environment(childEnv)
+			if err != nil {
+				return nil, nil, err
+			}
+		}
+		expanded, err = settings.source.arguments(workspace, expanded)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
 	directory, err := prepareNativeDataDirectory(settings, workspace, childEnv, expanded)
 	if err != nil {
 		return nil, nil, err

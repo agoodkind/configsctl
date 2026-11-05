@@ -64,13 +64,28 @@ func runNativeLint(ctx context.Context, tofu tofuSettings) error {
 }
 
 func loadTofuWorkspace(ctx context.Context, args []string) (settings, string, []string, error) {
-	loaded, err := loadSettings(settingsFile)
+	loaded, err := loadNativeSettings(sourceExecutionPath(ctx, settingsFile))
 	if err != nil {
 		return loaded, "", nil, err
 	}
-	directory, arguments, err := selectTofuWorkspace(loaded.Tofu.WorkspacesDir, args)
+	loaded.Tofu.source = installedSourceFrom(ctx)
+	if loaded.Tofu.ProviderMirror != nil {
+		mirror, err := resolveProviderMirror(settingsFile, *loaded.Tofu.ProviderMirror)
+		if err != nil {
+			return loaded, "", nil, err
+		}
+		loaded.Tofu.ProviderMirror = &mirror
+	}
+	directory, arguments, err := selectTofuWorkspace(sourceExecutionPath(ctx, loaded.Tofu.WorkspacesDir), args)
 	if err != nil {
 		return loaded, "", nil, err
+	}
+	if loaded.Tofu.source != nil {
+		directory, err = filepath.Rel(loaded.Tofu.source.copyRoot, directory)
+		if err != nil {
+			slog.Error("tofu.source.workspace_failed", "err", err)
+			return loaded, "", nil, fmt.Errorf("resolve the installed workspace selector: %w", err)
+		}
 	}
 	if len(arguments) == 0 {
 		return loaded, "", nil, fmt.Errorf("%s", tofuUsage)
@@ -98,7 +113,7 @@ func evaluateNativeConfigurationAt(ctx context.Context, tofu tofuSettings, repos
 	if err := validateWorkspaceSelector(tofu.ConfigurationRoot); err != nil {
 		return targets, err
 	}
-	root, err := repositoryDirectory(filepath.Join(repository, tofu.ConfigurationRoot))
+	root, err := repositoryDirectory(sourceExecutionPath(ctx, filepath.Join(repository, tofu.ConfigurationRoot)))
 	if err != nil {
 		return targets, err
 	}

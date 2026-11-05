@@ -270,6 +270,15 @@ func runTofu(env cmdEnv, args []string) error {
 	if len(args) == 0 {
 		return errors.New(tofuUsage)
 	}
+	ctx, cleanupSource, err := prepareInstalledTofuSource(ctx)
+	if err != nil {
+		return err
+	}
+	defer cleanupSource()
+	return runTofuWithSource(ctx, env, args)
+}
+
+func runTofuWithSource(ctx context.Context, env cmdEnv, args []string) error {
 	passwordFile, err := vaultPassPath()
 	if err != nil {
 		return err
@@ -304,7 +313,7 @@ func runTofu(env cmdEnv, args []string) error {
 	}
 	defer releaseMigration()
 	slog.Info("tofu run", "dir", workspaceDir, "args", strings.Join(safeArgs, " "))
-	requiredHosts, err := requiredCredentialHosts(credential, usesCredential, workspaceDir, childEnv)
+	requiredHosts, err := requiredCredentialHosts(credential, usesCredential, sourceExecutionPath(ctx, workspaceDir), childEnv)
 	if err != nil {
 		return err
 	}
@@ -325,6 +334,9 @@ func runTofu(env cmdEnv, args []string) error {
 		return err
 	}
 	defer release()
+	if err := requireCurrentInstalledSource(ctx, workspaceDir); err != nil {
+		return err
+	}
 	if usesCredential {
 		rotatorPassword, err := vault.Secret(credential.Dell.RotatorPasswordKey, defaultVaultFile, passwordFile)
 		if err != nil {
@@ -357,7 +369,7 @@ func executeTofu(ctx context.Context, env cmdEnv, workspaceDir string, safeArgs,
 		}
 	}
 	request := tofurun.Request{
-		Root: workspaceDir, Args: commandArgs, Environment: childEnv, DisplayArgs: safeArgs, Patterns: env.secrets,
+		Root: sourceExecutionPath(ctx, workspaceDir), Args: commandArgs, Environment: childEnv, DisplayArgs: safeArgs, Patterns: env.secrets,
 	}
 	result, err := tofurun.Run(ctx, request)
 	if errors.Is(err, tofurun.ErrIncomplete) {

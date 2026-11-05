@@ -2,32 +2,36 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"goodkind.io/configsctl/internal/gate"
 	"goodkind.io/configsctl/internal/tofuargs"
+	"goodkind.io/configsctl/internal/tofuplansource"
 )
 
-type tofuSourceStatus string
+type tofuSourceStatus = string
 
 const (
 	tofuSourceCommitted tofuSourceStatus = "committed"
 	tofuSourcePreview   tofuSourceStatus = "preview"
 )
 
-type tofuPlanSource struct {
-	Status    tofuSourceStatus `json:"status"`
-	Commit    string           `json:"commit"`
-	Workspace string           `json:"workspace"`
-}
+type tofuPlanSource = tofuplansource.Source
 
 func requireMergedTofuSource(ctx context.Context, workspace string, args []string, changesCredential bool) error {
+	if installedSourceFrom(ctx) != nil {
+		if _, err := inspectTofuPlanSource(ctx, workspace); err != nil {
+			return err
+		}
+		if candidate := savedPlanCandidate(args); candidate != "" {
+			return requireTofuPlanSource(ctx, workspace, workspacePath(workspace, candidate))
+		}
+		return nil
+	}
 	if (!tofuWritesState(args) && !changesCredential) || tofuCommandHelp(args) {
 		return nil
 	}
@@ -68,6 +72,9 @@ func tofuCommandHelp(args []string) bool {
 }
 
 func tofuSourceWorkspace(ctx context.Context, workspace string) (string, error) {
+	if source := installedSourceFrom(ctx); source != nil {
+		return installedWorkspace(source, workspace)
+	}
 	repository := gate.Repo{Dir: "."}
 	root, err := repository.Root(ctx)
 	if err != nil {
@@ -118,6 +125,14 @@ func tofuPlanOutput(args []string) string {
 }
 
 func inspectTofuPlanSource(ctx context.Context, workspace string) (tofuPlanSource, error) {
+	if source := installedSourceFrom(ctx); source != nil {
+		identity, err := source.inspect(ctx)
+		if err != nil {
+			return tofuPlanSource{}, err
+		}
+		identity.Workspace, err = installedWorkspace(source, workspace)
+		return identity, err
+	}
 	repository := gate.Repo{Dir: "."}
 	checkout, err := repository.Snapshot(ctx)
 	if err != nil {
@@ -132,92 +147,40 @@ func inspectTofuPlanSource(ctx context.Context, workspace string) (tofuPlanSourc
 	if checkout.Dirty {
 		status = tofuSourcePreview
 	}
-	return tofuPlanSource{Status: status, Commit: checkout.Commit, Workspace: selected}, nil
-}
-
-// The cache key binds source metadata to the exact plan bytes without writing
-// generated metadata into the configuration checkout.
-func tofuPlanSourcePath(path string) (string, error) {
-	if err := requireRegularPlan(path); err != nil {
-		return "", err
-	}
-	digest, err := planDigest(path)
-	if err != nil {
-		return "", err
-	}
-	cache, err := os.UserCacheDir()
-	if err != nil {
-		slog.Error("tofu.source.cache_unavailable", "err", err)
-		return "", fmt.Errorf("find the saved plan source cache: %w", err)
-	}
-	return filepath.Join(cache, "configsctl", "plan-source", fmt.Sprintf("%x.json", digest)), nil
+	return tofuPlanSource{
+		Status: status, Commit: checkout.Commit, Workspace: selected,
+		Kind: "", Root: "", Artifact: "", Node: "", Environment: "", ManifestSHA256: "",
+	}, nil
 }
 
 func recordTofuPlanSource(ctx context.Context, workspace, path string, before tofuPlanSource) error {
 	after, err := inspectTofuPlanSource(ctx, workspace)
 	if err != nil {
-		return errors.Join(err, removeTofuPlanSource(path))
+		return errors.Join(err, tofuplansource.Remove(path))
 	}
 	if before != after {
-		if err := removeTofuPlanSource(path); err != nil {
-			return err
+		if err := tofuplansource.Remove(path); err != nil {
+			return fmt.Errorf("remove the stale plan source: %w", err)
 		}
 		return errors.New("the configuration changed during planning; regenerate the saved plan")
 	}
 	if after.Status == tofuSourcePreview {
 		slog.Warn("saved plan is preview only; configuration has uncommitted changes")
 	}
-	metadata, err := tofuPlanSourcePath(path)
-	if err != nil {
-		return err
-	}
-	encoded, err := json.Marshal(after)
-	if err != nil {
-		return fmt.Errorf("encode the saved plan source: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(metadata), 0o700); err != nil {
-		return fmt.Errorf("create the saved plan source cache: %w", err)
-	}
-	if err := os.WriteFile(metadata, encoded, 0o600); err != nil {
-		return fmt.Errorf("record the saved plan source: %w", err)
-	}
-	return nil
-}
-
-func removeTofuPlanSource(path string) error {
-	metadata, err := tofuPlanSourcePath(path)
-	if err != nil {
-		return err
-	}
-	// A newly generated plan may not have a cached source record yet.
-	if err := os.Remove(metadata); err != nil && !errors.Is(err, os.ErrNotExist) {
-		slog.Error("tofu.source.plan_record_remove_failed", "err", err)
-		return fmt.Errorf("remove the stale saved plan source record: %w", err)
+	if err := tofuplansource.Record(path, after); err != nil {
+		return fmt.Errorf("record the saved OpenTofu plan source: %w", err)
 	}
 	return nil
 }
 
 func requireTofuPlanSource(ctx context.Context, workspace, path string) error {
-	metadata, err := tofuPlanSourcePath(path)
-	if err != nil {
-		return err
-	}
-	encoded, err := os.ReadFile(metadata)
-	if err != nil {
-		slog.Error("tofu.source.plan_record_unavailable", "err", err)
-		return fmt.Errorf("regenerate the saved plan with configsctl tofu plan; its source record is unavailable: %w", err)
-	}
-	var source tofuPlanSource
-	if err := json.Unmarshal(encoded, &source); err != nil {
-		slog.Error("tofu.source.plan_record_invalid", "err", err)
-		return fmt.Errorf("read the saved plan source record: %w", err)
-	}
 	current, err := inspectTofuPlanSource(ctx, workspace)
 	if err != nil {
 		return err
 	}
-	if source.Status != tofuSourceCommitted || current.Status != tofuSourceCommitted || source != current {
-		return errors.New("regenerate the saved plan from this clean merged configuration commit; its recorded source does not match")
+	if err := tofuplansource.Require(path, current); err != nil {
+		slog.Error("tofu.source.plan_refused", "err", err)
+		return fmt.Errorf("verify the saved OpenTofu plan source: %w", err)
 	}
 	return nil
 }

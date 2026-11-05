@@ -2,9 +2,9 @@
 
 configsctl runs OpenTofu with declared infrastructure locks and reads or updates encrypted Vault secrets.
 
-## Run it from a configs checkout
+## Run it from a configuration root
 
-Run configsctl from the root of a configuration checkout. The selected workspace supplies its OpenTofu variables, and configsctl reads matching secret values from the encrypted Vault.
+Run configsctl from the root of a configuration checkout or installed artifact. The selected workspace supplies its OpenTofu variables, and configsctl reads matching secret values from the encrypted Vault.
 
 ```sh
 go run goodkind.io/configsctl/cmd/configsctl@latest tofu <workspace> plan
@@ -71,11 +71,33 @@ configsctl passes the remaining arguments to OpenTofu. Existing immediate-child 
 
 configsctl exports a vault key as `TF_VAR_<key>` only when the selected workspace declares a variable with that name.
 
-## Require merged OpenTofu source
+## Verify OpenTofu source
 
-Commands that write deployment state or rotate provider credentials require a clean configuration checkout at a commit contained in `origin/main`. configsctl fetches `origin` and rejects unmerged commits, uncommitted files, and unavailable remotes before acquiring deployment locks or starting OpenTofu. Select the workspace through configsctl rather than the OpenTofu `-chdir` option. Preview plans that do not rotate credentials and other read-only commands remain available from unmerged checkouts.
+Without `tofu.installed_source`, commands that write deployment state or rotate provider credentials require a clean configuration checkout at a commit contained in `origin/main`. configsctl fetches `origin` and rejects unmerged commits, uncommitted files, and unavailable remotes before acquiring deployment locks or starting OpenTofu. Select the workspace through configsctl rather than the OpenTofu `-chdir` option. Preview plans that do not rotate credentials and other read-only commands remain available from unmerged checkouts.
 
 When a plan writes an `-out` file, configsctl records its source commit, workspace, and committed or preview status in the local user cache, using the plan's SHA-256 digest as the key. A saved-plan apply requires those exact bytes and the same clean, merged configuration commit. Plans from dirty checkouts remain previews. Source inspection failures or configuration changes during planning refuse the saved plan. Regenerate plans that lack a source record, including older plans and plans copied to a machine without the matching cache entry.
+
+The optional `tofu.installed_source` setting selects configuration that the attested host-artifact API installed. All fields are required:
+
+```yaml
+tofu:
+  installed_source:
+    root: /opt/configs/service
+    workspace: node/service
+    node: node
+    environment: production
+  workspaces_dir: workspace
+  configuration_root: native
+  env_key_prefix: vault_tofu_env_
+```
+
+`root` is the canonical working directory. `workspace` is the original artifact selector and does not change when a command selects a relative OpenTofu workspace. Every command that uses installed source, including `init`, queries the existing local `pvesh` host-artifact endpoint before evaluating OpenTofu configuration. The current and saved installation identities must match the settings. Incomplete settings, interrupted installations, missing saved identity, and changed installed files refuse execution.
+
+Installed mode verifies complete nonsecret workspace and native configuration trees, including provider locks and local modules. Additional input files, such as `-var-file`, `-backend-config`, and an explicit `TF_CLI_CONFIG_FILE`, must also appear in the installed file set. Unlisted inputs and symbolic links refuse execution. Module sources must use relative local paths inside the verified trees. The `-chdir`, `-from-module`, and `-config` options cannot select another source.
+
+OpenTofu executes verified input copies in private directories. Vault and password reads keep their original paths. OpenTofu data remains outside the source copy in the validated `TF_DATA_DIR`, or in the original workspace's private `.terraform` directory. A local backend requires an absolute state path outside the source copy. Named OpenTofu workspaces also require an absolute local `workspace_dir`. Remote backends retain their existing configuration.
+
+Plans from installed source record the selected installation identity and manifest digest in the same cache keyed by plan bytes. Planning checks the installation before and after execution. Apply checks it again under the mutation locks and refuses a plan after another installed artifact replaces its source. Existing Git plan records remain readable.
 
 ## Scope infrastructure locks
 
@@ -407,7 +429,8 @@ Go callers can use `goodkind.io/configsctl/tofurun` and call `Run(ctx, request, 
   `/opt/homebrew/bin/python3` or `/usr/local/bin/python3` can provide it when
   the shell's `python3` cannot.
 - OpenTofu for native validation and infrastructure commands.
-- Git and access to `origin` for OpenTofu commands that write deployment state.
+- Git and access to `origin` for OpenTofu commands that write deployment state from Git source.
+- The existing local `pvesh` host-artifact API for OpenTofu commands that use installed source.
 - The vault password at `~/.config/ansible/vault.pass` for every command that reads the vault.
 
 ## Develop

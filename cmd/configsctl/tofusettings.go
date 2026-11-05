@@ -11,6 +11,7 @@ import (
 	"slices"
 
 	"go.yaml.in/yaml/v3"
+	"goodkind.io/configsctl/internal/installedsource"
 	"goodkind.io/configsctl/internal/tofulock"
 )
 
@@ -31,6 +32,8 @@ type deploySettings struct {
 }
 
 type tofuSettings struct {
+	InstalledSource   *installedsource.Settings `yaml:"installed_source"`
+	source            *installedTofuSource
 	ConfigurationRoot string `yaml:"configuration_root"`
 	// WorkspacesDir is a path relative to the repository root.
 	WorkspacesDir string `yaml:"workspaces_dir"`
@@ -77,12 +80,16 @@ func loadNativeSettings(path string) (settings, error) {
 }
 
 func loadSettingsWithProviderMirror(path string, mirror *string, resolveMirror bool) (settings, error) {
-	var loaded settings
 	data, err := os.ReadFile(path)
 	if err != nil {
 		slog.Error("settings file read failed", "path", path, "err", err)
-		return loaded, fmt.Errorf("read %s: %w", path, err)
+		return settings{}, fmt.Errorf("read %s: %w", path, err)
 	}
+	return parseSettings(data, path, mirror, resolveMirror)
+}
+
+func parseSettings(data []byte, path string, mirror *string, resolveMirror bool) (settings, error) {
+	var loaded settings
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&loaded); err != nil {
@@ -94,6 +101,11 @@ func loadSettingsWithProviderMirror(path string, mirror *string, resolveMirror b
 	}
 	if loaded.Tofu.EnvKeyPrefix == "" {
 		return loaded, errors.New(path + ": tofu.env_key_prefix is empty")
+	}
+	if loaded.Tofu.InstalledSource != nil {
+		if err := loaded.Tofu.InstalledSource.Validate(); err != nil {
+			return loaded, fmt.Errorf("validate the installed source setting: %w", err)
+		}
 	}
 	if mirror != nil {
 		loaded.Tofu.ProviderMirror = mirror

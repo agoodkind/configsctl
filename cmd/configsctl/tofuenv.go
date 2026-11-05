@@ -118,6 +118,9 @@ func tofuHasBackend(dir string) (bool, error) {
 // name of a variable declared in workspaceDir exports as TF_VAR_<key>. A vault
 // key <EnvKeyPrefix><NAME> exports as <NAME>.
 func tofuSecretEnv(tofu tofuSettings, workspaceDir, vaultFile, passwordFile string) ([]string, error) {
+	if tofu.source != nil {
+		workspaceDir = tofu.source.path(workspaceDir)
+	}
 	names, err := tofuVariableNames(workspaceDir)
 	if err != nil {
 		return nil, err
