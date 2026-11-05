@@ -45,6 +45,11 @@ func TestNativeExecutionUsesExternalDataDirectory(t *testing.T) {
 			}
 			requireSuccess(t, fixture.mutate(t, "init", "-input=false"))
 			requireSuccess(t, fixture.mutate(t, "workspace", "new", "runtime"))
+			selection := fixture.mutate(t, "-chdir=item", "workspace", "show")
+			requireSuccess(t, selection)
+			if strings.TrimSpace(selection.stdout) != "runtime" {
+				t.Fatalf("read-only -chdir used another data directory: %q", selection.stdout)
+			}
 			requireSuccess(t, fixture.mutate(t, "plan", "-input=false"))
 			requireSuccess(t, fixture.apply(t, "-auto-approve"))
 			state := fixture.mutate(t, "state", "list")

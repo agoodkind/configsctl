@@ -33,8 +33,13 @@ func prepareTofuInvocation(settings tofuSettings, workspace, passwordFile string
 	if err != nil {
 		return nil, nil, err
 	}
-	if _, err := prepareNativeDataDirectory(settings, workspace, childEnv, expanded); err != nil {
+	directory, err := prepareNativeDataDirectory(settings, workspace, childEnv, expanded)
+	if err != nil {
 		return nil, nil, err
+	}
+	if directory != "" {
+		childEnv = slices.DeleteFunc(childEnv, func(assignment string) bool { return strings.HasPrefix(assignment, "TF_DATA_DIR=") })
+		childEnv = append(childEnv, "TF_DATA_DIR="+directory)
 	}
 	safeArgs, err = sanitizeTofuArgs(expanded)
 	if err != nil {
