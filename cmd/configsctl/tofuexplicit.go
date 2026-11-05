@@ -28,7 +28,7 @@ const (
 	// explicitDefaultParallelism is the OpenTofu default. tofurun requires the flag.
 	explicitDefaultParallelism = 10
 	providerConfigVariable     = "TF_CLI_CONFIG_FILE"
-	selectedWorkspaceFile      = ".terraform/environment"
+	selectedWorkspaceFile      = "environment"
 	defaultTofuWorkspace       = "default"
 )
 
@@ -396,7 +396,8 @@ type explicitRunner struct {
 //
 // The request passes OpenTofu only PATH, LANG when set, TF_IN_AUTOMATION, the
 // private TMPDIR, the provider mirror configuration path, and declared inputs.
-// Native execution retains the bounded operator HOME and optional agent socket.
+// Native execution retains the bounded operator HOME, optional agent socket,
+// and explicitly supplied private OpenTofu data directory.
 // Static remote-endpoint execution retains its private HOME.
 func newExplicitRunner(settings tofuSettings, request tofuLockRequest, passwordFile string) (explicitRunner, func(), error) {
 	var runner explicitRunner
@@ -432,11 +433,9 @@ func newExplicitRunner(settings tofuSettings, request tofuLockRequest, passwordF
 		slog.Error("tofu.mutation.explicit_root_failed", "workspace", request.workspaceDir, "err", err)
 		return runner, nil, fmt.Errorf("resolve the workspace directory %s: %w", request.workspaceDir, err)
 	}
-	workspace, err := selectedTofuWorkspace(root)
+	manual := !strictExplicitSettings(settings, request.lockTargets[tofuWorkspaceKey(request.workspaceDir)])
+	workspace, dataDirectory, err := selectedMutationWorkspace(settings, request, root)
 	if err != nil {
-		return runner, nil, err
-	}
-	if err := requireWorkspaceMatch(request.env, workspace); err != nil {
 		return runner, nil, err
 	}
 	directory, err := os.MkdirTemp("", explicitDirectoryPattern)
@@ -453,7 +452,6 @@ func newExplicitRunner(settings tofuSettings, request tofuLockRequest, passwordF
 			return runner, nil, err
 		}
 	}
-	manual := !strictExplicitSettings(settings, request.lockTargets[tofuWorkspaceKey(request.workspaceDir)])
 	inputs := operatorInputs{home: home, assignments: assignments, publicNames: nil}
 	if manual {
 		inputs, err = manualOperatorInputs(request, assignments)
@@ -477,7 +475,7 @@ func newExplicitRunner(settings tofuSettings, request tofuLockRequest, passwordF
 	}
 	runner = explicitRunner{
 		base: tofurun.Request{
-			Binary: binary, Root: root, Workspace: workspace,
+			Binary: binary, Root: root, Workspace: workspace, DataDirectory: dataDirectory,
 			ManualHome: manual, OptionalEnvironment: inputs.publicNames,
 			Args: nil, Environment: append(environment, inputs.assignments...),
 			RequiredEnvironment: required, SecretEnvironment: redacted, SecretFiles: nil,
@@ -487,6 +485,24 @@ func newExplicitRunner(settings tofuSettings, request tofuLockRequest, passwordF
 		jsonPath: filepath.Join(temporary, explicitPlanJSONName),
 	}
 	return runner, cleanup, nil
+}
+
+func selectedMutationWorkspace(settings tofuSettings, request tofuLockRequest, root string) (string, string, error) {
+	directory := ""
+	if !strictExplicitSettings(settings, request.lockTargets[tofuWorkspaceKey(request.workspaceDir)]) {
+		directory = environmentValue(request.env, "TF_DATA_DIR")
+		if directory != "" && !filepath.IsAbs(directory) {
+			directory = filepath.Join(root, directory)
+		}
+	}
+	workspace, err := selectedTofuWorkspace(root, directory)
+	if err != nil {
+		return "", "", err
+	}
+	if err := requireWorkspaceMatch(request.env, workspace); err != nil {
+		return "", "", err
+	}
+	return workspace, directory, nil
 }
 
 // splitExplicitAssignments separates the provider mirror configuration path,
@@ -534,10 +550,13 @@ func makePrivateDirectory(path string) error {
 	return nil
 }
 
-// selectedTofuWorkspace returns the OpenTofu workspace that root has selected.
+// selectedTofuWorkspace reads the selected workspace from the data directory.
 // OpenTofu uses the default workspace without the environment file.
-func selectedTofuWorkspace(root string) (string, error) {
-	body, err := os.ReadFile(filepath.Join(root, selectedWorkspaceFile))
+func selectedTofuWorkspace(root, dataDirectory string) (string, error) {
+	if dataDirectory == "" {
+		dataDirectory = filepath.Join(root, ".terraform")
+	}
+	body, err := os.ReadFile(filepath.Join(dataDirectory, selectedWorkspaceFile))
 	if errors.Is(err, fs.ErrNotExist) {
 		return defaultTofuWorkspace, nil
 	}
