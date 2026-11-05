@@ -92,6 +92,9 @@ func run(args []string) error {
 		return errors.New("usage: configsctl <command>")
 	}
 	command := args[0]
+	if command == "host-lock" {
+		return runHostLockServer(args[1:])
+	}
 	if command == "ci" {
 		return runCI(args[1:])
 	}

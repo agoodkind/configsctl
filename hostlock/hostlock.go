@@ -70,10 +70,13 @@ const (
 // Host is one lock target. Do runs the script over ssh as User at Address.
 // An empty Address runs the script on this machine.
 type Host struct {
-	Name    string
-	User    string
-	Address string
-	Dir     string
+	Name           string
+	User           string
+	Address        string
+	Dir            string
+	ConnectAddress string
+	PrivateKeyFile string
+	KnownHostsFile string
 }
 
 // HeldError reports a current lock of another run.
@@ -108,6 +111,7 @@ type command struct {
 	run        string
 	controller string
 	lease      time.Duration
+	restricted bool
 }
 
 // answer is the lease that the lock script wrote on the host.
@@ -125,8 +129,12 @@ func runScript(ctx context.Context, host Host, request command) (answer, error) 
 	if dir == "" {
 		dir = DefaultDir
 	}
+	operation := string(request.op)
+	if request.restricted && request.op == Release {
+		operation = "release-checked"
+	}
 	script := []string{
-		"-s", "--", string(request.op), request.run, request.controller,
+		"-s", "--", operation, request.run, request.controller,
 		strconv.FormatInt(int64(request.lease/time.Second), 10), dir,
 		strconv.FormatInt(int64(MaxExtend/time.Second), 10),
 	}

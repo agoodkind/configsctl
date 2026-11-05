@@ -34,16 +34,28 @@ GUARD_DIR="$GUARD_PREFIX.$(boot_id)"
 remove_stale_guards() {
     local guard
     for guard in "$GUARD_PREFIX" "$GUARD_PREFIX".*; do
+        if [[ -L "$guard" ]]; then
+            echo "lock guard must not be a symbolic link" >&2
+            exit 2
+        fi
         if [[ -d "$guard" && "$guard" != "$GUARD_DIR" ]]; then
-            rm -rf "$guard"
+            rmdir "$guard"
         fi
     done
 }
 
 take_guard() {
     local waited=0
+    if [[ -L "$LOCK_DIR" || -L "$LOCK_FILE" || -L "$LOCK_FILE.tmp" ]]; then
+        echo "lock paths must not be symbolic links" >&2
+        exit 2
+    fi
     mkdir -p "$LOCK_DIR"
     until mkdir "$GUARD_DIR" 2>/dev/null; do
+        if [[ -L "$GUARD_DIR" ]]; then
+            echo "lock guard must not be a symbolic link" >&2
+            exit 2
+        fi
         if [[ "$waited" -ge "$GUARD_WAIT_SECONDS" ]]; then
             echo "guard $GUARD_DIR stayed busy for $GUARD_WAIT_SECONDS seconds" >&2
             exit 5
@@ -53,6 +65,14 @@ take_guard() {
     done
     trap 'rmdir "$GUARD_DIR"' EXIT
     remove_stale_guards
+    if [[ -e "$LOCK_FILE" && ! -f "$LOCK_FILE" ]]; then
+        echo "lock record must be a regular file" >&2
+        exit 2
+    fi
+    if [[ -e "$LOCK_FILE.tmp" && ! -f "$LOCK_FILE.tmp" ]]; then
+        echo "temporary lock record must be a regular file" >&2
+        exit 2
+    fi
 }
 
 write_lock() {
@@ -73,11 +93,24 @@ write_later_expiry() {
 }
 
 main() {
-    local current_time holder="" holder_controller="" expiry=0
+    local current_time holder="" holder_controller="" expiry=0 extra="" extra_line=""
     take_guard
     current_time=$(date +%s)
     if [[ -f "$LOCK_FILE" ]]; then
-        read -r holder holder_controller expiry < "$LOCK_FILE" || true
+        exec 3< "$LOCK_FILE"
+        if ! read -r holder holder_controller expiry extra <&3; then
+            echo "lock record is malformed" >&2
+            exit 2
+        fi
+        if read -r extra_line <&3 || [[ -n "$extra_line" ]]; then
+            echo "lock record contains extra data" >&2
+            exit 2
+        fi
+        exec 3<&-
+        if [[ -z "$holder" || -z "$holder_controller" || ! "$expiry" =~ ^[0-9]{1,12}$ || -n "$extra" ]]; then
+            echo "lock record is malformed" >&2
+            exit 2
+        fi
     fi
     case "$OPERATION" in
         acquire)
@@ -105,7 +138,11 @@ main() {
             fi
             write_later_expiry "$current_time" "$expiry"
             ;;
-        release)
+        release|release-checked)
+            if [[ "$OPERATION" == release-checked && "$holder" != "$RUN" ]]; then
+                echo "$holder $holder_controller $expiry"
+                exit 4
+            fi
             if [[ "$holder" == "$RUN" ]]; then
                 rm -f "$LOCK_FILE"
             fi

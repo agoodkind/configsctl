@@ -26,10 +26,13 @@ const (
 )
 
 type lockedHost struct {
-	Name    string `json:"name"`
-	User    string `json:"user"`
-	Address string `json:"address"`
-	Dir     string `json:"dir"`
+	Name           string `json:"name"`
+	User           string `json:"user"`
+	Address        string `json:"address"`
+	Dir            string `json:"dir"`
+	ConnectAddress string `json:"connect_address"`
+	PrivateKeyFile string `json:"private_key_file"`
+	KnownHostsFile string `json:"known_hosts_file"`
 }
 
 // runState is the run and the hosts that a Set locked.

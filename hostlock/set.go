@@ -56,11 +56,21 @@ type Set struct {
 	released    bool
 	lost        error
 	renewalDone <-chan struct{}
+	options     Options
+	stopRenewal context.CancelFunc
 }
 
 // AcquireAll requires a lock on every host. On failure, it attempts to release
 // the locks already acquired and returns the error.
 func AcquireAll(ctx context.Context, hosts []Host, run, controller string, lease Lease) (*Set, error) {
+	return AcquireAllWithOptions(ctx, hosts, run, controller, lease, Options{})
+}
+
+// AcquireAllWithOptions acquires one Set using the selected transport and renewal policy.
+func AcquireAllWithOptions(ctx context.Context, hosts []Host, run, controller string, lease Lease, options Options) (*Set, error) {
+	if options.RequestTimeout < 0 {
+		return nil, errors.New("host lock request timeout must not be negative")
+	}
 	if lease.TTL < time.Second || lease.RenewInterval <= 0 || lease.RenewInterval >= lease.TTL {
 		return nil, fmt.Errorf("lease of %s with renewal each %s is not usable", lease.TTL, lease.RenewInterval)
 	}
@@ -72,11 +82,12 @@ func AcquireAll(ctx context.Context, hosts []Host, run, controller string, lease
 		run: run, controller: controller, lease: lease, stateDir: stateDir,
 		mu: sync.Mutex{}, membership: sync.Mutex{}, changed: make(chan struct{}, 1), held: nil, deadlines: map[string]time.Time{},
 		acquired: false, released: false, lost: nil, renewalDone: nil,
+		options: options,
 	}
 	request := command{op: Acquire, run: run, controller: controller, lease: lease.TTL}
 	for _, host := range hosts {
 		asked := clock.NowUTC()
-		granted, err := runScript(ctx, host, request)
+		granted, err := set.operation(ctx, host, request)
 		if err != nil {
 			set.ReleaseAll(context.WithoutCancel(ctx))
 			slog.Error("hostlock.acquire_failed", "host", host.Name, "run", run, "err", err)
@@ -176,6 +187,10 @@ func (s *Set) RenewAll(ctx context.Context) error {
 		}
 		if lost = s.record(result); lost != nil {
 			endRound()
+			if s.options.StrictRenewal {
+				s.markLost(lost)
+				return lost
+			}
 		}
 	}
 	if lost != nil {
@@ -204,9 +219,12 @@ type renewal struct {
 // renewHost runs one renewal of host and stops it after Lease.RenewTimeout.
 func (s *Set) renewHost(ctx context.Context, host Host, request command) (answer, error) {
 	timeout := s.lease.RenewTimeout()
+	if s.options.RequestTimeout > 0 {
+		timeout = s.options.RequestTimeout
+	}
 	attemptCtx, cancel := context.WithTimeoutCause(ctx, timeout, fmt.Errorf("%w within %s", errNoAnswer, timeout))
 	defer cancel()
-	return runScript(attemptCtx, host, request)
+	return s.operation(attemptCtx, host, request)
 }
 
 // record moves the loss deadline of a renewed host and logs a failed renewal
@@ -217,7 +235,7 @@ func (s *Set) record(result renewal) error {
 		s.advance(host, result.asked, result.renewed.remaining)
 		return nil
 	}
-	if errors.Is(err, ErrNotHeld) {
+	if s.options.StrictRenewal || errors.Is(err, ErrNotHeld) {
 		slog.Error("hostlock.lost", "host", host, "run", s.run, "err", err)
 		return fmt.Errorf("%w: %s: %w", ErrLost, host, err)
 	}
@@ -239,6 +257,7 @@ func (s *Set) KeepRenewed(ctx context.Context, lost func(error)) (stop func()) {
 	renewCtx, cancel := context.WithCancel(ctx)
 	s.mu.Lock()
 	s.renewalDone = renewCtx.Done()
+	s.stopRenewal = cancel
 	s.mu.Unlock()
 	var once sync.Once
 	report := func(err error) {
@@ -315,17 +334,58 @@ func (s *Set) watchDeadlines(ctx context.Context, report func(error)) {
 
 // ReleaseAll deletes every lock file that this run took.
 func (s *Set) ReleaseAll(ctx context.Context) {
+	if err := s.releaseAll(ctx, false); err != nil {
+		slog.Warn("hostlock.release_failed", "run", s.run, "err", err)
+	}
+}
+
+// ReleaseAllChecked releases the acquired locks and reports each failed release.
+func (s *Set) ReleaseAllChecked(ctx context.Context) error {
+	return s.releaseAll(ctx, true)
+}
+
+func (s *Set) releaseAll(ctx context.Context, checked bool) error {
 	s.membership.Lock()
 	defer s.membership.Unlock()
 	s.mu.Lock()
 	hosts := s.held
 	s.held = nil
 	s.released = true
+	stop := s.stopRenewal
 	s.mu.Unlock()
+	if stop != nil {
+		stop()
+	}
+	var failures error
+	var retained []Host
 	for _, host := range hosts {
-		if err := Do(ctx, host, Release, s.run, s.controller); err != nil {
-			slog.Warn("hostlock.release_failed", "host", host.Name, "run", s.run, "err", err)
+		if _, err := s.operation(ctx, host, command{op: Release, run: s.run, controller: s.controller, lease: s.lease.TTL, restricted: checked}); err != nil {
+			failures = errors.Join(failures, fmt.Errorf("release %s: %w", host.Name, err))
+			if checked {
+				retained = append(retained, host)
+			}
 		}
+	}
+	s.mu.Lock()
+	s.held = retained
+	s.mu.Unlock()
+	if !checked || failures == nil {
+		removeStateDir(s.stateDir)
+	}
+	return failures
+}
+
+// Abandon invalidates scopes and stops renewal without removing remote locks.
+func (s *Set) Abandon() {
+	s.membership.Lock()
+	defer s.membership.Unlock()
+	s.mu.Lock()
+	s.released = true
+	s.held = nil
+	stop := s.stopRenewal
+	s.mu.Unlock()
+	if stop != nil {
+		stop()
 	}
 	removeStateDir(s.stateDir)
 }
