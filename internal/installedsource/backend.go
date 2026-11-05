@@ -10,6 +10,8 @@ import (
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclparse"
 	"github.com/zclconf/go-cty/cty"
+	"goodkind.io/configsctl/internal/tofuargs"
+	"goodkind.io/configsctl/internal/tofufiles"
 )
 
 // RequirePersistentBackend refuses local state paths inside the disposable copy.
@@ -32,16 +34,24 @@ func (s *Source) RequirePersistentBackend(workspace, selected, copyRoot string) 
 	return nil
 }
 
+// RequireCommandBackend checks the destination before a workspace transition.
+func (s *Source) RequireCommandBackend(workspace, selected, copyRoot string, args []string) error {
+	destination := tofuargs.WorkspaceDestination(args, selected)
+	return s.RequirePersistentBackend(workspace, destination, copyRoot)
+}
+
 func (s *Source) localBackends(workspace string) ([]hcl.Body, error) {
 	directory, err := s.Path(workspace)
 	if err != nil {
 		return nil, err
 	}
 	var backends []hcl.Body
-	for path := range s.files {
-		if filepath.Dir(path) != directory || (!strings.HasSuffix(path, ".tf") && !strings.HasSuffix(path, ".tf.json")) {
-			continue
-		}
+	native, jsonFiles, err := tofufiles.Discover(directory)
+	if err != nil {
+		slog.Error("tofu.source.backend_discovery_failed", "err", err)
+		return nil, fmt.Errorf("discover the installed backend source: %w", err)
+	}
+	for _, path := range append(native, jsonFiles...) {
 		data, err := s.Read(path)
 		if err != nil {
 			return nil, err
@@ -70,7 +80,7 @@ func parseInputFile(path string, data []byte) (*hcl.File, error) {
 	}
 	if diagnostics.HasErrors() {
 		slog.Error("tofu.source.backend_parse_failed", "path", path, "err", diagnostics.Error())
-		return nil, fmt.Errorf("parse the installed backend configuration: %w", diagnostics)
+		return nil, fmt.Errorf("parse the installed OpenTofu configuration: %w", diagnostics)
 	}
 	return file, nil
 }

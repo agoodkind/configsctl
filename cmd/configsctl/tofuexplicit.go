@@ -559,7 +559,10 @@ func prepareNativeDataDirectory(settings tofuSettings, workspace string, environ
 		if err != nil {
 			return "", err
 		}
-		if err := settings.source.verified.RequirePersistentBackend(workspace, selected, settings.source.copyRoot); err != nil {
+		if requested := environmentValue(environment, "TF_WORKSPACE"); requested != "" {
+			selected = requested
+		}
+		if err := settings.source.verified.RequireCommandBackend(workspace, selected, settings.source.copyRoot, args); err != nil {
 			return "", fmt.Errorf("validate installed source state storage: %w", err)
 		}
 	}
@@ -632,6 +635,9 @@ func (r explicitRunner) run(
 	ctx context.Context, step string, args []string, mode tofurun.OutputMode, jsonPath string,
 	scope *hostlock.Scope, requiredHosts []string,
 ) (tofurun.Result, error) {
+	if err := requireInstalledModuleCache(ctx, r.base.Root, r.base.DataDirectory, args); err != nil {
+		return tofurun.Result{}, err
+	}
 	request := r.base
 	request.Args = args
 	request.OutputMode = mode

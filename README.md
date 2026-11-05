@@ -14,7 +14,7 @@ Run `configsctl lint` to check native configuration formatting. Roots with resou
 
 ## Select an OpenTofu workspace
 
-A workspace is a directory with a `backend` block inside a `terraform` block in one of its `*.tf` or `*.tf.json` files. Its selector is the complete relative path below `tofu.workspaces_dir`, such as `suburban/tack-qa`. Workspace roots can have any nesting depth. A directory without a backend is not a workspace.
+A workspace is a directory with a `backend` block inside a `terraform` block in an active OpenTofu source file. configsctl applies OpenTofu's preference for `.tofu` over matching `.tf` files and `.tofu.json` over matching `.tf.json` files. The workspace selector is the complete relative path below `tofu.workspaces_dir`, such as `suburban/tack-qa`. Workspace roots can have any nesting depth. A directory without a backend is not a workspace.
 
 configsctl checks the selected root without parsing unrelated roots. Workspace discovery skips hidden directories, provider caches, and reusable `modules` directories. Selectors must use clean relative paths without parent traversal or directory symlinks.
 
@@ -95,9 +95,11 @@ tofu:
 
 Installed mode requires native configuration or local static lock endpoints. Static remote lock endpoints retain the Git source mode.
 
-Installed mode verifies complete nonsecret workspace and native configuration trees, including provider locks and local modules. Additional input files, such as `-var-file`, `-backend-config`, and an explicit `TF_CLI_CONFIG_FILE`, must also appear in the installed file set. Unlisted inputs and symbolic links refuse execution. Module sources must use relative local paths inside the verified trees. The `-chdir`, `-from-module`, and `-config` options cannot select another source.
+Installed mode verifies complete nonsecret workspace and native configuration trees, including provider locks and local modules. The installed file set must include every source file argument and any explicit `TF_CLI_CONFIG_FILE`. File-based targeting and exclusion use verified copies of `-target-file` and `-exclude-file` inputs. Unlisted inputs and symbolic links refuse execution. Module sources must resolve to relative local paths inside the verified trees. Native module sources may use `var.workspace` from the validated workspace selection. The `-chdir`, `-from-module`, and `-config` options cannot select another source.
 
-OpenTofu executes copies of verified input trees and exact installed operational files in private directories. Vault and password reads keep their original paths. OpenTofu data remains outside the source copy in the validated `TF_DATA_DIR`, or in the original workspace's private `.terraform` directory. A local backend requires an absolute state path outside the source copy. Named OpenTofu workspaces also require an absolute local `workspace_dir`. Remote backends retain their existing configuration.
+OpenTofu executes copies of verified input trees and exact installed operational files in private directories. Vault and password reads keep their original paths. OpenTofu data remains outside the source copy in the validated `TF_DATA_DIR`, or in the original workspace's private `.terraform` directory. A local backend requires an absolute state path outside the source copy. Named OpenTofu workspaces also require an absolute local `workspace_dir`. Workspace creation and selection check the destination's persistent storage before execution. Remote backends retain their existing configuration.
+
+Before execution, configsctl compares persistent module cache entries with a fresh private OpenTofu module resolution. configsctl refuses entries that redirect a local module to another directory. Module resolution does not rewrite the persistent backend, selected workspace, or state.
 
 Plans from installed source record the selected installation identity and manifest digest in the same cache keyed by plan bytes. Planning checks the installation before and after execution. Apply checks it again under the mutation locks and refuses a plan after another installed artifact replaces its source. Existing Git plan records remain readable.
 

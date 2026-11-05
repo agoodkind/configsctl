@@ -15,6 +15,7 @@ import (
 	"github.com/agoodkind/terraform-provider-pveguest/transport"
 	"goodkind.io/configsctl/internal/installedsource"
 	"goodkind.io/configsctl/internal/procgroup"
+	"goodkind.io/configsctl/internal/tofuargs"
 )
 
 type installedTofuSource struct {
@@ -31,8 +32,6 @@ type installedSourceKey struct{}
 type installedPathOption string
 
 const (
-	installedVarFile           installedPathOption = "var-file"
-	installedBackendConfig     installedPathOption = "backend-config"
 	installedPluginDir         installedPathOption = "plugin-dir"
 	installedTestDirectory     installedPathOption = "test-directory"
 	installedOut               installedPathOption = "out"
@@ -122,7 +121,13 @@ func prepareInstalledTofuSource(ctx context.Context) (context.Context, func(), e
 	if err != nil {
 		return ctx, nil, fmt.Errorf("create the private installed source directory: %w", err)
 	}
-	cleanup := func() { removePrivateDirectory(directory) }
+	temporaryDirectory := directory
+	cleanup := func() { removePrivateDirectory(temporaryDirectory) }
+	directory, err = filepath.EvalSymlinks(directory)
+	if err != nil {
+		cleanup()
+		return ctx, nil, fmt.Errorf("resolve the private installed source directory: %w", err)
+	}
 	if err := verified.Copy(directory, required); err != nil {
 		cleanup()
 		return ctx, nil, fmt.Errorf("copy installed OpenTofu inputs: %w", err)
@@ -183,6 +188,33 @@ func requireCurrentInstalledSource(ctx context.Context, workspace string) error 
 	}
 	_, err := inspectTofuPlanSource(ctx, workspace)
 	return err
+}
+
+func requireInstalledModuleCache(ctx context.Context, workspace, dataDirectory string, args []string) error {
+	source := installedSourceFrom(ctx)
+	if source == nil {
+		return nil
+	}
+	if dataDirectory == "" {
+		return errors.New("installed source requires the validated persistent TF_DATA_DIR")
+	}
+	if relative, err := filepath.Rel(source.copyRoot, workspace); err == nil && filepath.IsLocal(relative) {
+		workspace = filepath.Join(source.settings.Root, relative)
+	}
+	binary, err := tofuBinary()
+	if err != nil {
+		return err
+	}
+	command := tofuargs.Subcommand(args)
+	request := installedsource.ModuleCacheRequest{
+		Binary: binary, Workspace: workspace, CopyRoot: source.copyRoot, DataDirectory: dataDirectory,
+		WorkspaceSelector: "", AllowMissing: command == "init" || command == "get",
+	}
+	if err := source.verified.CheckModuleCache(ctx, request); err != nil {
+		slog.Error("tofu.source.module_cache_refused", "err", err)
+		return fmt.Errorf("verify installed OpenTofu module resolution: %w", err)
+	}
+	return nil
 }
 
 func installedWorkspace(s *installedTofuSource, workspace string) (string, error) {
@@ -253,7 +285,7 @@ func (s *installedTofuSource) arguments(workspace string, args []string) ([]stri
 }
 
 func (s *installedTofuSource) requireBackendOverride(workspace, name, value string) error {
-	if name != string(installedBackendConfig) {
+	if name != "backend-config" {
 		return nil
 	}
 	if err := s.verified.RequireBackendOverride(workspace, value, s.copyRoot); err != nil {
@@ -275,8 +307,11 @@ func installedPositionalFile(args []string) bool {
 }
 
 func installedFileArgument(name string) bool {
+	if installedsource.FileInput(name) {
+		return true
+	}
 	switch installedPathOption(name) {
-	case installedVarFile, installedBackendConfig, installedPluginDir, installedTestDirectory, installedOut, installedState, installedStateOut, installedBackup, installedJSONInto, installedGenerateConfigOut:
+	case installedPluginDir, installedTestDirectory, installedOut, installedState, installedStateOut, installedBackup, installedJSONInto, installedGenerateConfigOut:
 		return true
 	default:
 		return false
@@ -284,10 +319,16 @@ func installedFileArgument(name string) bool {
 }
 
 func (s *installedTofuSource) argumentPath(workspace, name, value string) (string, error) {
+	if installedsource.FileInput(name) {
+		copied, err := s.verified.CopyFileArgument(s.copyRoot, workspace, name, value, s.credentialPaths)
+		if err != nil {
+			return "", fmt.Errorf("verify the installed OpenTofu file argument: %w", err)
+		}
+		s.required = append(s.required, copied.Original)
+		return copied.Path, nil
+	}
 	path := workspacePath(workspace, value)
 	switch installedPathOption(name) {
-	case installedVarFile, installedBackendConfig:
-		return s.copyInput(path)
 	case installedPluginDir, installedTestDirectory:
 		if err := s.requireNonsecretDirectory(path); err != nil {
 			return "", err
@@ -315,23 +356,13 @@ func (s *installedTofuSource) argumentPath(workspace, name, value string) (strin
 }
 
 func (s *installedTofuSource) copyInput(path string) (string, error) {
-	absolute, err := s.verified.Path(path)
+	copied, err := s.verified.CopyInputFile(s.copyRoot, path, s.credentialPaths)
 	if err != nil {
-		return "", fmt.Errorf("resolve the installed OpenTofu file argument: %w", err)
-	}
-	if slices.Contains(s.credentialPaths, absolute) {
-		return "", errors.New("credential files must retain their original paths and cannot be OpenTofu source arguments")
-	}
-	if _, err := s.verified.Read(path); err != nil {
-		slog.Error("tofu.source.file_argument_failed", "err", err)
-		return "", fmt.Errorf("verify the installed OpenTofu file argument: %w", err)
-	}
-	s.required = append(s.required, path)
-	if err := s.verified.Copy(s.copyRoot, []string{path}); err != nil {
 		slog.Error("tofu.source.file_argument_copy_failed", "err", err)
 		return "", fmt.Errorf("copy the installed OpenTofu file argument: %w", err)
 	}
-	return s.path(path), nil
+	s.required = append(s.required, copied.Original)
+	return copied.Path, nil
 }
 
 func (s *installedTofuSource) requireNonsecretDirectory(path string) error {

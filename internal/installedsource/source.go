@@ -17,9 +17,9 @@ import (
 
 	"github.com/agoodkind/terraform-provider-pveguest/transport"
 	"github.com/hashicorp/hcl/v2"
-	"github.com/hashicorp/hcl/v2/hclparse"
 	"github.com/zclconf/go-cty/cty"
 	"goodkind.io/configsctl/internal/fileowner"
+	"goodkind.io/configsctl/internal/tofufiles"
 )
 
 // Settings selects one installed artifact and its canonical working directory.
@@ -300,9 +300,6 @@ func (s *Source) walk(tree string, copyFile func(string, []byte) error) error {
 		if err != nil {
 			return err
 		}
-		if err := s.checkModules(path, data); err != nil {
-			return err
-		}
 		if copyFile != nil {
 			return copyFile(path, data)
 		}
@@ -314,21 +311,69 @@ func (s *Source) walk(tree string, copyFile func(string, []byte) error) error {
 	return nil
 }
 
-func (s *Source) checkModules(path string, data []byte) error {
-	parser := hclparse.NewParser()
-	var file *hcl.File
-	var diagnostics hcl.Diagnostics
-	switch {
-	case strings.HasSuffix(path, ".tf"):
-		file, diagnostics = parser.ParseHCL(data, path)
-	case strings.HasSuffix(path, ".tf.json"):
-		file, diagnostics = parser.ParseJSON(data, path)
-	default:
-		return nil
+// CheckModuleSources evaluates native source selectors with the validated workspace.
+// Other source trees require literal local module sources.
+func (s *Source) CheckModuleSources(nativeRoot, selector string) error {
+	nativeDirectory := ""
+	if nativeRoot != "" {
+		var err error
+		nativeDirectory, err = s.Path(nativeRoot)
+		if err != nil {
+			return err
+		}
 	}
-	if diagnostics.HasErrors() {
-		slog.Error("tofu.source.hcl_failed", "path", path, "err", diagnostics.Error())
-		return fmt.Errorf("parse installed input %s: %w", path, diagnostics)
+	for _, tree := range s.trees {
+		err := filepath.WalkDir(tree, func(path string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				slog.Error("tofu.source.module_directory_failed", "err", walkErr)
+				return fmt.Errorf("read installed module directory: %w", walkErr)
+			}
+			if !entry.IsDir() {
+				return nil
+			}
+			if entry.Name() == ".terraform" {
+				return filepath.SkipDir
+			}
+			return s.checkModuleDirectory(path, nativeDirectory, selector)
+		})
+		if err != nil {
+			return fmt.Errorf("verify installed module sources: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *Source) checkModuleDirectory(directory, nativeDirectory, selector string) error {
+	var context *hcl.EvalContext
+	if nativeDirectory != "" {
+		relative, err := filepath.Rel(nativeDirectory, directory)
+		if err == nil && filepath.IsLocal(relative) {
+			context = &hcl.EvalContext{Variables: map[string]cty.Value{
+				"var": cty.ObjectVal(map[string]cty.Value{"workspace": cty.StringVal(selector)}),
+			}}
+		}
+	}
+	native, jsonFiles, err := tofufiles.Discover(directory)
+	if err != nil {
+		slog.Error("tofu.source.module_discovery_failed", "err", err)
+		return fmt.Errorf("discover installed module sources: %w", err)
+	}
+	for _, path := range append(native, jsonFiles...) {
+		data, err := s.Read(path)
+		if err != nil {
+			return err
+		}
+		if err := s.checkModules(path, data, context); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Source) checkModules(path string, data []byte, context *hcl.EvalContext) error {
+	file, err := parseInputFile(path, data)
+	if err != nil {
+		return err
 	}
 	schema := &hcl.BodySchema{Blocks: []hcl.BlockHeaderSchema{{Type: "module", LabelNames: []string{"name"}}}}
 	content, _, diagnostics := file.Body.PartialContent(schema)
@@ -342,9 +387,9 @@ func (s *Source) checkModules(path string, data []byte) error {
 			slog.Error("tofu.source.module_failed", "path", path, "err", diagnostics.Error())
 			return fmt.Errorf("read installed module source %s: %w", path, diagnostics)
 		}
-		value, diagnostics := attributes.Attributes["source"].Expr.Value(nil)
+		value, diagnostics := attributes.Attributes["source"].Expr.Value(context)
 		if diagnostics.HasErrors() || value.IsNull() || !value.Type().Equals(cty.String) {
-			return fmt.Errorf("installed module in %s requires a literal local source", path)
+			return fmt.Errorf("installed module in %s requires a local source from the validated workspace selector", path)
 		}
 		module := value.AsString()
 		if !strings.HasPrefix(module, "./") && !strings.HasPrefix(module, "../") {

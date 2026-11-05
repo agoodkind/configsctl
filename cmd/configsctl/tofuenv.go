@@ -3,12 +3,12 @@ package main
 import (
 	"fmt"
 	"log/slog"
-	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclparse"
+	"goodkind.io/configsctl/internal/tofufiles"
 	"goodkind.io/configsctl/internal/vault"
 )
 
@@ -41,21 +41,15 @@ func tofuHasOperationalConfiguration(dir string) (bool, error) {
 }
 
 func tofuModuleFiles(dir string) (native, jsonFiles []string, err error) {
-	native, err = filepath.Glob(filepath.Join(dir, "*.tf"))
+	native, jsonFiles, err = tofufiles.Discover(dir)
 	if err != nil {
-		slog.Error("tofu module glob failed", "dir", dir, "err", err)
-		return nil, nil, fmt.Errorf("list %s: %w", dir, err)
-	}
-	jsonFiles, err = filepath.Glob(filepath.Join(dir, "*.tf.json"))
-	if err != nil {
-		slog.Error("tofu module glob failed", "dir", dir, "err", err)
+		slog.Error("tofu module discovery failed", "dir", dir, "err", err)
 		return nil, nil, fmt.Errorf("list %s: %w", dir, err)
 	}
 	return native, jsonFiles, nil
 }
 
-// tofuModuleBlocks returns the top-level blocks that match schema in the *.tf
-// and *.tf.json files of dir. It does not read subdirectories.
+// tofuModuleBlocks reads matching blocks from the active source files of dir.
 func tofuModuleBlocks(dir string, schema *hcl.BodySchema) (hcl.Blocks, error) {
 	native, jsonFiles, err := tofuModuleFiles(dir)
 	if err != nil {

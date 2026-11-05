@@ -359,6 +359,9 @@ func runTofuWithSource(ctx context.Context, env cmdEnv, args []string) error {
 }
 
 func executeTofu(ctx context.Context, env cmdEnv, workspaceDir string, safeArgs, commandArgs, childEnv []string) error {
+	if err := requireInstalledModuleCache(ctx, workspaceDir, environmentValue(childEnv, "TF_DATA_DIR"), commandArgs); err != nil {
+		return err
+	}
 	planPath := tofuPlanOutput(commandArgs)
 	var source tofuPlanSource
 	if planPath != "" {
