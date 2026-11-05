@@ -1,7 +1,6 @@
 package hclsources
 
 import (
-	"bytes"
 	"fmt"
 	"path"
 	"regexp"
@@ -15,10 +14,7 @@ import (
 
 const protectedRule = "vault reference outside a sensitive variable declaration or reference"
 
-var (
-	protectedName  = regexp.MustCompile(`\bvault_[A-Za-z0-9_]+`)
-	templateMarker = regexp.MustCompile(`\{[\{%#]`)
-)
+var protectedName = regexp.MustCompile(`\bvault_[A-Za-z0-9_]+`)
 
 type installedVariable struct {
 	directory string
@@ -35,10 +31,6 @@ type source struct {
 
 func parse(file sourceFile) (*source, error) {
 	data := []byte(*file.Content)
-	if match := templateMarker.FindIndex(data); match != nil {
-		line := 1 + bytes.Count(data[:match[0]], []byte("\n"))
-		return nil, fmt.Errorf("%s:%d: remove the unresolved template marker", file.Source, line)
-	}
 	parsed, diagnostics := hclsyntax.ParseConfig(data, file.Source, hcl.InitialPos)
 	if diagnostics.HasErrors() {
 		for _, diagnostic := range diagnostics {

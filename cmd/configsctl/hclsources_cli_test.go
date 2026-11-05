@@ -66,6 +66,9 @@ func runHCLCommand(t *testing.T, dir, want string, args ...string) {
 	if err == nil || !strings.Contains(string(result), want) {
 		t.Fatalf("checker returned %v, output %q, want error containing %q", err, result, want)
 	}
+	if bytes.Count(result, []byte("\n")) != 1 {
+		t.Fatalf("checker printed multiple diagnostics: %q", result)
+	}
 	if bytes.Contains(result, []byte("private_value")) || bytes.Contains(result, []byte("vault_demo")) {
 		t.Fatal("checker printed protected source text")
 	}
@@ -84,7 +87,10 @@ func TestHCLSourcePolicy(t *testing.T) {
 		{"index.tf", "outside a sensitive"},
 		{"escape.tf", "invalid native HCL"},
 		{"comment.tf", "outside a sensitive"},
-		{"marker.tf", "unresolved template marker"},
+		{"marker.tf", ""},
+		{"marker-literal.tf", ""},
+		{"marker-invalid.tf", "invalid native HCL syntax"},
+		{"marker-protected.tf", "outside a sensitive"},
 		{"label.tf", "outside a sensitive"},
 		{"default.tf", "without a default"},
 		{"nonsensitive.tf", "sensitive = true"},

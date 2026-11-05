@@ -5,8 +5,6 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"log/slog"
-	"os"
 	"path"
 	"strings"
 
@@ -23,13 +21,8 @@ type sourceFile struct {
 	Content     *string `json:"content"`
 }
 
-// CheckRequest reads the supplied content without opening the source or installed files.
-func CheckRequest(filename string) error {
-	data, err := os.ReadFile(filename)
-	if err != nil {
-		slog.Error("hcl.request_read_failed", "err", err)
-		return fmt.Errorf("read HCL source request: %w", err)
-	}
+// CheckRequest validates the supplied JSON without opening the source or installed files.
+func CheckRequest(data []byte) error {
 	var req request
 	if err := json.Unmarshal(data, &req, json.RejectUnknownMembers(true)); err != nil {
 		return errors.New("supply valid UTF-8 request JSON with unique fields and the required field types")
@@ -40,15 +33,15 @@ func CheckRequest(filename string) error {
 	return validate(req.Files)
 }
 
-func (f sourceFile) checkFields() error {
+func (f sourceFile) checkFields(index int) error {
 	if f.Source == "" || path.Clean(f.Source) != f.Source || !nativeName(f.Source) {
-		return errors.New("supply a canonical native OpenTofu source filename")
+		return fmt.Errorf("files[%d]: supply a canonical native OpenTofu source filename", index)
 	}
 	if !path.IsAbs(f.Destination) || path.Clean(f.Destination) != f.Destination || !nativeName(f.Destination) {
-		return errors.New("supply an absolute native OpenTofu destination filename")
+		return fmt.Errorf("files[%d]: supply an absolute native OpenTofu destination filename", index)
 	}
 	if f.Content == nil {
-		return errors.New("supply the exact source content as a string")
+		return fmt.Errorf("files[%d]: supply the exact source content as a string", index)
 	}
 	return nil
 }
@@ -60,9 +53,8 @@ func nativeName(filename string) bool {
 func validate(files []sourceFile) error {
 	directories := make(map[string]map[string]bool)
 	for i, file := range files {
-		if err := file.checkFields(); err != nil {
-			slog.Error("hcl.request_file_invalid", "index", i, "err", err)
-			return fmt.Errorf("files[%d]: %w", i, err)
+		if err := file.checkFields(i); err != nil {
+			return err
 		}
 		dir, name := path.Dir(file.Destination), path.Base(file.Destination)
 		if directories[dir] == nil {
