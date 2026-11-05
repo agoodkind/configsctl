@@ -195,26 +195,34 @@ func requireInstalledModuleCache(ctx context.Context, workspace, dataDirectory s
 	if source == nil {
 		return nil
 	}
-	if dataDirectory == "" {
-		return errors.New("installed source requires the validated persistent TF_DATA_DIR")
-	}
-	if relative, err := filepath.Rel(source.copyRoot, workspace); err == nil && filepath.IsLocal(relative) {
-		workspace = filepath.Join(source.settings.Root, relative)
-	}
-	binary, err := tofuBinary()
+	command := tofuargs.Subcommand(args)
+	request, err := source.moduleCacheRequest(workspace, dataDirectory, command == "init" || command == "get")
 	if err != nil {
 		return err
-	}
-	command := tofuargs.Subcommand(args)
-	request := installedsource.ModuleCacheRequest{
-		Binary: binary, Workspace: workspace, CopyRoot: source.copyRoot, DataDirectory: dataDirectory,
-		WorkspaceSelector: "", AllowMissing: command == "init" || command == "get",
 	}
 	if err := source.verified.CheckModuleCache(ctx, request); err != nil {
 		slog.Error("tofu.source.module_cache_refused", "err", err)
 		return fmt.Errorf("verify installed OpenTofu module resolution: %w", err)
 	}
 	return nil
+}
+
+func (source *installedTofuSource) moduleCacheRequest(workspace, dataDirectory string, allowMissing bool) (installedsource.ModuleCacheRequest, error) {
+	if dataDirectory == "" {
+		return installedsource.ModuleCacheRequest{}, errors.New("installed source requires the validated persistent TF_DATA_DIR")
+	}
+	if relative, err := filepath.Rel(source.copyRoot, workspace); err == nil && filepath.IsLocal(relative) {
+		workspace = filepath.Join(source.settings.Root, relative)
+	}
+	binary, err := tofuBinary()
+	if err != nil {
+		return installedsource.ModuleCacheRequest{}, err
+	}
+	request := installedsource.ModuleCacheRequest{
+		Binary: binary, Workspace: workspace, CopyRoot: source.copyRoot, DataDirectory: dataDirectory,
+		WorkspaceSelector: "", AllowMissing: allowMissing,
+	}
+	return request, nil
 }
 
 func installedWorkspace(s *installedTofuSource, workspace string) (string, error) {

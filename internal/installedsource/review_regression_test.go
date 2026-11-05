@@ -152,7 +152,7 @@ func TestInstalledSourceUsesOpenTofuFilePrecedence(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := source.CheckModuleSources("", ""); err != nil {
+			if err := source.CheckModuleSources("workspace", "", ""); err != nil {
 				t.Fatal(err)
 			}
 			copyRoot := t.TempDir()
@@ -184,7 +184,7 @@ func TestInstalledSourceUsesOpenTofuFilePrecedence(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := unsafeSource.CheckModuleSources("", ""); err == nil {
+			if err := unsafeSource.CheckModuleSources("workspace", "", ""); err == nil {
 				t.Fatalf("the %s module source bypassed verified-tree checks", name)
 			}
 		})
@@ -257,7 +257,7 @@ func TestModuleCacheCannotRedirectVerifiedLocalModule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := source.CheckModuleSources("", ""); err != nil {
+	if err := source.CheckModuleSources("workspace", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	first := t.TempDir()
@@ -338,7 +338,12 @@ func TestModuleCacheCannotRedirectVerifiedLocalModule(t *testing.T) {
 func TestNativeModulesUseValidatedConfigsSelector(t *testing.T) {
 	f := newFixture(t)
 	configuration := "opentofu/render/configuration"
+	workspace := "opentofu/suburban/tack"
+	f.addFile(t, filepath.Join(workspace, "main.tf"), fmt.Sprintf(reviewSource(t, "local-backend.tf"), filepath.Join(t.TempDir(), "state.tfstate")))
 	f.addFile(t, filepath.Join(configuration, "main.tofu"), reviewSource(t, "native-selector.tofu"))
+	f.addFile(t, "opentofu/render/host-artifact/main.tofu", reviewSource(t, "native-host-artifact.tofu"))
+	unrelated := "opentofu/modules/unrelated/configuration/main.tf"
+	f.addFile(t, unrelated, reviewSource(t, "unrelated-feature.tf"))
 	f.addFile(t, "opentofu/modules/suburban/tack/configuration/main.tf", reviewSource(t, "native-locks.tf"))
 	encoded, err := json.Marshal(f.document)
 	if err != nil {
@@ -349,7 +354,7 @@ func TestNativeModulesUseValidatedConfigsSelector(t *testing.T) {
 		t.Fatal(err)
 	}
 	selector := "suburban/tack"
-	if err := source.CheckModuleSources(configuration, selector); err != nil {
+	if err := source.CheckModuleSources(workspace, configuration, selector); err != nil {
 		t.Fatalf("the verified Configs selector did not resolve its local module: %v", err)
 	}
 	copyRoot := t.TempDir()
@@ -381,6 +386,15 @@ func TestNativeModulesUseValidatedConfigsSelector(t *testing.T) {
 	}
 	if targets.ModuleHosts["module.base"] != "poweredge" || !targets.LockEndpoints["poweredge"].Local {
 		t.Fatal("the native selector did not retain the selected module's real local lock ownership")
+	}
+	if err := source.CheckModuleSources(filepath.Dir(unrelated), "", ""); err == nil {
+		t.Fatal("selecting the malformed unrelated feature did not validate its own HCL")
+	}
+	if err := os.WriteFile(filepath.Join(f.settings.Root, unrelated), []byte("changed unrelated bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Copy(t.TempDir(), nil); err == nil {
+		t.Fatal("selected-root validation weakened the complete installed-file inventory")
 	}
 }
 

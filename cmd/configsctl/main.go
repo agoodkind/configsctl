@@ -317,6 +317,11 @@ func runTofuWithSource(ctx context.Context, env cmdEnv, args []string) error {
 	if err != nil {
 		return err
 	}
+	if usesCredential {
+		if err := requireInstalledModuleCache(ctx, workspaceDir, environmentValue(childEnv, "TF_DATA_DIR"), safeArgs); err != nil {
+			return err
+		}
+	}
 	if tofuMutates(safeArgs) {
 		request := tofuLockRequest{
 			workspaceDir: workspaceDir, env: childEnv, args: safeArgs,
@@ -344,7 +349,7 @@ func runTofuWithSource(ctx context.Context, env cmdEnv, args []string) error {
 			return fmt.Errorf("read rotator credential: %w", err)
 		}
 		var patterns []redact.Pattern
-		childEnv, patterns, err = credential.prepare(ctx, rotatorPassword, childEnv)
+		childEnv, patterns, err = credential.prepare(ctx, workspaceDir, rotatorPassword, childEnv)
 		if err != nil {
 			return err
 		}

@@ -311,47 +311,34 @@ func (s *Source) walk(tree string, copyFile func(string, []byte) error) error {
 	return nil
 }
 
-// CheckModuleSources evaluates native source selectors with the validated workspace.
-// Other source trees require literal local module sources.
-func (s *Source) CheckModuleSources(nativeRoot, selector string) error {
-	nativeDirectory := ""
-	if nativeRoot != "" {
-		var err error
-		nativeDirectory, err = s.Path(nativeRoot)
-		if err != nil {
+// CheckModuleSources checks selected execution roots and their local dependencies.
+// Native sources use the same validated workspace selector as native evaluation.
+func (s *Source) CheckModuleSources(workspace, nativeRoot, selector string) error {
+	if workspace != "" {
+		if err := s.checkModuleDirectory(workspace, "", make(map[string]bool)); err != nil {
 			return err
 		}
 	}
-	for _, tree := range s.trees {
-		err := filepath.WalkDir(tree, func(path string, entry fs.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				slog.Error("tofu.source.module_directory_failed", "err", walkErr)
-				return fmt.Errorf("read installed module directory: %w", walkErr)
-			}
-			if !entry.IsDir() {
-				return nil
-			}
-			if entry.Name() == ".terraform" {
-				return filepath.SkipDir
-			}
-			return s.checkModuleDirectory(path, nativeDirectory, selector)
-		})
-		if err != nil {
-			return fmt.Errorf("verify installed module sources: %w", err)
-		}
+	if nativeRoot != "" {
+		return s.checkModuleDirectory(nativeRoot, selector, make(map[string]bool))
 	}
 	return nil
 }
 
-func (s *Source) checkModuleDirectory(directory, nativeDirectory, selector string) error {
+func (s *Source) checkModuleDirectory(path, selector string, visited map[string]bool) error {
+	directory, err := s.Path(path)
+	if err != nil {
+		return err
+	}
+	if visited[directory] {
+		return nil
+	}
+	visited[directory] = true
 	var context *hcl.EvalContext
-	if nativeDirectory != "" {
-		relative, err := filepath.Rel(nativeDirectory, directory)
-		if err == nil && filepath.IsLocal(relative) {
-			context = &hcl.EvalContext{Variables: map[string]cty.Value{
-				"var": cty.ObjectVal(map[string]cty.Value{"workspace": cty.StringVal(selector)}),
-			}}
-		}
+	if selector != "" {
+		context = &hcl.EvalContext{Variables: map[string]cty.Value{
+			"var": cty.ObjectVal(map[string]cty.Value{"workspace": cty.StringVal(selector)}),
+		}}
 	}
 	native, jsonFiles, err := tofufiles.Discover(directory)
 	if err != nil {
@@ -363,41 +350,48 @@ func (s *Source) checkModuleDirectory(directory, nativeDirectory, selector strin
 		if err != nil {
 			return err
 		}
-		if err := s.checkModules(path, data, context); err != nil {
+		dependencies, err := s.checkModules(path, data, context)
+		if err != nil {
 			return err
+		}
+		for _, dependency := range dependencies {
+			if err := s.checkModuleDirectory(dependency, selector, visited); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
-func (s *Source) checkModules(path string, data []byte, context *hcl.EvalContext) error {
+func (s *Source) checkModules(path string, data []byte, context *hcl.EvalContext) ([]string, error) {
 	file, err := parseInputFile(path, data)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	schema := &hcl.BodySchema{Blocks: []hcl.BlockHeaderSchema{{Type: "module", LabelNames: []string{"name"}}}}
 	content, _, diagnostics := file.Body.PartialContent(schema)
 	if diagnostics.HasErrors() {
 		slog.Error("tofu.source.module_failed", "path", path, "err", diagnostics.Error())
-		return fmt.Errorf("read installed modules %s: %w", path, diagnostics)
+		return nil, fmt.Errorf("read installed modules %s: %w", path, diagnostics)
 	}
+	var dependencies []string
 	for _, block := range content.Blocks {
 		attributes, _, diagnostics := block.Body.PartialContent(&hcl.BodySchema{Attributes: []hcl.AttributeSchema{{Name: "source", Required: true}}})
 		if diagnostics.HasErrors() {
 			slog.Error("tofu.source.module_failed", "path", path, "err", diagnostics.Error())
-			return fmt.Errorf("read installed module source %s: %w", path, diagnostics)
+			return nil, fmt.Errorf("read installed module source %s: %w", path, diagnostics)
 		}
 		value, diagnostics := attributes.Attributes["source"].Expr.Value(context)
 		if diagnostics.HasErrors() || value.IsNull() || !value.Type().Equals(cty.String) {
-			return fmt.Errorf("installed module in %s requires a local source from the validated workspace selector", path)
+			return nil, fmt.Errorf("installed module in %s requires a local source from the validated workspace selector", path)
 		}
 		module := value.AsString()
 		if !strings.HasPrefix(module, "./") && !strings.HasPrefix(module, "../") {
-			return fmt.Errorf("installed module in %s must use a relative local source", path)
+			return nil, fmt.Errorf("installed module in %s must use a relative local source", path)
 		}
 		modulePath, err := s.Path(filepath.Join(filepath.Dir(path), module))
 		if err != nil {
-			return err
+			return nil, err
 		}
 		inside := false
 		for _, tree := range s.trees {
@@ -405,10 +399,11 @@ func (s *Source) checkModules(path string, data []byte, context *hcl.EvalContext
 			inside = inside || (err == nil && filepath.IsLocal(relative))
 		}
 		if !inside {
-			return fmt.Errorf("installed module %s must be inside a complete input tree", modulePath)
+			return nil, fmt.Errorf("installed module %s must be inside a complete input tree", modulePath)
 		}
+		dependencies = append(dependencies, modulePath)
 	}
-	return nil
+	return dependencies, nil
 }
 
 func generatedFile(name string) bool {

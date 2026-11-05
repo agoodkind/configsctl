@@ -98,7 +98,7 @@ func loadTofuWorkspace(ctx context.Context, args []string) (settings, string, []
 				return loaded, "", nil, err
 			}
 		}
-		if err := loaded.Tofu.source.verified.CheckModuleSources(loaded.Tofu.ConfigurationRoot, selector); err != nil {
+		if err := loaded.Tofu.source.verified.CheckModuleSources(directory, loaded.Tofu.ConfigurationRoot, selector); err != nil {
 			return loaded, "", nil, fmt.Errorf("verify installed module selections: %w", err)
 		}
 	}

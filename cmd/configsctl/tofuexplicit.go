@@ -304,7 +304,7 @@ func prepareExplicitCredential(ctx context.Context, settings tofuSettings, reque
 		return nil, nil, nil, err
 	}
 	var patterns []redact.Pattern
-	request.env, patterns, err = prepareMutationCredential(locked, credential, request.env, passwordFile)
+	request.env, patterns, err = prepareMutationCredential(locked, credential, request.workspaceDir, request.env, passwordFile)
 	if err != nil {
 		release()
 		return nil, nil, nil, err

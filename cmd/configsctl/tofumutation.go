@@ -49,13 +49,13 @@ func (t tofuSettings) lockGuestModule(workspaceDir string) string {
 	return ""
 }
 
-func prepareMutationCredential(ctx context.Context, credential tofuCredentialSettings, environment []string, passwordFile string) ([]string, []redact.Pattern, error) {
+func prepareMutationCredential(ctx context.Context, credential tofuCredentialSettings, workspace string, environment []string, passwordFile string) ([]string, []redact.Pattern, error) {
 	password, err := vault.Secret(credential.Dell.RotatorPasswordKey, defaultVaultFile, passwordFile)
 	if err != nil {
 		slog.Error("tofu.credential.vault_failed", "err", err)
 		return nil, nil, fmt.Errorf("read rotator credential: %w", err)
 	}
-	return credential.prepare(ctx, password, environment)
+	return credential.prepare(ctx, workspace, password, environment)
 }
 
 func confirmMutation(ctx context.Context, args, environment []string) error {
