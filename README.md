@@ -448,7 +448,7 @@ The command publishes the binary with a hard link at:
 <mirror_dir>/<source address>/<version>/<platform>/terraform-provider-<name>_v<version>
 ```
 
-The hard link fails if the path exists. If the existing binary is identical, the command leaves it unchanged and reports `reused`. If the binary differs, the command fails without replacing it. Give the release a new version in the pin file, or delete the file if it is damaged.
+The hard link fails if the path exists. If the existing binary is identical, the command does not change it and reports `reused`. If the binary differs, the command fails without replacing it. Give the release a new version in the pin file, or delete the file if it is damaged.
 
 The command also fails if the package directory contains any other entry. OpenTofu includes every entry in a package directory in its lockfile checksum.
 
