@@ -228,12 +228,12 @@ type renewal struct {
 	err     error
 }
 
-// renewHost runs one renewal of host and stops it after Lease.RenewTimeout.
+// renewHost applies the default renewal deadline when RequestTimeout is unset.
 func (s *Set) renewHost(ctx context.Context, host Host, request command) (answer, error) {
-	timeout := s.lease.RenewTimeout()
 	if s.options.RequestTimeout > 0 {
-		timeout = s.options.RequestTimeout
+		return s.options.operation(ctx, host, request)
 	}
+	timeout := s.lease.RenewTimeout()
 	attemptCtx, cancel := context.WithTimeoutCause(ctx, timeout, fmt.Errorf("%w within %s", errNoAnswer, timeout))
 	defer cancel()
 	return s.options.operation(attemptCtx, host, request)

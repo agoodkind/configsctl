@@ -19,42 +19,53 @@ import (
 	"goodkind.io/configsctl/hostlock"
 )
 
-// The test subprocess uses the production endpoint with an isolated lock directory.
-func TestRestrictedEndpointProcess(t *testing.T) {
-	for index, argument := range os.Args {
-		if argument == "--host-lock-reply" {
-			if _, err := io.Copy(io.Discard, os.Stdin); err != nil {
-				t.Fatal(err)
-			}
-			body, err := os.ReadFile(os.Args[index+1])
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := os.Stderr.Write(bytes.Repeat([]byte("x"), 65536)); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := os.Stdout.Write(body); err != nil {
-				t.Fatal(err)
-			}
-			os.Exit(0)
+func TestMain(tests *testing.M) {
+	if len(os.Args) > 1 && strings.HasPrefix(os.Args[1], "--host-lock-") {
+		if err := runRestrictedEndpoint(os.Args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
 		}
-		if argument == "--host-lock-test" {
-			var output io.Writer = os.Stdout
-			if len(os.Args) > index+3 {
-				_, err := os.Stat(os.Args[index+2])
-				switch {
-				case err == nil:
-					output = io.Discard
-				case !errors.Is(err, os.ErrNotExist):
-					t.Fatal(err)
-				}
-			}
-			err := (hostlock.Server{Principal: os.Args[index+1], Directory: os.Args[len(os.Args)-1]}).Serve(context.Background(), os.Stdin, output)
-			if err != nil {
-				t.Fatal(err)
-			}
-			os.Exit(0)
+		os.Exit(0)
+	}
+	os.Exit(tests.Run())
+}
+
+// The SSH subprocess uses the production endpoint with an isolated lock directory.
+func runRestrictedEndpoint(args []string) error {
+	switch args[0] {
+	case "--host-lock-reply":
+		if len(args) != 3 {
+			return errors.New("reply subprocess requires a response file and lock directory")
 		}
+		if _, err := io.Copy(io.Discard, os.Stdin); err != nil {
+			return err
+		}
+		body, err := os.ReadFile(args[1])
+		if err != nil {
+			return err
+		}
+		if _, err := os.Stderr.Write(bytes.Repeat([]byte("x"), 65536)); err != nil {
+			return err
+		}
+		_, err = os.Stdout.Write(body)
+		return err
+	case "--host-lock-test":
+		if len(args) != 3 && len(args) != 4 {
+			return errors.New("server subprocess requires a principal, optional reply marker, and lock directory")
+		}
+		var output io.Writer = os.Stdout
+		if len(args) == 4 {
+			_, err := os.Stat(args[2])
+			switch {
+			case err == nil:
+				output = io.Discard
+			case !errors.Is(err, os.ErrNotExist):
+				return err
+			}
+		}
+		return (hostlock.Server{Principal: args[1], Directory: args[len(args)-1]}).Serve(context.Background(), os.Stdin, output)
+	default:
+		return errors.New("unknown host lock subprocess operation")
 	}
 }
 
@@ -286,6 +297,39 @@ func TestRequestTimeoutStopsBlockedLockCommand(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(host.Dir, "deploy.lock")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("timed-out request acquired a lock:", err)
+	}
+}
+
+func TestRenewalTimeoutUsesConfiguredOrLegacyDeadline(t *testing.T) {
+	for _, timeout := range []time.Duration{0, 100 * time.Millisecond} {
+		t.Run(timeout.String(), func(t *testing.T) {
+			host := localHost(t)
+			lease := hostlock.Lease{TTL: 30 * time.Second, RenewInterval: 2 * time.Second}
+			options := hostlock.Options{StrictRenewal: true, RequestTimeout: timeout}
+			set, err := hostlock.AcquireAllWithOptions(t.Context(), []hostlock.Host{host}, "attempt", "runner", lease, options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer set.Abandon()
+			holdGuard(t, host)
+			started := time.Now()
+			err = set.RenewAll(t.Context())
+			if !errors.Is(err, hostlock.ErrLost) {
+				t.Fatalf("blocked strict renewal did not report loss: %v", err)
+			}
+			deadline := timeout
+			if timeout == 0 {
+				deadline = lease.RenewTimeout()
+				if !strings.Contains(err.Error(), "the host did not answer within "+deadline.String()) {
+					t.Fatalf("legacy renewal lost its timeout cause: %v", err)
+				}
+			} else if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("configured renewal did not report its request deadline: %v", err)
+			}
+			if elapsed := time.Since(started); elapsed > deadline+attemptSlack {
+				t.Fatalf("renewal took %s with a %s deadline", elapsed, deadline)
+			}
+		})
 	}
 }
 
@@ -554,7 +598,7 @@ func restrictedSSHServer(t *testing.T, endpointArgs string) (hostlock.Host, stri
 		t.Fatal(err)
 	}
 	lockDirectory := filepath.Join(directory, "locks")
-	config := fmt.Sprintf("Port %s\nListenAddress 127.0.0.1\nHostKey %s\nPidFile %s\nAuthorizedKeysFile %s.pub\nStrictModes no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nUsePAM no\nAllowUsers %s\nForceCommand %s -test.run=TestRestrictedEndpointProcess -- %s %s\n", port, hostKey, filepath.Join(directory, "pid"), key, current.Username, executable, endpointArgs, lockDirectory)
+	config := fmt.Sprintf("Port %s\nListenAddress 127.0.0.1\nHostKey %s\nPidFile %s\nAuthorizedKeysFile %s.pub\nStrictModes no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nUsePAM no\nAllowUsers %s\nForceCommand %s %s %s\n", port, hostKey, filepath.Join(directory, "pid"), key, current.Username, executable, endpointArgs, lockDirectory)
 	configPath := filepath.Join(directory, "sshd_config")
 	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
 		t.Fatal(err)

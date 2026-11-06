@@ -5,9 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
-	"log/slog"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -139,8 +137,7 @@ func unmarshalStrict[T wireRequest | wireResponse](body []byte, target *T, field
 	for decoder.More() {
 		token, err := decoder.Token()
 		if err != nil {
-			slog.Error("hostlock.protocol_decode_failed", "stage", "field", "err", errors.New("invalid JSON syntax"))
-			return fmt.Errorf("read JSON field: %w", err)
+			return errors.New("invalid JSON field")
 		}
 		key, ok := token.(string)
 		if !ok || !slices.Contains(fields, key) || seen[key] {
@@ -149,7 +146,7 @@ func unmarshalStrict[T wireRequest | wireResponse](body []byte, target *T, field
 		seen[key] = true
 		var value json.RawMessage
 		if err := decoder.Decode(&value); err != nil {
-			return fmt.Errorf("decode JSON field: %w", err)
+			return errors.New("invalid JSON field value")
 		}
 		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
 			return errors.New("null JSON field")
@@ -159,7 +156,7 @@ func unmarshalStrict[T wireRequest | wireResponse](body []byte, target *T, field
 		return errors.New("missing JSON field")
 	}
 	if _, err := decoder.Token(); err != nil {
-		return fmt.Errorf("read JSON object end: %w", err)
+		return errors.New("invalid JSON object end")
 	}
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
 		return errors.New("additional JSON document")
@@ -167,7 +164,7 @@ func unmarshalStrict[T wireRequest | wireResponse](body []byte, target *T, field
 	decoder = json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
-		return fmt.Errorf("decode JSON object: %w", err)
+		return errors.New("invalid JSON object")
 	}
 	return nil
 }
