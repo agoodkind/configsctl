@@ -278,7 +278,6 @@ func removeStaleStaging(stagingRoot string) error {
 			return providerInstallError("remove the stale staging directory", runDir, err)
 		}
 		slog.Debug("providers.stale_staging_removed", "run_dir", runDir, "run_pid", pid)
-		fmt.Printf("Removed staging directory for an exited process run_dir=%s run_pid=%d\n", runDir, pid)
 	}
 	return nil
 }
