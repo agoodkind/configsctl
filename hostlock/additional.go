@@ -38,7 +38,7 @@ func (s *Set) AcquireAdditional(ctx context.Context, hosts []Host) error {
 	request := command{op: Acquire, run: s.run, controller: s.controller, lease: s.lease.TTL}
 	for _, host := range pending {
 		asked := clock.NowUTC()
-		granted, err := runScript(ctx, host, request)
+		granted, err := s.options.operation(ctx, host, request)
 		if err != nil {
 			slog.Error("hostlock.additional_acquire_failed", "host", host.Name, "run", s.run, "err", err)
 			return fmt.Errorf("lock additional host %s: %w", host.Name, err)
@@ -54,7 +54,7 @@ func (s *Set) AcquireAdditional(ctx context.Context, hosts []Host) error {
 			return fmt.Errorf("additional host %s passed its lock loss deadline during acquisition", name)
 		}
 	}
-	if err := writeState(s.stateDir, s.run, s.controller, append(current, acquired...)); err != nil {
+	if err := s.writeState(append(current, acquired...)); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -94,7 +94,7 @@ func (s *Set) additionalHosts(hosts []Host) ([]Host, []Host, error) {
 
 func (s *Set) releaseAdditional(ctx context.Context, hosts []Host) {
 	for _, host := range hosts {
-		if err := Do(ctx, host, Release, s.run, s.controller); err != nil {
+		if _, err := s.options.operation(ctx, host, command{op: Release, run: s.run, controller: s.controller, lease: s.lease.TTL}); err != nil {
 			slog.Warn("hostlock.additional_release_failed", "host", host.Name, "run", s.run, "err", err)
 		}
 	}

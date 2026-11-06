@@ -25,18 +25,31 @@ const (
 	stateFileMode   = 0o600
 )
 
+type savedTransport string
+
+const (
+	legacyScript    savedTransport = "script"
+	restrictedSSH   savedTransport = "restricted-ssh"
+	customTransport savedTransport = "custom"
+)
+
 type lockedHost struct {
-	Name    string `json:"name"`
-	User    string `json:"user"`
-	Address string `json:"address"`
-	Dir     string `json:"dir"`
+	Name           string `json:"name"`
+	User           string `json:"user"`
+	Address        string `json:"address"`
+	Dir            string `json:"dir"`
+	ConnectAddress string `json:"connect_address"`
+	PrivateKeyFile string `json:"private_key_file"`
+	KnownHostsFile string `json:"known_hosts_file"`
 }
 
 // runState is the run and the hosts that a Set locked.
 type runState struct {
-	Run        string       `json:"run"`
-	Controller string       `json:"controller"`
-	Hosts      []lockedHost `json:"hosts"`
+	Run            string         `json:"run"`
+	Controller     string         `json:"controller"`
+	Hosts          []lockedHost   `json:"hosts"`
+	Transport      savedTransport `json:"transport"`
+	RequestTimeout time.Duration  `json:"request_timeout"`
 }
 
 // declaration is the lease that Extend wrote on one host. Asked is the
@@ -61,12 +74,20 @@ func removeStateDir(dir string) {
 	}
 }
 
-func writeState(dir, run, controller string, hosts []Host) error {
-	state := runState{Run: run, Controller: controller, Hosts: make([]lockedHost, 0, len(hosts))}
+func (s *Set) writeState(hosts []Host) error {
+	state := runState{Run: s.run, Controller: s.controller, Hosts: make([]lockedHost, 0, len(hosts)), RequestTimeout: s.options.RequestTimeout}
+	switch s.options.Transport.(type) {
+	case nil:
+		state.Transport = legacyScript
+	case RestrictedSSHTransport, *RestrictedSSHTransport:
+		state.Transport = restrictedSSH
+	default:
+		state.Transport = customTransport
+	}
 	for _, host := range hosts {
 		state.Hosts = append(state.Hosts, lockedHost(host))
 	}
-	return writeJSONFile(filepath.Join(dir, stateFile), state)
+	return writeJSONFile(filepath.Join(s.stateDir, stateFile), state)
 }
 
 func writeJSONFile[T runState | declaration](path string, value T) error {
@@ -124,7 +145,22 @@ func Extend(ctx context.Context, stateDir, hostName string, duration time.Durati
 	}
 	asked := clock.NowUTC()
 	request := command{op: extend, run: state.Run, controller: state.Controller, lease: duration}
-	extended, err := runScript(ctx, Host(state.Hosts[index]), request)
+	host := Host(state.Hosts[index])
+	options := Options{RequestTimeout: state.RequestTimeout}
+	switch state.Transport {
+	case "":
+		if host.ConnectAddress != "" || host.PrivateKeyFile != "" || host.KnownHostsFile != "" {
+			return time.Time{}, errors.New("the saved lock state lacks a transport for this SSH endpoint")
+		}
+	case legacyScript:
+	case restrictedSSH:
+		options.Transport = RestrictedSSHTransport{}
+	case customTransport:
+		return time.Time{}, errors.New("child processes cannot extend locks with this transport")
+	default:
+		return time.Time{}, errors.New("the saved lock state specifies an unknown transport")
+	}
+	extended, err := options.operation(ctx, host, request)
 	if err != nil {
 		slog.Error("hostlock.extend.failed", "host", hostName, "run", state.Run, "err", err)
 		return time.Time{}, err
