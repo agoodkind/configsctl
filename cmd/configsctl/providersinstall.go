@@ -422,11 +422,20 @@ func digestMismatch(archivePath, expected, actual string) error {
 }
 
 func fileSHA256(filePath string) (string, error) {
-	file, err := os.Open(filePath)
+	// A non-blocking open returns at once for a FIFO that has no writer. The
+	// type check then refuses every file that is not a regular file.
+	file, err := os.OpenFile(filePath, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return "", providerInstallError("open for hashing", filePath, err)
 	}
 	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return "", providerInstallError("inspect for hashing", filePath, err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("cannot hash a file that is not a regular file file_path=%s mode=%s", filePath, info.Mode().Type())
+	}
 	hasher := sha256.New()
 	if _, err := io.Copy(hasher, file); err != nil {
 		return "", providerInstallError("hash", filePath, err)
@@ -445,14 +454,24 @@ func checkArchiveDigest(archivePath, expected string) error {
 	return nil
 }
 
-// checkPackageDirectory refuses a directory at the binary path and any entry
-// beside the binary. OpenTofu includes every entry of a package directory in
-// its lockfile checksum.
+// checkPackageDirectory refuses a package directory that is not a real
+// directory, a binary path that is not a regular file, and any entry beside the
+// binary. OpenTofu includes every entry of a package directory in its lockfile
+// checksum, and [filepath.WalkDir] does not follow a symbolic link at its root.
 func checkPackageDirectory(targetDir, targetPath string) error {
+	directoryInfo, err := os.Lstat(targetDir)
+	switch {
+	case err == nil && !directoryInfo.IsDir():
+		return fmt.Errorf("cannot publish the binary because the package directory is not a directory; delete it and run the installer again target_dir=%s mode=%s", targetDir, directoryInfo.Mode().Type())
+	case err != nil && !errors.Is(err, fs.ErrNotExist):
+		return providerInstallError("inspect the package directory", targetDir, err)
+	}
 	info, err := os.Lstat(targetPath)
 	switch {
 	case err == nil && info.IsDir():
 		return fmt.Errorf("cannot publish the binary because the target path is a directory target_path=%s", targetPath)
+	case err == nil && !info.Mode().IsRegular():
+		return fmt.Errorf("cannot publish the binary because the target path is not a regular file; delete it and run the installer again target_path=%s mode=%s", targetPath, info.Mode().Type())
 	case err != nil && !errors.Is(err, fs.ErrNotExist):
 		return providerInstallError("inspect the target path", targetPath, err)
 	}
