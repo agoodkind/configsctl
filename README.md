@@ -401,6 +401,59 @@ provider. Run it only during an available host lock window:
 CONFIGSCTL_DELL_INTEGRATION_ROOT=/path/to/configs go test ./cmd/configsctl -run '^TestDellCredentialSavedPlanLifecycle$' -count=1 -v
 ```
 
+## Install pinned OpenTofu providers
+
+Install and authenticate `gh` before downloading an archive that is absent from the cache. The command does not read the vault or the vault password file.
+
+Run the command with either zero arguments or all three paths:
+
+```text
+configsctl providers install [<pin_file> <mirror_dir> <archive_dir>]
+```
+
+Without arguments, the command uses these paths relative to the root of a configs checkout:
+
+| Argument | Default path |
+|---|---|
+| `<pin_file>` | `opentofu/guest/providers.pin` |
+| `<mirror_dir>` | `opentofu/terraform.d/plugins` |
+| `<archive_dir>` | `.make/releases` |
+
+Each pin file row contains six fields separated by whitespace:
+
+| Order | Field |
+|---|---|
+| 1 | Provider source address |
+| 2 | GitHub repository |
+| 3 | Release tag |
+| 4 | Version |
+| 5 | Platform |
+| 6 | SHA-256 digest of the release archive |
+
+The command ignores blank lines and lines that start with `#`. It validates every row before installing anything and fails if any row is invalid. Each provider source needs a row for the host platform. The command installs only rows for the host platform: `darwin` or `linux`, with `arm64` or `amd64`.
+
+When the archive cache lacks an archive, the command downloads it into a private temporary directory:
+
+```text
+gh release download <tag> --repo <repository> --pattern <asset>
+```
+
+The command compares the archive's SHA-256 digest with the pin before moving the archive into the cache. It also checks the digest of each cached archive on every run.
+
+The command installs providers in pin file order and reads each entire archive, including its gzip checksum, before publishing that provider's binary. If a read fails, the command fails without publishing that provider's binary, and providers installed earlier in the run remain installed. It uses only the member `terraform-provider-<name>`, requires that member to be a regular file, and writes it with mode `0755`.
+
+The command publishes the binary with a hard link at:
+
+```text
+<mirror_dir>/<source address>/<version>/<platform>/terraform-provider-<name>_v<version>
+```
+
+The hard link fails if the path exists. If the existing binary is identical, the command does not change it and reports `reused`. If the binary differs, the command fails without replacing it. Give the release a new version in the pin file, or delete the file if it is damaged.
+
+The command also fails if the package directory contains any other entry. OpenTofu includes every entry in a package directory in its lockfile checksum.
+
+The command stores temporary files outside the mirror and published archive paths. It uses `.<mirror directory name>.staging` beside the mirror directory and `.staging` inside the archive directory. Each run creates a separate `run.<pid>.*` subdirectory in each staging directory and removes it on exit, including after `SIGINT` or `SIGTERM`. A run removes leftover `run.<pid>.*` directories from exited processes and keeps those from running processes. Two processes can install at the same time.
+
 ## Run OpenTofu in CI
 
 Run `configsctl ci tofu` from the configuration checkout root. The OpenTofu root must be inside that checkout. The command finds `tofu` in `PATH` and does not read the vault or its password file.
