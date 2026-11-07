@@ -3,6 +3,8 @@
 package main_test
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +17,7 @@ const (
 	dockerBridgeResult    = "bridge-socket.txt"
 	dockerBridgeVMID      = "vmid            = local.guest.vmid"
 	dockerBridgeToken     = `token_variable  = "vault_alpha"`
+	operatorTokenBytes    = 16
 )
 
 func dockerBridgeFixtureFile(t *testing.T, name string) string {
@@ -271,4 +274,55 @@ func TestTofuDockerBridgeWritesOnlyLockedGuests(t *testing.T) {
 		t.Fatalf("the Docker bridges answered %q, want a writable guest_alpha and a read-only guest_beta", probe)
 	}
 	fixture.requireNoDockerBridgeDirectories(t)
+}
+
+func TestTofuNativeOutputsRequireExactNames(t *testing.T) {
+	t.Run("LOCK_TARGETS", func(t *testing.T) {
+		fixture := newDockerBridgeFixture(t, dockerBridgeFixtureFile(t, "configuration.tf"), dockerBridgeFixtureFile(t, "root.tf"))
+		writeFixtureFile(t, filepath.Join(fixture.tree.root, "native", "main.tf"), dockerBridgeFixtureFile(t, "native-root-upper-lock.tf"))
+		result := fixture.mutate(t, "plan", "-input=false")
+		if result.exitCode == 0 || !strings.Contains(result.stderr, "must export lock_targets") {
+			t.Fatalf("the plan accepted LOCK_TARGETS as lock_targets: %s", result.stderr)
+		}
+	})
+	t.Run("DOCKER_BRIDGES", func(t *testing.T) {
+		fixture := newDirectFixture(t, explicitSettings)
+		installNativeConfiguration(t, fixture.tree)
+		writeFixtureFile(t, filepath.Join(fixture.tree.root, "native", "suburban", "tack", "main.tf"), dockerBridgeFixtureFile(t, "configuration.tf"))
+		writeFixtureFile(t, filepath.Join(fixture.tree.root, "native", "main.tf"), dockerBridgeFixtureFile(t, "native-root-upper-bridges.tf"))
+		result := fixture.mutate(t, "plan", "-input=false")
+		requireSuccess(t, result)
+		if strings.Contains(result.stderr, dockerBridgeStarted) {
+			t.Fatalf("the plan used DOCKER_BRIDGES as docker_bridges: %s", result.stderr)
+		}
+	})
+}
+
+func TestTofuDockerBridgeRedactsOperatorToken(t *testing.T) {
+	random := make([]byte, operatorTokenBytes)
+	if _, err := rand.Read(random); err != nil {
+		t.Fatal(err)
+	}
+	secret := "synthetic-operator-token-" + hex.EncodeToString(random)
+	configuration := strings.Replace(dockerBridgeFixtureFile(t, "configuration.tf"), dockerBridgeToken, `token_variable  = "vault_operator"`, 1)
+	workspace := strings.Replace(dockerBridgeFixtureFile(t, "root.tf"), `variable "vault_alpha"`, `variable "vault_operator"`, 1)
+	address := `module.base["guest_alpha"].terraform_data.item`
+	commands := map[string][]string{
+		"plan":   {"plan", "-input=false", "-var=vault_operator=" + secret},
+		"import": {"import", "-input=false", "-var=vault_operator=" + secret, address, "00000000-0000-4000-8000-000000000002"},
+	}
+	for name, args := range commands {
+		t.Run(name, func(t *testing.T) {
+			fixture := newDockerBridgeFixture(t, configuration, workspace)
+			fixture.extraEnv = append(fixture.extraEnv, "TF_VAR_vault_operator="+secret)
+			result := fixture.mutate(t, args...)
+			requireSuccess(t, result)
+			if !strings.Contains(result.stderr, dockerBridgeStarted) {
+				t.Fatalf("the %s did not start the Docker bridge: %s", name, result.stderr)
+			}
+			if strings.Contains(result.stdout+result.stderr, secret) {
+				t.Fatalf("the %s output disclosed the operator Docker bridge token", name)
+			}
+		})
+	}
 }
