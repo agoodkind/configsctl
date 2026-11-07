@@ -109,14 +109,14 @@ func TestTofuDockerBridgeServesNativePlanAndApply(t *testing.T) {
 
 	plan := fixture.mutate(t, "plan", "-input=false", variableFile)
 	requireSuccess(t, plan)
-	if !strings.Contains(plan.stderr, dockerBridgeStarted+" aliases=[guest_alpha] get_only=true") {
+	if !strings.Contains(plan.stderr, dockerBridgeStarted+" aliases=[guest_alpha] writable=[]") {
 		t.Fatalf("the plan did not start a read-only Docker bridge: %s", plan.stderr)
 	}
 	fixture.requireNoDockerBridgeDirectories(t)
 
 	apply := fixture.apply(t, "-auto-approve", "-input=false", variableFile)
 	requireSuccess(t, apply)
-	if !strings.Contains(apply.stderr, dockerBridgeStarted+" aliases=[guest_alpha] get_only=false") {
+	if !strings.Contains(apply.stderr, dockerBridgeStarted+" aliases=[guest_alpha] writable=[guest_alpha]") {
 		t.Fatalf("the apply did not start a writable Docker bridge: %s", apply.stderr)
 	}
 	fixture.requireBridgeSocketUsed(t, plan, apply)
@@ -134,6 +134,7 @@ func TestTofuDockerBridgeServesSavedPlanApply(t *testing.T) {
 type dockerBridgeRefusal struct {
 	configuration string
 	workspace     string
+	files         map[string]string
 	extraEnv      []string
 	args          []string
 	want          string
@@ -146,46 +147,65 @@ func TestTofuRefusesInvalidDockerBridges(t *testing.T) {
 	cases := map[string]dockerBridgeRefusal{
 		"guest outside guest_hosts": {
 			configuration: strings.Replace(configuration, dockerBridgeVMID, "vmid            = 202", 1),
-			workspace:     workspace, extraEnv: nil, args: nil,
+			workspace:     workspace, files: nil, extraEnv: nil, args: nil,
 			want: "docker_bridges.guest_alpha uses guest site/202, which guest_hosts does not declare",
 		},
 		"docker_hosts not ephemeral": {
 			configuration: configuration,
 			workspace:     strings.Replace(workspace, "  type      = map(string)\n  ephemeral = true\n", "  type = map(string)\n", 1),
-			extraEnv:      nil, args: nil,
+			files:         nil, extraEnv: nil, args: nil,
 			want: "must declare the ephemeral variable docker_hosts",
 		},
 		"token variable not ephemeral": {
 			configuration: configuration,
 			workspace:     strings.Replace(workspace, "  sensitive = true\n  ephemeral = true\n", "  sensitive = true\n", 1),
-			extraEnv:      nil, args: nil,
+			files:         nil, extraEnv: nil, args: nil,
 			want: "must declare the variable vault_alpha with ephemeral = true for the token of the Docker bridge guest_alpha",
 		},
 		"token variable undeclared": {
 			configuration: strings.Replace(configuration, dockerBridgeToken, `token_variable  = "vault_missing"`, 1),
-			workspace:     workspace, extraEnv: nil, args: nil,
+			workspace:     workspace, files: nil, extraEnv: nil, args: nil,
 			want: "must declare the variable vault_missing with ephemeral = true for the token of the Docker bridge guest_alpha",
 		},
 		"missing token secret": {
 			configuration: strings.Replace(configuration, dockerBridgeToken, `token_variable  = "vault_unset"`, 1),
 			workspace:     strings.Replace(workspace, `variable "vault_alpha"`, `variable "vault_unset"`, 1),
-			extraEnv:      nil, args: nil,
+			files:         nil, extraEnv: nil, args: nil,
 			want: "the Docker bridge guest_alpha requires the token secret TF_VAR_vault_unset; add the vault key vault_unset",
 		},
 		"operator docker_hosts": {
 			configuration: configuration, workspace: workspace,
-			extraEnv: []string{"TF_VAR_docker_hosts=" + operatorHosts}, args: nil,
+			files: nil, extraEnv: []string{"TF_VAR_docker_hosts=" + operatorHosts}, args: nil,
 			want: "TF_VAR_docker_hosts conflicts with the Docker bridges for [guest_alpha]",
 		},
 		"operator docker_hosts argument": {
 			configuration: configuration, workspace: workspace,
-			extraEnv: nil, args: []string{"-var", "docker_hosts=" + operatorHosts},
+			files: nil, extraEnv: nil, args: []string{"-var", "docker_hosts=" + operatorHosts},
 			want: "-var docker_hosts conflicts with the Docker bridges for [guest_alpha]",
+		},
+		"docker_hosts override sets ephemeral false": {
+			configuration: configuration, workspace: workspace,
+			files:    map[string]string{"a_override.tf": dockerBridgeFixtureFile(t, "hosts-false-override.tf")},
+			extraEnv: nil, args: nil,
+			want: "must declare the ephemeral variable docker_hosts",
+		},
+		"chdir redirection": {
+			configuration: configuration, workspace: workspace,
+			files: nil, extraEnv: nil, args: []string{"-chdir=" + t.TempDir()},
+			want: "-chdir selects another configuration",
+		},
+		"config redirection": {
+			configuration: configuration, workspace: workspace,
+			files: nil, extraEnv: nil, args: []string{"-config=" + t.TempDir()},
+			want: "-config selects another configuration",
 		},
 	}
 	for name, test := range cases {
 		t.Run(name, func(t *testing.T) {
 			fixture := newDockerBridgeFixture(t, test.configuration, test.workspace)
+			for file, body := range test.files {
+				writeFixtureFile(t, filepath.Join(fixture.tree.workspaces, "suburban", "tack", file), body)
+			}
 			fixture.extraEnv = append(fixture.extraEnv, test.extraEnv...)
 			result := fixture.mutate(t, append([]string{"plan", "-input=false"}, test.args...)...)
 			if result.exitCode == 0 || !strings.Contains(result.stderr, test.want) {
@@ -197,4 +217,58 @@ func TestTofuRefusesInvalidDockerBridges(t *testing.T) {
 			fixture.requireNoDockerBridgeDirectories(t)
 		})
 	}
+}
+
+func TestTofuDockerBridgeKeepsFlagsAfterDescriptionOverride(t *testing.T) {
+	fixture := newDockerBridgeFixture(t, dockerBridgeFixtureFile(t, "configuration.tf"), dockerBridgeFixtureFile(t, "root.tf"))
+	override := filepath.Join(fixture.tree.workspaces, "suburban", "tack", "override.tf")
+	writeFixtureFile(t, override, dockerBridgeFixtureFile(t, "hosts-description-override.tf"))
+	plan := fixture.mutate(t, "plan", "-input=false")
+	requireSuccess(t, plan)
+	if !strings.Contains(plan.stderr, dockerBridgeStarted+" aliases=[guest_alpha] writable=[]") {
+		t.Fatalf("the description-only override stopped the Docker bridge plan: %s", plan.stderr)
+	}
+}
+
+// TestTofuDockerBridgeOverridesLaterImportVariables places the decoy
+// -var-file after the import address and ID. The docker_hosts validation rule
+// fails when the decoy value wins.
+func TestTofuDockerBridgeOverridesLaterImportVariables(t *testing.T) {
+	fixture, variableFile := newDecoyDockerBridgeFixture(t)
+	address := `module.base["guest_alpha"].terraform_data.item`
+	result := fixture.mutate(t, "import", "-input=false", address, "00000000-0000-4000-8000-000000000001", variableFile)
+	requireSuccess(t, result)
+	if !strings.Contains(result.stderr, dockerBridgeStarted+" aliases=[guest_alpha] writable=[]") {
+		t.Fatalf("the import did not start a read-only Docker bridge: %s", result.stderr)
+	}
+	state := fixture.mutate(t, "state", "list")
+	requireSuccess(t, state)
+	if !strings.Contains(state.stdout, address) {
+		t.Fatalf("the import did not add %s to the state: %s", address, state.stdout)
+	}
+	fixture.requireNoDockerBridgeDirectories(t)
+}
+
+// TestTofuDockerBridgeWritesOnlyLockedGuests applies a change that locks only
+// guest-alpha. The provisioner sends POST /volumes/create through both
+// sockets. A read-only proxy answers 501 before it contacts Proxmox, and the
+// writable proxy answers 502 because the Proxmox endpoint refuses connections.
+func TestTofuDockerBridgeWritesOnlyLockedGuests(t *testing.T) {
+	fixture := newDockerBridgeFixture(t, dockerBridgeFixtureFile(t, "configuration-two.tf"), dockerBridgeFixtureFile(t, "root.tf"))
+	item := filepath.Join(fixture.tree.workspaces, "suburban", "tack", "item")
+	writeFixtureFile(t, filepath.Join(item, "main.tf"), dockerBridgeFixtureFile(t, "item-probe.tf"))
+	writeFixtureFile(t, filepath.Join(item, "bridge-probe.sh"), dockerBridgeFixtureFile(t, "bridge-probe.sh"))
+	apply := fixture.apply(t, "-auto-approve", "-input=false")
+	requireSuccess(t, apply)
+	if !strings.Contains(apply.stderr, dockerBridgeStarted+" aliases=\"[guest_alpha guest_beta]\" writable=[guest_alpha]") {
+		t.Fatalf("the apply did not limit writes to the locked guest: %s", apply.stderr)
+	}
+	probe, err := os.ReadFile(filepath.Join(item, "bridge-probe.txt"))
+	if err != nil {
+		t.Fatalf("the apply provisioner did not probe the Docker bridges: %v", err)
+	}
+	if string(probe) != "guest_alpha=502\nguest_beta=501\n" {
+		t.Fatalf("the Docker bridges answered %q, want a writable guest_alpha and a read-only guest_beta", probe)
+	}
+	fixture.requireNoDockerBridgeDirectories(t)
 }

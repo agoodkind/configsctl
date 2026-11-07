@@ -1,6 +1,11 @@
 variable "docker_hosts" {
   type      = map(string)
   ephemeral = true
+
+  validation {
+    condition     = !strcontains(join(",", values(var.docker_hosts)), "decoy")
+    error_message = "docker_hosts uses a decoy socket."
+  }
 }
 
 variable "vault_alpha" {
