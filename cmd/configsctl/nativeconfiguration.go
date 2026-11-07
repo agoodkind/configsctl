@@ -24,7 +24,7 @@ type nativeConfigurationPlan struct {
 	} `json:"planned_values"`
 }
 
-// nativeProjection is the lock ownership and the Docker bridges of one workspace.
+// nativeProjection contains the lock targets and Docker bridges of one workspace.
 type nativeProjection struct {
 	targets       tofulock.Targets
 	dockerBridges map[string]dockerbridge.Bridge

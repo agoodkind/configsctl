@@ -25,9 +25,9 @@ import (
 	"github.com/agoodkind/terraform-provider-pveguest/transport"
 )
 
-// HostsVariable is the environment variable that sets the ephemeral OpenTofu
-// variable docker_hosts.
-const HostsVariable = "TF_VAR_docker_hosts"
+// HostsVariable is the name of the ephemeral OpenTofu variable that receives
+// the socket address of each alias.
+const HostsVariable = "docker_hosts"
 
 const (
 	variablePrefix      = "TF_VAR_"
@@ -40,8 +40,8 @@ const (
 	guestSocket  = "/var/run/docker.sock"
 	maxBodyBytes = 256 << 20
 
-	// maxSocketPathBytes leaves room for the terminating NUL byte in the
-	// 104-byte sun_path field of macOS.
+	// maxSocketPathBytes permits a terminating NUL byte in the 104-byte
+	// sun_path field on macOS.
 	maxSocketPathBytes = 103
 
 	startupTimeout      = 10 * time.Second
@@ -51,8 +51,8 @@ const (
 var aliasPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
 
 // Bridge identifies the guest of one Docker provider alias and the Proxmox
-// API token of that guest. The OpenTofu variable TokenVariable stores the
-// token secret.
+// API token of that guest. TokenVariable identifies the OpenTofu variable
+// for the token secret.
 type Bridge struct {
 	Node           string `json:"node"`
 	NodeName       string `json:"node_name"`
@@ -109,7 +109,7 @@ func ValidateAlias(alias string) error {
 // Session is the set of running Docker socket proxies of one OpenTofu command.
 type Session struct {
 	directory     string
-	assignment    string
+	argument      string
 	cancelServe   context.CancelFunc
 	cancelCommand context.CancelCauseFunc
 	stopping      atomic.Bool
@@ -144,7 +144,7 @@ func Start(
 	if err != nil {
 		return nil, nil, err
 	}
-	assignment, err := hostsAssignment(sockets)
+	argument, err := hostsArgument(sockets)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -161,7 +161,7 @@ func Start(
 	serveContext, cancelServe := context.WithCancel(ctx)
 	commandContext, cancelCommand := context.WithCancelCause(ctx)
 	session := &Session{
-		directory: socketDirectory, assignment: assignment,
+		directory: socketDirectory, argument: argument,
 		cancelServe: cancelServe, cancelCommand: cancelCommand,
 		stopping: atomic.Bool{}, serving: sync.WaitGroup{}, mutex: sync.Mutex{},
 		failures: nil, stopOnce: sync.Once{}, stopErr: nil,
@@ -189,10 +189,10 @@ func Start(
 	return session, commandContext, nil
 }
 
-// Assignment returns the TF_VAR_docker_hosts assignment that maps each alias
-// to the unix:// address of its socket.
-func (s *Session) Assignment() string {
-	return s.assignment
+// Argument returns the -var=docker_hosts=<map> OpenTofu argument. The map
+// assigns each alias the unix:// address of its socket.
+func (s *Session) Argument() string {
+	return s.argument
 }
 
 // Stop cancels every proxy, waits for each one to return, removes the socket
@@ -280,7 +280,7 @@ func prepareProxies(socketDirectory string, bridges map[string]Bridge, environme
 	return proxies, sockets, nil
 }
 
-func hostsAssignment(sockets map[string]string) (string, error) {
+func hostsArgument(sockets map[string]string) (string, error) {
 	hosts := make(map[string]string, len(sockets))
 	for alias, socket := range sockets {
 		hosts[alias] = socketScheme + socket
@@ -290,7 +290,7 @@ func hostsAssignment(sockets map[string]string) (string, error) {
 		slog.Error("docker_bridge.assignment_failed", "err", err)
 		return "", fmt.Errorf("encode %s: %w", HostsVariable, err)
 	}
-	return HostsVariable + "=" + string(encoded), nil
+	return "-var=" + HostsVariable + "=" + string(encoded), nil
 }
 
 // waitForSocket dials the socket of proxy until a connection succeeds, the

@@ -654,11 +654,8 @@ func (r explicitRunner) run(
 		bridges = nil
 	}
 	var result tofurun.Result
-	err := runWithDockerBridges(ctx, bridges, r.directory, request.Environment, getOnly, func(bridgeContext context.Context, assignments []string) error {
-		request.Environment = slices.Concat(request.Environment, assignments)
-		if len(assignments) > 0 {
-			request.RequiredEnvironment = slices.Concat(request.RequiredEnvironment, []string{dockerbridge.HostsVariable})
-		}
+	err := runWithDockerBridges(ctx, bridges, r.directory, request.Environment, getOnly, func(bridgeContext context.Context, bridgeArguments func([]string) []string) error {
+		request.Args = bridgeArguments(args)
 		var runErr error
 		result, runErr = runExplicitStep(bridgeContext, step, request, scope)
 		return runErr

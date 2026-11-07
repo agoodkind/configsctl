@@ -21,29 +21,30 @@ import (
 
 const (
 	dockerBridgesOutput        = "docker_bridges"
-	dockerHostsVariable        = "docker_hosts"
 	dockerBridgeDirectoryGlob  = "configsctl-docker-*"
 	tofuImportCommand          = "import"
 	tofuVariableArgument       = "var"
-	dockerHostsArgumentPattern = dockerHostsVariable + "="
+	dockerHostsArgumentPattern = dockerbridge.HostsVariable + "="
+	argumentTerminator         = "--"
 )
 
-// runWithDockerBridges starts the Docker bridges in directory, runs run with
-// the bridge context and the TF_VAR_docker_hosts assignment, and stops the
-// bridges after run returns. Without bridges it runs run with ctx.
+// runWithDockerBridges starts the Docker bridges in directory and runs run
+// with the bridge context and a function that adds the docker_hosts argument
+// to OpenTofu arguments. It stops the bridges after run returns. Without
+// bridges, run receives ctx and a function that copies the arguments.
 func runWithDockerBridges(
 	ctx context.Context, bridges map[string]dockerbridge.Bridge, directory string, environment []string, getOnly bool,
-	run func(context.Context, []string) error,
+	run func(context.Context, func([]string) []string) error,
 ) error {
 	if len(bridges) == 0 {
-		return run(ctx, nil)
+		return run(ctx, slices.Clone[[]string])
 	}
 	session, bridgeContext, err := dockerbridge.Start(ctx, directory, bridges, environment, getOnly)
 	if err != nil {
 		slog.Error("tofu.docker_bridge.start_failed", "err", err)
 		return fmt.Errorf("start the Docker bridges: %w", err)
 	}
-	runErr := run(bridgeContext, []string{session.Assignment()})
+	runErr := run(bridgeContext, func(args []string) []string { return withDockerHostsArgument(args, session.Argument()) })
 	if stopErr := session.Stop(); stopErr != nil {
 		slog.Error("tofu.docker_bridge.stop_failed", "err", stopErr)
 		return errors.Join(runErr, fmt.Errorf("stop the Docker bridges: %w", stopErr))
@@ -55,10 +56,10 @@ func runWithDockerBridges(
 // sockets of a command that does not have a private run directory.
 func runInDockerBridgeDirectory(
 	ctx context.Context, bridges map[string]dockerbridge.Bridge, environment []string, getOnly bool,
-	run func(context.Context, []string) error,
+	run func(context.Context, func([]string) []string) error,
 ) error {
 	if len(bridges) == 0 {
-		return run(ctx, nil)
+		return run(ctx, slices.Clone[[]string])
 	}
 	directory, err := os.MkdirTemp("", dockerBridgeDirectoryGlob)
 	if err != nil {
@@ -72,8 +73,8 @@ func runInDockerBridgeDirectory(
 	return runWithDockerBridges(ctx, bridges, directory, environment, getOnly, run)
 }
 
-// dockerBridgeAccess reports whether an OpenTofu subcommand starts the Docker
-// bridges and whether those bridges accept only reads.
+// dockerBridgeAccess reports whether an OpenTofu subcommand starts Docker
+// bridges and whether those bridges allow only GET and HEAD requests.
 func dockerBridgeAccess(args []string) (bridged, getOnly bool) {
 	if tofuCommandHelp(args) {
 		return false, false
@@ -90,20 +91,21 @@ func dockerBridgeAccess(args []string) (bridged, getOnly bool) {
 	}
 }
 
-// requireDockerBridgeInputs refuses an operator docker_hosts value and a
-// missing token secret before the command starts OpenTofu.
+// requireDockerBridgeInputs rejects an operator docker_hosts value when bridges
+// exist. For commands that start bridges, it also requires each token secret.
 func requireDockerBridgeInputs(bridges map[string]dockerbridge.Bridge, args, environment []string) error {
 	if len(bridges) == 0 {
 		return nil
 	}
 	aliases := slices.Sorted(maps.Keys(bridges))
 	var err error
-	if _, present := assignedEnvironmentValue(environment, dockerbridge.HostsVariable); present {
+	environmentName := tofuVariablePrefix + dockerbridge.HostsVariable
+	if _, present := assignedEnvironmentValue(environment, environmentName); present {
 		err = fmt.Errorf("%s conflicts with the Docker bridges for %v; unset it because configsctl sets it for each command",
-			dockerbridge.HostsVariable, aliases)
+			environmentName, aliases)
 	} else if assignsDockerHosts(args) {
 		err = fmt.Errorf("-var %s conflicts with the Docker bridges for %v; remove it because configsctl sets it for each command",
-			dockerHostsVariable, aliases)
+			dockerbridge.HostsVariable, aliases)
 	} else if bridged, _ := dockerBridgeAccess(args); bridged {
 		err = requireDockerBridgeTokens(bridges, aliases, environment)
 	}
@@ -124,9 +126,27 @@ func requireDockerBridgeTokens(bridges map[string]dockerbridge.Bridge, aliases, 
 	return nil
 }
 
+// withDockerHostsArgument inserts the docker_hosts argument after the
+// subcommand options and before the first positional argument or --.
+func withDockerHostsArgument(args []string, argument string) []string {
+	subcommand := slices.IndexFunc(args, func(value string) bool { return !strings.HasPrefix(value, "-") })
+	position := len(args)
+	for index := subcommand + 1; subcommand >= 0 && index < len(args); index++ {
+		value := args[index]
+		if value == argumentTerminator || !strings.HasPrefix(value, "-") {
+			position = index
+			break
+		}
+		if tofuargs.ConsumesValue(value) {
+			index++
+		}
+	}
+	return slices.Insert(slices.Clone(args), position, argument)
+}
+
 func assignsDockerHosts(args []string) bool {
 	for index, argument := range args {
-		if argument == "--" {
+		if argument == argumentTerminator {
 			return false
 		}
 		name, value, inline := strings.Cut(strings.TrimLeft(argument, "-"), "=")
@@ -185,14 +205,14 @@ func requireDockerBridgeVariables(directory string, bridges map[string]dockerbri
 	if err != nil {
 		return err
 	}
-	if !ephemeral[dockerHostsVariable] {
+	if !ephemeral[dockerbridge.HostsVariable] {
 		return fmt.Errorf("workspace %s declares Docker bridges and must declare the ephemeral variable %s",
-			directory, dockerHostsVariable)
+			directory, dockerbridge.HostsVariable)
 	}
 	for _, alias := range slices.Sorted(maps.Keys(bridges)) {
 		token := bridges[alias].TokenVariable
-		if _, declared := ephemeral[token]; !declared {
-			return fmt.Errorf("workspace %s must declare the variable %s for the token of the Docker bridge %s",
+		if !ephemeral[token] {
+			return fmt.Errorf("workspace %s must declare the variable %s with ephemeral = true for the token of the Docker bridge %s",
 				directory, token, alias)
 		}
 	}

@@ -12,7 +12,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -393,8 +392,8 @@ func executeTofu(ctx context.Context, env cmdEnv, workspaceDir string, safeArgs,
 	if !bridged || tofuMutates(commandArgs) {
 		bridges = nil
 	}
-	return runInDockerBridgeDirectory(ctx, bridges, childEnv, getOnly, func(bridgeContext context.Context, assignments []string) error {
-		request.Environment = slices.Concat(childEnv, assignments)
+	return runInDockerBridgeDirectory(ctx, bridges, childEnv, getOnly, func(bridgeContext context.Context, bridgeArguments func([]string) []string) error {
+		request.Args = bridgeArguments(commandArgs)
 		return finishTofu(bridgeContext, request, workspaceDir, planPath, safeArgs, source)
 	})
 }
@@ -402,6 +401,7 @@ func executeTofu(ctx context.Context, env cmdEnv, workspaceDir string, safeArgs,
 func finishTofu(ctx context.Context, request tofurun.Request, workspaceDir, planPath string, safeArgs []string, source tofuPlanSource) error {
 	commandArgs := request.Args
 	result, err := tofurun.Run(ctx, request)
+
 	if errors.Is(err, tofurun.ErrIncomplete) {
 		return tofuFailure(ctx, err, result.LogPath)
 	}
