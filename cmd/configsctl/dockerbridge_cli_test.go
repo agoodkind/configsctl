@@ -129,7 +129,7 @@ func TestTofuDockerBridgeServesSavedPlanApply(t *testing.T) {
 	fixture, variableFile := newDecoyDockerBridgeFixture(t)
 	plan := fixture.mutate(t, "plan", "-input=false", variableFile, "-out=bridge.plan")
 	requireSuccess(t, plan)
-	apply := fixture.mutate(t, "apply", "-input=false", variableFile, "bridge.plan")
+	apply := fixture.mutate(t, "apply", "-input=false", "bridge.plan", variableFile)
 	requireSuccess(t, apply)
 	fixture.requireBridgeSocketUsed(t, plan, apply)
 }
