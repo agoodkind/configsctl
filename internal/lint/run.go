@@ -19,7 +19,7 @@ type Finding struct {
 	Root string
 }
 
-// String renders a finding as a stable line the baseline can key on.
+// String renders a finding as a stable line.
 func (f Finding) String() string {
 	return fmt.Sprintf("%s:%d: banned default or presence check: %s on %s",
 		f.File, f.Line, f.Kind, f.Root)
@@ -51,17 +51,18 @@ type pendingForm struct {
 	runtime []string
 }
 
-// Run lints the given files and returns every violation and every divergent
-// form, each sorted by file and line. A file path ending in .j2 is read as a
-// Jinja template; any other path is read as YAML. An unreadable or unparseable
-// file is skipped with a warning. Forms the Go engine cannot read are routed to
-// the jinja2 oracle; a routing failure is returned, since a routed form cannot
-// be silently passed.
+// Run returns sorted violations and divergent forms and fails when it cannot read or parse an input.
+// A file path ending in .j2 is read as a Jinja template; any other path is read as YAML.
+// Forms the Go engine cannot read are routed to the jinja2 oracle; a routing failure is
+// returned, since a routed form cannot be silently passed.
 func Run(paths []string) ([]Finding, []Divergence, error) {
 	var findings []Finding
 	var pending []pendingForm
 	for _, path := range paths {
-		fileFindings, filePending := analyzeFile(path)
+		fileFindings, filePending, err := analyzeFile(path)
+		if err != nil {
+			return nil, nil, err
+		}
 		findings = append(findings, fileFindings...)
 		pending = append(pending, filePending...)
 	}
@@ -113,13 +114,16 @@ func routePending(pending []pendingForm) ([]Finding, []Divergence, error) {
 	return findings, divergences, nil
 }
 
-func analyzeFile(path string) ([]Finding, []pendingForm) {
+func analyzeFile(path string) ([]Finding, []pendingForm, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
-		slog.Warn("skip unreadable file", "path", path, "err", err)
-		return nil, nil
+		slog.Error("read lint input failed", "path", path, "err", err)
+		return nil, nil, fmt.Errorf("read %s: %w", path, err)
 	}
-	exprs, runtime := extractFile(path, string(content))
+	exprs, runtime, err := extractFile(path, string(content))
+	if err != nil {
+		return nil, nil, err
+	}
 	runtimeNames := sortedSet(runtime)
 	var findings []Finding
 	var pending []pendingForm
@@ -147,25 +151,25 @@ func analyzeFile(path string) ([]Finding, []pendingForm) {
 			}
 		}
 	}
-	return findings, pending
+	return findings, pending, nil
 }
 
 // extractFile returns the expressions and runtime names for a file, choosing
 // the Jinja-template reader for .j2 and the YAML reader otherwise.
-func extractFile(path, content string) ([]templateExpr, map[string]struct{}) {
+func extractFile(path, content string) ([]templateExpr, map[string]struct{}, error) {
 	runtime := map[string]struct{}{}
 	collectLoopVars(content, runtime)
 	if strings.HasSuffix(path, ".j2") {
-		return spanExprs(content, 1), runtime
+		return spanExprs(content, 1), runtime, nil
 	}
 	var root yaml.Node
 	if err := yaml.Unmarshal([]byte(content), &root); err != nil {
-		slog.Warn("skip unparseable yaml", "path", path, "err", err)
-		return nil, runtime
+		slog.Error("parse lint input failed", "path", path, "err", err)
+		return nil, nil, fmt.Errorf("parse YAML %s: %w", path, err)
 	}
 	var exprs []templateExpr
 	walkYAML(&root, &exprs, runtime)
-	return exprs, runtime
+	return exprs, runtime, nil
 }
 
 // dedupePending collapses forms that share a file, line, and text, since one
@@ -184,8 +188,7 @@ func dedupePending(pending []pendingForm) []pendingForm {
 	return out
 }
 
-// dedupeFindings collapses findings that render to the same line, since the
-// baseline keys on that line and a duplicate carries no extra information.
+// dedupeFindings collapses findings that render to the same line.
 func dedupeFindings(findings []Finding) []Finding {
 	seen := make(map[string]struct{}, len(findings))
 	out := make([]Finding, 0, len(findings))

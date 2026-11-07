@@ -16,7 +16,6 @@ import (
 	"sync"
 	"syscall"
 
-	"goodkind.io/configsctl/internal/baseline"
 	"goodkind.io/configsctl/internal/hclsources"
 	"goodkind.io/configsctl/internal/lint"
 	"goodkind.io/configsctl/internal/redact"
@@ -66,7 +65,6 @@ type cmdEnv struct {
 // handlers dispatches a subcommand name to its implementation.
 var handlers = map[string]func(cmdEnv, []string) error{
 	"lint":           runLint,
-	"baseline":       runBaseline,
 	"keys":           runKeys,
 	"secret":         runSecret,
 	"set-secrets":    runSetSecrets,
@@ -140,34 +138,19 @@ func runLint(_ cmdEnv, paths []string) error {
 		}
 		return runNativeLint(ctx, loaded.Tofu)
 	}
-	result, err := lint.Gate(paths)
+	findings, divergences, err := lint.Run(paths)
 	if err != nil {
-		slog.Error("lint gate failed", "err", err)
-		return fmt.Errorf("lint gate failed: %w", err)
+		slog.Error("lint failed", "err", err)
+		return fmt.Errorf("lint failed: %w", err)
 	}
-	for _, line := range result.NewFindings {
-		fmt.Println(line)
+	for _, finding := range findings {
+		fmt.Println(finding)
 	}
-	for _, line := range result.Divergences {
-		fmt.Fprintln(os.Stderr, line)
+	for _, divergence := range divergences {
+		fmt.Fprintln(os.Stderr, divergence)
 	}
-	if result.BypassToken != "" {
-		fmt.Printf("*** lint non-blocking via BYPASS_LINT=%s\n", result.BypassToken)
-	}
-	if result.Blocked {
-		return fmt.Errorf("%d input-default violation(s)", len(result.NewFindings))
-	}
-	return nil
-}
-
-func runBaseline(_ cmdEnv, args []string) error {
-	value := modeFlag(args)
-	mode, err := baseline.ParseMode(value)
-	if err != nil {
-		return fmt.Errorf("invalid baseline mode %q", value)
-	}
-	if lint.WriteBaseline(lint.Discover("."), mode) {
-		fmt.Println("baseline updated")
+	if len(findings) > 0 {
+		return fmt.Errorf("%d input-default violation(s)", len(findings))
 	}
 	return nil
 }
@@ -522,20 +505,6 @@ func vaultPassPath() (string, error) {
 		return "", errors.New("resolve home directory failed")
 	}
 	return filepath.Join(home, ".config", "ansible", "vault.pass"), nil
-}
-
-// modeFlag reads the value of a --mode flag, accepting --mode=value and
-// --mode value forms. It returns empty when the flag is absent.
-func modeFlag(args []string) string {
-	for i, arg := range args {
-		if value, ok := strings.CutPrefix(arg, "--mode="); ok {
-			return value
-		}
-		if arg == "--mode" && i+1 < len(args) {
-			return args[i+1]
-		}
-	}
-	return ""
 }
 
 // shortSecretError marks a fail-closed validation failure. It names the key,
