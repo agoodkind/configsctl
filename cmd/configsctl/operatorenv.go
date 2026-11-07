@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"goodkind.io/configsctl/internal/dockerbridge"
 	"goodkind.io/configsctl/internal/redact"
 )
 
@@ -19,16 +20,36 @@ type operatorInputs struct {
 }
 
 func registerOperatorRedaction(env cmdEnv, settings tofuSettings, workspace string, args, environment []string) (cmdEnv, func(), error) {
-	if !tofuMutates(args) || strictExplicitSettings(settings, settings.LockTargets[tofuWorkspaceKey(workspace)]) {
+	patterns := dockerBridgeTokenPatterns(settings.dockerBridges, environment)
+	if tofuMutates(args) && !strictExplicitSettings(settings, settings.LockTargets[tofuWorkspaceKey(workspace)]) {
+		protected, err := protectedOperatorPatterns(settings, workspace, environment)
+		if err != nil {
+			return env, nil, err
+		}
+		patterns = append(patterns, protected...)
+	}
+	if len(patterns) == 0 {
 		return env, func() {}, nil
 	}
+	if key, valid := redact.Validate(patterns); !valid {
+		return env, nil, fmt.Errorf("protected operator input %s is too short for safe redaction", key)
+	}
+	restore, err := installRedaction(patterns)
+	if err != nil {
+		return env, nil, err
+	}
+	env.secrets = append(env.secrets, patterns...)
+	return env, restore, nil
+}
+
+func protectedOperatorPatterns(settings tofuSettings, workspace string, environment []string) ([]redact.Pattern, error) {
 	inputWorkspace := workspace
 	if settings.source != nil {
 		inputWorkspace = settings.source.path(workspace)
 	}
 	protection, err := tofuVariableProtection(inputWorkspace)
 	if err != nil {
-		return env, nil, err
+		return nil, err
 	}
 	var patterns []redact.Pattern
 	for _, name := range slices.Sorted(maps.Keys(protection)) {
@@ -41,15 +62,18 @@ func registerOperatorRedaction(env cmdEnv, settings tofuSettings, workspace stri
 			patterns = append(patterns, redact.Pattern{Label: key, Value: []byte(value)})
 		}
 	}
-	if key, valid := redact.Validate(patterns); !valid {
-		return env, nil, fmt.Errorf("protected operator input %s is too short for safe redaction", key)
+	return patterns, nil
+}
+
+func dockerBridgeTokenPatterns(bridges map[string]dockerbridge.Bridge, environment []string) []redact.Pattern {
+	var patterns []redact.Pattern
+	for _, alias := range slices.Sorted(maps.Keys(bridges)) {
+		key := tofuVariablePrefix + bridges[alias].TokenVariable
+		if value := environmentValue(environment, key); value != "" {
+			patterns = append(patterns, redact.Pattern{Label: key, Value: []byte(value)})
+		}
 	}
-	restore, err := installRedaction(patterns)
-	if err != nil {
-		return env, nil, err
-	}
-	env.secrets = append(env.secrets, patterns...)
-	return env, restore, nil
+	return patterns
 }
 
 func manualOperatorInputs(request tofuLockRequest, assignments []string) (operatorInputs, error) {
