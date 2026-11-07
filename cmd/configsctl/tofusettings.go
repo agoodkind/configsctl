@@ -46,10 +46,9 @@ type tofuSettings struct {
 	LockTargets  map[string]tofulock.Targets `yaml:"lock_targets"`
 	// GuestModule specifies the module address indexed by service_name for guest plans.
 	// An empty GuestModule disables the deploy plan gate.
-	GuestModule  string                            `yaml:"guest_module"`
-	GuestModules map[string]string                 `yaml:"guest_modules"`
-	Credentials  map[string]tofuCredentialSettings `yaml:"credentials"`
-	// dockerBridges maps each Docker provider alias of the selected native workspace to its guest.
+	GuestModule   string                            `yaml:"guest_module"`
+	GuestModules  map[string]string                 `yaml:"guest_modules"`
+	Credentials   map[string]tofuCredentialSettings `yaml:"credentials"`
 	dockerBridges map[string]dockerbridge.Bridge
 }
 
