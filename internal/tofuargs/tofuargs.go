@@ -21,8 +21,8 @@ const (
 	Destroy Command = "destroy"
 )
 
-// Boolean flags from tofu apply -help and tofu plan -help may precede a saved
-// plan without consuming its path.
+// booleanFlags lists flags that ConsumesValue treats as boolean flags.
+// These flags do not consume the next argument as a value.
 var booleanFlags = map[string]bool{
 	"auto-approve":           true,
 	"compact-warnings":       true,
@@ -31,6 +31,7 @@ var booleanFlags = map[string]bool{
 	"consolidate-warnings":   true,
 	"destroy":                true,
 	"detailed-exitcode":      true,
+	"ignore-remote-version":  true,
 	"input":                  true,
 	"json":                   true,
 	"lock":                   true,

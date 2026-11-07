@@ -236,6 +236,18 @@ func TestTofuDockerBridgeKeepsFlagsAfterDescriptionOverride(t *testing.T) {
 // TestTofuDockerBridgeOverridesLaterImportVariables places the decoy
 // -var-file after the import address and ID. The docker_hosts validation rule
 // fails when the decoy value wins.
+func TestTofuDockerBridgeKeepsImportPositionalsAfterBooleanOption(t *testing.T) {
+	fixture := newDockerBridgeFixture(t, dockerBridgeFixtureFile(t, "configuration.tf"), dockerBridgeFixtureFile(t, "root.tf"))
+	address := `module.base["guest_alpha"].terraform_data.item`
+	result := fixture.mutate(t, "import", "-input=false", "-ignore-remote-version", address, "00000000-0000-4000-8000-000000000003")
+	requireSuccess(t, result)
+	state := fixture.mutate(t, "state", "list")
+	requireSuccess(t, state)
+	if !strings.Contains(state.stdout, address) {
+		t.Fatalf("the import did not add %s to the state: %s", address, state.stdout)
+	}
+}
+
 func TestTofuDockerBridgeOverridesLaterImportVariables(t *testing.T) {
 	fixture, variableFile := newDecoyDockerBridgeFixture(t)
 	address := `module.base["guest_alpha"].terraform_data.item`
