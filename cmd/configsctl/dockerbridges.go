@@ -48,7 +48,7 @@ func runWithDockerBridges(
 	if len(bridges) == 0 {
 		return run(ctx, slices.Clone[[]string])
 	}
-	session, bridgeContext, err := dockerbridge.Start(ctx, directory, bridges, environment, writable)
+	session, bridgeContext, err := dockerbridge.Start(ctx, directory, bridges, dockerBridgeTokens(bridges, environment), writable)
 	if err != nil {
 		slog.Error("tofu.docker_bridge.start_failed", "err", err)
 		return fmt.Errorf("start the Docker bridges: %w", err)
@@ -140,6 +140,14 @@ func requireDockerBridgeInputs(bridges map[string]dockerbridge.Bridge, args, env
 	return err
 }
 
+func dockerBridgeTokens(bridges map[string]dockerbridge.Bridge, environment []string) map[string]string {
+	tokens := make(map[string]string, len(bridges))
+	for alias, bridge := range bridges {
+		tokens[alias] = environmentValue(environment, tofuVariablePrefix+bridge.TokenVariable)
+	}
+	return tokens
+}
+
 func requireDockerBridgeTokens(bridges map[string]dockerbridge.Bridge, aliases, environment []string) error {
 	for _, alias := range aliases {
 		name := tofuVariablePrefix + bridges[alias].TokenVariable
@@ -151,7 +159,6 @@ func requireDockerBridgeTokens(bridges map[string]dockerbridge.Bridge, aliases, 
 	return nil
 }
 
-// optionName returns the name of an option argument before any value.
 func optionName(argument string) (string, bool) {
 	if !strings.HasPrefix(argument, "-") {
 		return "", false
@@ -160,7 +167,6 @@ func optionName(argument string) (string, bool) {
 	return name, true
 }
 
-// redirectionOption returns the first chdir or config option before --.
 func redirectionOption(args []string) string {
 	for _, argument := range args {
 		if argument == argumentTerminator {

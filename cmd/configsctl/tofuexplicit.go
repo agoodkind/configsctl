@@ -406,10 +406,9 @@ func lockHostNames(hosts []hostlock.Host) []string {
 }
 
 type explicitRunner struct {
-	base     tofurun.Request
-	planPath string
-	jsonPath string
-	// directory is the private run directory that stores the Docker bridge sockets.
+	base          tofurun.Request
+	planPath      string
+	jsonPath      string
 	directory     string
 	dockerBridges map[string]dockerbridge.Bridge
 	guestHosts    map[string]string

@@ -30,7 +30,6 @@ import (
 const HostsVariable = "docker_hosts"
 
 const (
-	variablePrefix      = "TF_VAR_"
 	socketDirectoryName = "docker"
 	socketSuffix        = ".sock"
 	socketScheme        = "unix://"
@@ -128,20 +127,20 @@ type prepared struct {
 }
 
 // Start creates <directory>/docker, starts one proxy on a private socket for
-// each alias, and returns after every socket accepts a connection. It reads
-// each token secret from TF_VAR_<TokenVariable> in environment. The proxy
-// accepts every method when writable maps its alias to true. Every other
-// proxy accepts only GET and HEAD requests. The context that Start returns
-// ends when ctx ends or when any proxy stops before Stop. The caller calls
-// Stop after a nil error.
+// each alias, and returns after every socket accepts a connection. For each
+// alias, Start builds a Proxmox API token from TokenPrincipal and the secret
+// that tokens maps to the alias. The proxy accepts every method when writable
+// maps its alias to true. Every other proxy accepts only GET and HEAD requests.
+// The context that Start returns ends when ctx ends or when any proxy stops
+// before Stop. The caller calls Stop after a nil error.
 func Start(
-	ctx context.Context, directory string, bridges map[string]Bridge, environment []string, writable map[string]bool,
+	ctx context.Context, directory string, bridges map[string]Bridge, tokens map[string]string, writable map[string]bool,
 ) (*Session, context.Context, error) {
 	if len(bridges) == 0 {
 		return nil, nil, errors.New("start Docker bridges: the command does not declare any alias")
 	}
 	socketDirectory := filepath.Join(directory, socketDirectoryName)
-	proxies, sockets, err := prepareProxies(socketDirectory, bridges, environment)
+	proxies, sockets, err := prepareProxies(socketDirectory, bridges, tokens)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -245,7 +244,7 @@ func (s *Session) finish(alias string, err error) {
 	s.cancelCommand(err)
 }
 
-func prepareProxies(socketDirectory string, bridges map[string]Bridge, environment []string) ([]prepared, map[string]string, error) {
+func prepareProxies(socketDirectory string, bridges map[string]Bridge, tokens map[string]string) ([]prepared, map[string]string, error) {
 	aliases := slices.Sorted(maps.Keys(bridges))
 	proxies := make([]prepared, 0, len(aliases))
 	sockets := make(map[string]string, len(aliases))
@@ -261,10 +260,9 @@ func prepareProxies(socketDirectory string, bridges map[string]Bridge, environme
 		if len(socket) > maxSocketPathBytes {
 			return nil, nil, fmt.Errorf("the Docker bridge %s: the socket path %s exceeds %d bytes", alias, socket, maxSocketPathBytes)
 		}
-		tokenName := variablePrefix + bridge.TokenVariable
-		secret := environmentValue(environment, tokenName)
+		secret := tokens[alias]
 		if secret == "" {
-			return nil, nil, fmt.Errorf("the Docker bridge %s requires the token secret %s", alias, tokenName)
+			return nil, nil, fmt.Errorf("the Docker bridge %s requires the token secret of %s", alias, bridge.TokenVariable)
 		}
 		client, err := transport.NewClient(map[string]transport.NodeConfig{
 			bridge.Node: {
@@ -321,17 +319,6 @@ func waitForSocket(ctx context.Context, proxy prepared, exited <-chan struct{}) 
 		case <-ticker.C:
 		}
 	}
-}
-
-func environmentValue(environment []string, name string) string {
-	value := ""
-	for _, assignment := range environment {
-		key, candidate, _ := strings.Cut(assignment, "=")
-		if key == name {
-			value = candidate
-		}
-	}
-	return value
 }
 
 func removeDirectory(path string) {
