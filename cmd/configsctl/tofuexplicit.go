@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"goodkind.io/configsctl/hostlock"
+	"goodkind.io/configsctl/internal/dockerbridge"
 	"goodkind.io/configsctl/internal/redact"
 	"goodkind.io/configsctl/internal/tofuargs"
 	"goodkind.io/configsctl/internal/tofulock"
@@ -408,6 +409,9 @@ type explicitRunner struct {
 	base     tofurun.Request
 	planPath string
 	jsonPath string
+	// directory is the private run directory that stores the Docker bridge sockets.
+	directory     string
+	dockerBridges map[string]dockerbridge.Bridge
 }
 
 // newExplicitRunner creates the private directory and the request that every
@@ -504,8 +508,9 @@ func newExplicitRunner(settings tofuSettings, request tofuLockRequest, passwordF
 			RequiredEnvironment: required, SecretEnvironment: redacted, SecretFiles: nil,
 			OutputMode: tofurun.RedactedProgress, JSONPath: "", RequiredHosts: nil,
 		},
-		planPath: filepath.Join(temporary, mutationPlanName),
-		jsonPath: filepath.Join(temporary, explicitPlanJSONName),
+		planPath:  filepath.Join(temporary, mutationPlanName),
+		jsonPath:  filepath.Join(temporary, explicitPlanJSONName),
+		directory: directory, dockerBridges: settings.dockerBridges,
 	}
 	return runner, cleanup, nil
 }
@@ -643,6 +648,25 @@ func (r explicitRunner) run(
 	request.OutputMode = mode
 	request.JSONPath = jsonPath
 	request.RequiredHosts = requiredHosts
+	bridges := r.dockerBridges
+	bridged, getOnly := dockerBridgeAccess(args)
+	if !bridged {
+		bridges = nil
+	}
+	var result tofurun.Result
+	err := runWithDockerBridges(ctx, bridges, r.directory, request.Environment, getOnly, func(bridgeContext context.Context, assignments []string) error {
+		request.Environment = slices.Concat(request.Environment, assignments)
+		if len(assignments) > 0 {
+			request.RequiredEnvironment = slices.Concat(request.RequiredEnvironment, []string{dockerbridge.HostsVariable})
+		}
+		var runErr error
+		result, runErr = runExplicitStep(bridgeContext, step, request, scope)
+		return runErr
+	})
+	return result, err
+}
+
+func runExplicitStep(ctx context.Context, step string, request tofurun.Request, scope *hostlock.Scope) (tofurun.Result, error) {
 	result, err := tofurun.Run(ctx, request, scope)
 	if errors.Is(err, tofurun.ErrIncomplete) {
 		return result, tofuFailure(ctx, err, result.LogPath)

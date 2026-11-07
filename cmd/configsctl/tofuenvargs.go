@@ -57,6 +57,9 @@ func prepareTofuInvocation(settings tofuSettings, workspace, passwordFile string
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := requireDockerBridgeInputs(settings.dockerBridges, safeArgs, childEnv); err != nil {
+		return nil, nil, err
+	}
 	return safeArgs, childEnv, nil
 }
 

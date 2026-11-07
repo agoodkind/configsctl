@@ -12,10 +12,12 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
 
+	"goodkind.io/configsctl/internal/dockerbridge"
 	"goodkind.io/configsctl/internal/hclsources"
 	"goodkind.io/configsctl/internal/lint"
 	"goodkind.io/configsctl/internal/redact"
@@ -60,6 +62,8 @@ func main() {
 // the stdout and stderr redactors installed for the process.
 type cmdEnv struct {
 	secrets []redact.Pattern
+	// dockerBridges maps each Docker provider alias of the selected workspace to its guest.
+	dockerBridges map[string]dockerbridge.Bridge
 }
 
 // handlers dispatches a subcommand name to its implementation.
@@ -296,7 +300,7 @@ func runTofuWithSource(ctx context.Context, env cmdEnv, args []string) error {
 	if err != nil {
 		return err
 	}
-	env, restoreOperator, err := registerOperatorRedaction(env, loaded.Tofu, workspaceDir, safeArgs, childEnv)
+	env, restoreOperator, err := registerOperatorRedaction(cmdEnv{secrets: env.secrets, dockerBridges: loaded.Tofu.dockerBridges}, loaded.Tofu, workspaceDir, safeArgs, childEnv)
 	if err != nil {
 		return err
 	}
@@ -384,6 +388,19 @@ func executeTofu(ctx context.Context, env cmdEnv, workspaceDir string, safeArgs,
 	request := tofurun.Request{
 		Root: sourceExecutionPath(ctx, workspaceDir), Args: commandArgs, Environment: childEnv, DisplayArgs: safeArgs, Patterns: env.secrets,
 	}
+	bridges := env.dockerBridges
+	bridged, getOnly := dockerBridgeAccess(commandArgs)
+	if !bridged || tofuMutates(commandArgs) {
+		bridges = nil
+	}
+	return runInDockerBridgeDirectory(ctx, bridges, childEnv, getOnly, func(bridgeContext context.Context, assignments []string) error {
+		request.Environment = slices.Concat(childEnv, assignments)
+		return finishTofu(bridgeContext, request, workspaceDir, planPath, safeArgs, source)
+	})
+}
+
+func finishTofu(ctx context.Context, request tofurun.Request, workspaceDir, planPath string, safeArgs []string, source tofuPlanSource) error {
+	commandArgs := request.Args
 	result, err := tofurun.Run(ctx, request)
 	if errors.Is(err, tofurun.ErrIncomplete) {
 		return tofuFailure(ctx, err, result.LogPath)

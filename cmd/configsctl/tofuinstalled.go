@@ -49,7 +49,7 @@ func installedSourceFrom(ctx context.Context) *installedTofuSource {
 
 func readInstalledTofuSource(ctx context.Context, settings installedsource.Settings) ([]byte, error) {
 	target := transport.HostArtifactTarget(settings.Workspace)
-	// #nosec G204 -- HostArtifactTarget returns a fixed-length hexadecimal digest.
+	// #nosec G204 G702 -- HostArtifactTarget returns a fixed-length hexadecimal digest.
 	command := exec.CommandContext(ctx, "/usr/bin/pvesh", "get", "/nodes/localhost/host-artifacts/"+target, "--output-format", "json")
 	var output bytes.Buffer
 	command.Stdout = &output

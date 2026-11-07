@@ -11,6 +11,7 @@ import (
 	"slices"
 
 	"go.yaml.in/yaml/v3"
+	"goodkind.io/configsctl/internal/dockerbridge"
 	"goodkind.io/configsctl/internal/installedsource"
 	"goodkind.io/configsctl/internal/tofulock"
 )
@@ -48,6 +49,8 @@ type tofuSettings struct {
 	GuestModule  string                            `yaml:"guest_module"`
 	GuestModules map[string]string                 `yaml:"guest_modules"`
 	Credentials  map[string]tofuCredentialSettings `yaml:"credentials"`
+	// dockerBridges maps each Docker provider alias of the selected native workspace to its guest.
+	dockerBridges map[string]dockerbridge.Bridge
 }
 
 func (t tofuSettings) guestWorkspaceDir() string {

@@ -9,9 +9,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/hashicorp/hcl/v2"
-	"github.com/zclconf/go-cty/cty"
-
 	"goodkind.io/configsctl/internal/redact"
 )
 
@@ -113,27 +110,5 @@ func assignedEnvironmentValue(environment []string, name string) (string, bool) 
 }
 
 func tofuVariableProtection(directory string) (map[string]bool, error) {
-	blocks, err := tofuModuleBlocks(directory, tofuVariableSchema)
-	if err != nil {
-		return nil, err
-	}
-	schema := &hcl.BodySchema{Attributes: []hcl.AttributeSchema{{Name: "sensitive", Required: false}, {Name: "ephemeral", Required: false}}}
-	result := make(map[string]bool, len(blocks))
-	for _, block := range blocks {
-		content, _, diagnostics := block.Body.PartialContent(schema)
-		if diagnostics.HasErrors() {
-			slog.Error("tofu.operator.variable_failed", "variable", block.Labels[0], "err", diagnostics.Error())
-			return nil, fmt.Errorf("read variable protection flags: %w", diagnostics)
-		}
-		protected := false
-		for _, attribute := range content.Attributes {
-			value, diagnostics := attribute.Expr.Value(nil)
-			if diagnostics.HasErrors() || value.IsNull() || !value.Type().Equals(cty.Bool) {
-				return nil, fmt.Errorf("variable %s requires literal boolean protection flags", block.Labels[0])
-			}
-			protected = protected || value.RawEquals(cty.True)
-		}
-		result[block.Labels[0]] = protected
-	}
-	return result, nil
+	return tofuVariableFlags(directory, []string{"sensitive", "ephemeral"})
 }
