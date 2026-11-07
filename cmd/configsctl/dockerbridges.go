@@ -183,10 +183,11 @@ func withDockerHostsArgument(args []string, argument string) []string {
 	return slices.Insert(slices.Clone(args), position, argument)
 }
 
-func assignsDockerHosts(args []string) bool {
+func variableAssignments(args []string) []string {
+	var assignments []string
 	for index, argument := range args {
 		if argument == argumentTerminator {
-			return false
+			break
 		}
 		name, option := optionName(argument)
 		if !option || name != tofuVariableArgument {
@@ -196,11 +197,15 @@ func assignsDockerHosts(args []string) bool {
 		if !inline && index+1 < len(args) {
 			value = args[index+1]
 		}
-		if strings.HasPrefix(value, dockerHostsArgumentPattern) {
-			return true
-		}
+		assignments = append(assignments, value)
 	}
-	return false
+	return assignments
+}
+
+func assignsDockerHosts(args []string) bool {
+	return slices.ContainsFunc(variableAssignments(args), func(assignment string) bool {
+		return strings.HasPrefix(assignment, dockerHostsArgumentPattern)
+	})
 }
 
 func validateDockerBridges(selector string, bridges map[string]dockerbridge.Bridge, targets tofulock.Targets) error {

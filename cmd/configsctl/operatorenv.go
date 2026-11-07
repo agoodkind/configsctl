@@ -20,7 +20,7 @@ type operatorInputs struct {
 }
 
 func registerOperatorRedaction(env cmdEnv, settings tofuSettings, workspace string, args, environment []string) (cmdEnv, func(), error) {
-	patterns := dockerBridgeTokenPatterns(settings.dockerBridges, environment)
+	patterns := dockerBridgeTokenPatterns(settings.dockerBridges, args, environment)
 	if tofuMutates(args) && !strictExplicitSettings(settings, settings.LockTargets[tofuWorkspaceKey(workspace)]) {
 		protected, err := protectedOperatorPatterns(settings, workspace, environment)
 		if err != nil {
@@ -65,12 +65,19 @@ func protectedOperatorPatterns(settings tofuSettings, workspace string, environm
 	return patterns, nil
 }
 
-func dockerBridgeTokenPatterns(bridges map[string]dockerbridge.Bridge, environment []string) []redact.Pattern {
+func dockerBridgeTokenPatterns(bridges map[string]dockerbridge.Bridge, args, environment []string) []redact.Pattern {
 	var patterns []redact.Pattern
+	assignments := variableAssignments(args)
 	for _, alias := range slices.Sorted(maps.Keys(bridges)) {
-		key := tofuVariablePrefix + bridges[alias].TokenVariable
+		token := bridges[alias].TokenVariable
+		key := tofuVariablePrefix + token
 		if value := environmentValue(environment, key); value != "" {
 			patterns = append(patterns, redact.Pattern{Label: key, Value: []byte(value)})
+		}
+		for _, assignment := range assignments {
+			if value, matched := strings.CutPrefix(assignment, token+"="); matched && value != "" {
+				patterns = append(patterns, redact.Pattern{Label: key, Value: []byte(value)})
+			}
 		}
 	}
 	return patterns
