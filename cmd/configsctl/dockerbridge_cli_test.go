@@ -298,30 +298,37 @@ func TestTofuNativeOutputsRequireExactNames(t *testing.T) {
 	})
 }
 
-func TestTofuDockerBridgeRedactsOperatorToken(t *testing.T) {
+func syntheticOperatorToken(t *testing.T, prefix string) string {
+	t.Helper()
 	random := make([]byte, operatorTokenBytes)
 	if _, err := rand.Read(random); err != nil {
 		t.Fatal(err)
 	}
-	secret := "synthetic-operator-token-" + hex.EncodeToString(random)
+	return prefix + hex.EncodeToString(random)
+}
+
+func TestTofuDockerBridgeRedactsOperatorToken(t *testing.T) {
+	environmentToken := syntheticOperatorToken(t, "synthetic-environment-token-")
+	argumentToken := syntheticOperatorToken(t, "synthetic-argument-token-")
 	configuration := strings.Replace(dockerBridgeFixtureFile(t, "configuration.tf"), dockerBridgeToken, `token_variable  = "vault_operator"`, 1)
 	workspace := strings.Replace(dockerBridgeFixtureFile(t, "root.tf"), `variable "vault_alpha"`, `variable "vault_operator"`, 1)
 	address := `module.base["guest_alpha"].terraform_data.item`
 	commands := map[string][]string{
-		"plan":   {"plan", "-input=false", "-var=vault_operator=" + secret},
-		"import": {"import", "-input=false", "-var=vault_operator=" + secret, address, "00000000-0000-4000-8000-000000000002"},
+		"plan":   {"plan", "-input=false", "-var=vault_operator=" + argumentToken},
+		"import": {"import", "-input=false", address, "00000000-0000-4000-8000-000000000002", "-var", "vault_operator=" + argumentToken},
 	}
 	for name, args := range commands {
 		t.Run(name, func(t *testing.T) {
 			fixture := newDockerBridgeFixture(t, configuration, workspace)
-			fixture.extraEnv = append(fixture.extraEnv, "TF_VAR_vault_operator="+secret)
+			fixture.extraEnv = append(fixture.extraEnv, "TF_VAR_vault_operator="+environmentToken)
 			result := fixture.mutate(t, args...)
 			requireSuccess(t, result)
 			if !strings.Contains(result.stderr, dockerBridgeStarted) {
 				t.Fatalf("the %s did not start the Docker bridge: %s", name, result.stderr)
 			}
-			if strings.Contains(result.stdout+result.stderr, secret) {
-				t.Fatalf("the %s output disclosed the operator Docker bridge token", name)
+			output := result.stdout + result.stderr
+			if strings.Contains(output, environmentToken) || strings.Contains(output, argumentToken) {
+				t.Fatalf("the %s output disclosed an operator Docker bridge token", name)
 			}
 		})
 	}
