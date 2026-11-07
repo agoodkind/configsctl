@@ -53,7 +53,7 @@ func runWithDockerBridges(
 		slog.Error("tofu.docker_bridge.start_failed", "err", err)
 		return fmt.Errorf("start the Docker bridges: %w", err)
 	}
-	runErr := run(bridgeContext, func(args []string) []string { return withDockerHostsArgument(args, session.Argument()) })
+	runErr := run(bridgeContext, func(args []string) []string { return canonicalTofuArguments(args, session.Argument()) })
 	if stopErr := session.Stop(); stopErr != nil {
 		slog.Error("tofu.docker_bridge.stop_failed", "err", stopErr)
 		return errors.Join(runErr, fmt.Errorf("stop the Docker bridges: %w", stopErr))
@@ -173,14 +173,29 @@ func redirectionOption(args []string) string {
 	return ""
 }
 
-// withDockerHostsArgument inserts the docker_hosts argument before the first
-// -- or at the end of the arguments.
-func withDockerHostsArgument(args []string, argument string) []string {
-	position := slices.Index(args, argumentTerminator)
-	if position < 0 {
-		position = len(args)
+func canonicalTofuArguments(args []string, generated ...string) []string {
+	subcommand := slices.IndexFunc(args, func(value string) bool { return !strings.HasPrefix(value, "-") })
+	if subcommand < 0 {
+		return slices.Concat(args, generated)
 	}
-	return slices.Insert(slices.Clone(args), position, argument)
+	var options, positionals, terminated []string
+	for index := subcommand + 1; index < len(args); index++ {
+		argument := args[index]
+		if argument == argumentTerminator {
+			terminated = args[index:]
+			break
+		}
+		if !strings.HasPrefix(argument, "-") {
+			positionals = append(positionals, argument)
+			continue
+		}
+		options = append(options, argument)
+		if tofuargs.ConsumesValue(argument) && index+1 < len(args) {
+			index++
+			options = append(options, args[index])
+		}
+	}
+	return slices.Concat(args[:subcommand+1], options, generated, positionals, terminated)
 }
 
 func variableAssignments(args []string) []string {
