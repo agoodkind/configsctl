@@ -9,8 +9,7 @@ func NowUTC() time.Time {
 	return time.Now().UTC()
 }
 
-// Stamp returns the current UTC time formatted as an RFC3339 timestamp, the form
-// the baseline file records.
+// Stamp returns the current UTC time formatted as an RFC3339 timestamp.
 func Stamp() string {
 	return NowUTC().Format(time.RFC3339)
 }
