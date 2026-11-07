@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -21,7 +20,6 @@ import (
 )
 
 const (
-	dockerBridgesOutput        = "docker_bridges"
 	dockerBridgeDirectoryGlob  = "configsctl-docker-*"
 	tofuImportCommand          = "import"
 	tofuVariableArgument       = "var"
@@ -205,36 +203,22 @@ func assignsDockerHosts(args []string) bool {
 	return false
 }
 
-// decodeDockerBridges reads the docker_bridges projection output. It returns
-// nil when the output is absent, null, or empty.
-func decodeDockerBridges(selector string, raw json.RawMessage, targets tofulock.Targets) (map[string]dockerbridge.Bridge, error) {
-	if len(raw) == 0 || string(raw) == "null" {
-		return nil, nil
-	}
-	decoder := json.NewDecoder(strings.NewReader(string(raw)))
-	decoder.DisallowUnknownFields()
-	var bridges map[string]dockerbridge.Bridge
-	if err := decoder.Decode(&bridges); err != nil {
-		slog.Error("tofu.configuration.docker_bridges_invalid", "workspace", selector, "err", err)
-		return nil, fmt.Errorf("decode the docker_bridges output for %s: %w", selector, err)
-	}
-	if len(bridges) == 0 {
-		return nil, nil
-	}
+func validateDockerBridges(selector string, bridges map[string]dockerbridge.Bridge, targets tofulock.Targets) error {
 	for _, alias := range slices.Sorted(maps.Keys(bridges)) {
 		bridge := bridges[alias]
 		if err := dockerbridge.ValidateAlias(alias); err != nil {
-			return nil, fmt.Errorf("native configuration for %s: %w", selector, err)
+			return fmt.Errorf("native configuration for %s: %w", selector, err)
 		}
 		if err := bridge.Validate(); err != nil {
-			return nil, fmt.Errorf("native configuration for %s: docker_bridges.%s: %w", selector, alias, err)
+			slog.Error("tofu.configuration.docker_bridge_invalid", "workspace", selector, "alias", alias, "err", err)
+			return fmt.Errorf("native configuration for %s: docker_bridges.%s: %w", selector, alias, err)
 		}
 		if _, owned := targets.GuestHosts[bridge.GuestKey()]; !owned {
-			return nil, fmt.Errorf("native configuration for %s: docker_bridges.%s uses guest %s, which guest_hosts does not declare",
+			return fmt.Errorf("native configuration for %s: docker_bridges.%s uses guest %s, which guest_hosts does not declare",
 				selector, alias, bridge.GuestKey())
 		}
 	}
-	return bridges, nil
+	return nil
 }
 
 // requireDockerBridgeVariables requires the ephemeral docker_hosts variable

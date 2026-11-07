@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -18,10 +19,29 @@ import (
 
 type nativeConfigurationPlan struct {
 	PlannedValues struct {
-		Outputs map[string]struct {
-			Value json.RawMessage `json:"value"`
+		Outputs struct {
+			LockTargets *struct {
+				Value tofulock.Targets `json:"value"`
+			} `json:"lock_targets"`
+			DockerBridges *struct {
+				Value dockerBridgeOutput `json:"value"`
+			} `json:"docker_bridges"`
 		} `json:"outputs"`
 	} `json:"planned_values"`
+}
+
+type dockerBridgeOutput map[string]dockerbridge.Bridge
+
+func (output *dockerBridgeOutput) UnmarshalJSON(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var bridges map[string]dockerbridge.Bridge
+	if err := decoder.Decode(&bridges); err != nil {
+		slog.Error("tofu.configuration.docker_bridges_invalid", "err", err)
+		return fmt.Errorf("decode the docker_bridges output: %w", err)
+	}
+	*output = bridges
+	return nil
 }
 
 // nativeProjection contains the lock targets and Docker bridges of one workspace.
@@ -137,14 +157,7 @@ func evaluateNativeProjectionAt(ctx context.Context, tofu tofuSettings, reposito
 	if err != nil {
 		return projection, err
 	}
-	encoded, found := outputs["lock_targets"]
-	if !found {
-		return projection, fmt.Errorf("native configuration for %s must export lock_targets", selector)
-	}
-	var targets tofulock.Targets
-	if err := json.Unmarshal(encoded, &targets); err != nil {
-		return projection, fmt.Errorf("decode the native lock targets for %s: %w", selector, err)
-	}
+	targets := outputs.targets
 	if err := targets.Validate(); err != nil {
 		slog.Error("tofu.configuration.targets_invalid", "workspace", selector, "err", err)
 		return projection, fmt.Errorf("validate native lock targets for %s: %w", selector, err)
@@ -153,8 +166,8 @@ func evaluateNativeProjectionAt(ctx context.Context, tofu tofuSettings, reposito
 		return projection, fmt.Errorf("native configuration for %s must export lock_endpoints", selector)
 	}
 	projection.targets = targets
-	bridges, err := decodeDockerBridges(selector, outputs[dockerBridgesOutput], targets)
-	if err != nil {
+	bridges := outputs.dockerBridges
+	if err := validateDockerBridges(selector, bridges, targets); err != nil {
 		return projection, err
 	}
 	variableDirectory := workspaceDir
@@ -168,31 +181,31 @@ func evaluateNativeProjectionAt(ctx context.Context, tofu tofuSettings, reposito
 	return projection, nil
 }
 
-// readNativeOutputs evaluates the configuration root for the workspace and
-// returns each planned output value with the workspace selector.
-func readNativeOutputs(ctx context.Context, tofu tofuSettings, repository, workspaceDir string) (map[string]json.RawMessage, string, error) {
+// readNativeOutputs decodes lock targets and Docker bridges from the projection.
+func readNativeOutputs(ctx context.Context, tofu tofuSettings, repository, workspaceDir string) (nativeProjection, string, error) {
+	var outputs nativeProjection
 	if tofu.ConfigurationRoot == "" {
-		return nil, "", fmt.Errorf("tofu.configuration_root is required for native configuration")
+		return outputs, "", fmt.Errorf("tofu.configuration_root is required for native configuration")
 	}
 	if err := validateWorkspaceSelector(tofu.ConfigurationRoot); err != nil {
-		return nil, "", err
+		return outputs, "", err
 	}
 	root, err := repositoryDirectory(sourceExecutionPath(ctx, filepath.Join(repository, tofu.ConfigurationRoot)))
 	if err != nil {
-		return nil, "", err
+		return outputs, "", err
 	}
 	selector, err := nativeWorkspaceSelector(tofu, workspaceDir)
 	if err != nil {
-		return nil, "", err
+		return outputs, "", err
 	}
 	binary, err := tofuBinary()
 	if err != nil {
-		return nil, "", err
+		return outputs, "", err
 	}
 	directory, err := os.MkdirTemp("", "configsctl-configuration-*")
 	if err != nil {
 		slog.Error("tofu.configuration.directory_failed", "err", err)
-		return nil, "", fmt.Errorf("create the native configuration directory: %w", err)
+		return outputs, "", fmt.Errorf("create the native configuration directory: %w", err)
 	}
 	defer removePrivateDirectory(directory)
 	home := filepath.Join(directory, "home")
@@ -200,7 +213,7 @@ func readNativeOutputs(ctx context.Context, tofu tofuSettings, repository, works
 	data := filepath.Join(directory, "data")
 	for _, path := range []string{home, temporary, data} {
 		if err := makePrivateDirectory(path); err != nil {
-			return nil, "", err
+			return outputs, "", err
 		}
 	}
 	request := tofurun.Request{
@@ -216,16 +229,16 @@ func readNativeOutputs(ctx context.Context, tofu tofuSettings, repository, works
 	} {
 		if args[0] == "plan" {
 			if err := checkNativeResolvedModules(ctx, tofu, binary, data, selector); err != nil {
-				return nil, "", err
+				return outputs, "", err
 			}
 		}
 		request.Args = tofuargs.WithWorkspaceSelector(args, selector)
 		result, err := tofurun.Run(ctx, request, nil)
 		if err != nil {
-			return nil, "", fmt.Errorf("evaluate native configuration for %s: %w", selector, err)
+			return outputs, "", fmt.Errorf("evaluate native configuration for %s: %w", selector, err)
 		}
 		if result.ExitCode != 0 && (args[0] != "plan" || result.ExitCode != tofuPendingExitCode) {
-			return nil, "", fmt.Errorf("evaluate native configuration for %s: tofu exited with status %d; output: %s", selector, result.ExitCode, result.LogPath)
+			return outputs, "", fmt.Errorf("evaluate native configuration for %s: tofu exited with status %d; output: %s", selector, result.ExitCode, result.LogPath)
 		}
 	}
 	request.Args = []string{"show", "-json", plan}
@@ -233,22 +246,26 @@ func readNativeOutputs(ctx context.Context, tofu tofuSettings, repository, works
 	request.JSONPath = filepath.Join(temporary, "configuration.json")
 	result, err := tofurun.Run(ctx, request, nil)
 	if err != nil {
-		return nil, "", fmt.Errorf("read native configuration for %s: %w", selector, err)
+		return outputs, "", fmt.Errorf("read native configuration for %s: %w", selector, err)
 	}
 	if result.ExitCode != 0 {
-		return nil, "", fmt.Errorf("read native configuration for %s: tofu exited with status %d", selector, result.ExitCode)
+		return outputs, "", fmt.Errorf("read native configuration for %s: tofu exited with status %d", selector, result.ExitCode)
 	}
 	body, err := os.ReadFile(request.JSONPath)
 	if err != nil {
-		return nil, "", fmt.Errorf("read the native configuration projection: %w", err)
+		return outputs, "", fmt.Errorf("read the native configuration projection: %w", err)
 	}
 	var document nativeConfigurationPlan
 	if err := json.Unmarshal(body, &document); err != nil {
-		return nil, "", fmt.Errorf("decode the native configuration projection: %w", err)
+		return outputs, "", fmt.Errorf("decode the native configuration projection for %s: %w", selector, err)
 	}
-	outputs := make(map[string]json.RawMessage, len(document.PlannedValues.Outputs))
-	for name, output := range document.PlannedValues.Outputs {
-		outputs[name] = output.Value
+	planned := document.PlannedValues.Outputs
+	if planned.LockTargets == nil {
+		return outputs, "", fmt.Errorf("native configuration for %s must export lock_targets", selector)
+	}
+	outputs.targets = planned.LockTargets.Value
+	if planned.DockerBridges != nil && len(planned.DockerBridges.Value) > 0 {
+		outputs.dockerBridges = planned.DockerBridges.Value
 	}
 	return outputs, selector, nil
 }
