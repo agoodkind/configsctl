@@ -129,10 +129,11 @@ type prepared struct {
 
 // Start creates <directory>/docker, starts one proxy on a private socket for
 // each alias, and returns after every socket accepts a connection. It reads
-// each token secret from TF_VAR_<TokenVariable> in environment. The proxy of
-// an alias in writable accepts every method, and every other proxy accepts
-// only GET and HEAD requests. The returned context ends when ctx ends or when
-// any proxy stops before Stop. The caller calls Stop after a nil error.
+// each token secret from TF_VAR_<TokenVariable> in environment. The proxy
+// accepts every method when writable maps its alias to true. Every other
+// proxy accepts only GET and HEAD requests. The context that Start returns
+// ends when ctx ends or when any proxy stops before Stop. The caller calls
+// Stop after a nil error.
 func Start(
 	ctx context.Context, directory string, bridges map[string]Bridge, environment []string, writable map[string]bool,
 ) (*Session, context.Context, error) {

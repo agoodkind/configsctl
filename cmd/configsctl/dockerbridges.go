@@ -36,7 +36,7 @@ const (
 var tofuSourceExtensions = []string{".tofu.json", ".tf.json", ".tofu", ".tf"}
 
 // dockerBridgeRedirections lists the OpenTofu options that select a
-// configuration other than the validated workspace.
+// configuration other than the workspace that configsctl validates.
 var dockerBridgeRedirections = []string{"chdir", "config"}
 
 // runWithDockerBridges starts the Docker bridges in directory and runs run
@@ -162,8 +162,7 @@ func optionName(argument string) (string, bool) {
 	return name, true
 }
 
-// redirectionOption returns the first option before -- that selects another
-// configuration directory.
+// redirectionOption returns the first chdir or config option before --.
 func redirectionOption(args []string) string {
 	for _, argument := range args {
 		if argument == argumentTerminator {
@@ -262,7 +261,7 @@ func requireDockerBridgeVariables(directory string, bridges map[string]dockerbri
 	return nil
 }
 
-// tofuOverrideFile reports whether OpenTofu merges path as an override file.
+// tofuOverrideFile reports whether path has an OpenTofu override file name.
 func tofuOverrideFile(path string) bool {
 	name := filepath.Base(path)
 	for _, extension := range tofuSourceExtensions {
@@ -273,8 +272,8 @@ func tofuOverrideFile(path string) bool {
 	return false
 }
 
-// tofuVariableFlags reports, for each variable in directory, whether any of
-// the named literal boolean attributes is true. An attribute in an override
+// tofuVariableFlags reports, for each variable in directory, whether any
+// literal boolean attribute in names is true. An attribute in an override
 // file replaces the primary value, and override files apply in name order.
 func tofuVariableFlags(directory string, names []string) (map[string]bool, error) {
 	blocks, err := tofuModuleBlocks(directory, tofuVariableSchema)
