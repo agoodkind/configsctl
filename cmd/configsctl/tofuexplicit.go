@@ -412,6 +412,7 @@ type explicitRunner struct {
 	// directory is the private run directory that stores the Docker bridge sockets.
 	directory     string
 	dockerBridges map[string]dockerbridge.Bridge
+	guestHosts    map[string]string
 }
 
 // newExplicitRunner creates the private directory and the request that every
@@ -511,6 +512,7 @@ func newExplicitRunner(settings tofuSettings, request tofuLockRequest, passwordF
 		planPath:  filepath.Join(temporary, mutationPlanName),
 		jsonPath:  filepath.Join(temporary, explicitPlanJSONName),
 		directory: directory, dockerBridges: settings.dockerBridges,
+		guestHosts: request.lockTargets[tofuWorkspaceKey(request.workspaceDir)].GuestHosts,
 	}
 	return runner, cleanup, nil
 }
@@ -653,8 +655,12 @@ func (r explicitRunner) run(
 	if !bridged {
 		bridges = nil
 	}
+	var writable map[string]bool
+	if !getOnly && scope != nil {
+		writable = writableDockerBridges(bridges, r.guestHosts, requiredHosts)
+	}
 	var result tofurun.Result
-	err := runWithDockerBridges(ctx, bridges, r.directory, request.Environment, getOnly, func(bridgeContext context.Context, bridgeArguments func([]string) []string) error {
+	err := runWithDockerBridges(ctx, bridges, r.directory, request.Environment, writable, func(bridgeContext context.Context, bridgeArguments func([]string) []string) error {
 		request.Args = bridgeArguments(args)
 		var runErr error
 		result, runErr = runExplicitStep(bridgeContext, step, request, scope)

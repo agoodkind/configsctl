@@ -388,11 +388,10 @@ func executeTofu(ctx context.Context, env cmdEnv, workspaceDir string, safeArgs,
 		Root: sourceExecutionPath(ctx, workspaceDir), Args: commandArgs, Environment: childEnv, DisplayArgs: safeArgs, Patterns: env.secrets,
 	}
 	bridges := env.dockerBridges
-	bridged, getOnly := dockerBridgeAccess(commandArgs)
-	if !bridged || tofuMutates(commandArgs) {
+	if bridged, _ := dockerBridgeAccess(commandArgs); !bridged || tofuMutates(commandArgs) {
 		bridges = nil
 	}
-	return runInDockerBridgeDirectory(ctx, bridges, childEnv, getOnly, func(bridgeContext context.Context, bridgeArguments func([]string) []string) error {
+	return runInDockerBridgeDirectory(ctx, bridges, childEnv, func(bridgeContext context.Context, bridgeArguments func([]string) []string) error {
 		request.Args = bridgeArguments(commandArgs)
 		return finishTofu(bridgeContext, request, workspaceDir, planPath, safeArgs, source)
 	})

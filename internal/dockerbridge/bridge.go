@@ -129,12 +129,12 @@ type prepared struct {
 
 // Start creates <directory>/docker, starts one proxy on a private socket for
 // each alias, and returns after every socket accepts a connection. It reads
-// each token secret from TF_VAR_<TokenVariable> in environment. getOnly
-// limits every proxy to GET and HEAD requests. The returned context ends when
-// ctx ends or when any proxy stops before Stop. The caller calls Stop after a
-// nil error.
+// each token secret from TF_VAR_<TokenVariable> in environment. The proxy of
+// an alias in writable accepts every method, and every other proxy accepts
+// only GET and HEAD requests. The returned context ends when ctx ends or when
+// any proxy stops before Stop. The caller calls Stop after a nil error.
 func Start(
-	ctx context.Context, directory string, bridges map[string]Bridge, environment []string, getOnly bool,
+	ctx context.Context, directory string, bridges map[string]Bridge, environment []string, writable map[string]bool,
 ) (*Session, context.Context, error) {
 	if len(bridges) == 0 {
 		return nil, nil, errors.New("start Docker bridges: the command does not declare any alias")
@@ -177,7 +177,7 @@ func Start(
 					session.finish(proxy.alias, fmt.Errorf("the proxy panicked: %v", recovered))
 				}
 			}()
-			session.serve(serveContext, proxy, getOnly)
+			session.serve(serveContext, proxy, !writable[proxy.alias])
 		})
 	}
 	for _, proxy := range proxies {
@@ -185,7 +185,9 @@ func Start(
 			return nil, nil, errors.Join(err, session.Stop())
 		}
 	}
-	slog.Info("docker_bridge.started", "aliases", slices.Sorted(maps.Keys(bridges)), "get_only", getOnly)
+	aliases := slices.Sorted(maps.Keys(bridges))
+	writableAliases := slices.DeleteFunc(slices.Clone(aliases), func(alias string) bool { return !writable[alias] })
+	slog.Info("docker_bridge.started", "aliases", aliases, "writable", writableAliases)
 	return session, commandContext, nil
 }
 

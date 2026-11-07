@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -26,20 +27,30 @@ const (
 	tofuVariableArgument       = "var"
 	dockerHostsArgumentPattern = dockerbridge.HostsVariable + "="
 	argumentTerminator         = "--"
+	overrideStem               = "override"
+	overrideSuffix             = "_override"
 )
+
+// tofuSourceExtensions lists the source file extensions that OpenTofu loads,
+// with the longest extension first.
+var tofuSourceExtensions = []string{".tofu.json", ".tf.json", ".tofu", ".tf"}
+
+// dockerBridgeRedirections lists the OpenTofu options that select a
+// configuration other than the validated workspace.
+var dockerBridgeRedirections = []string{"chdir", "config"}
 
 // runWithDockerBridges starts the Docker bridges in directory and runs run
 // with the bridge context and a function that adds the docker_hosts argument
 // to OpenTofu arguments. It stops the bridges after run returns. Without
 // bridges, run receives ctx and a function that copies the arguments.
 func runWithDockerBridges(
-	ctx context.Context, bridges map[string]dockerbridge.Bridge, directory string, environment []string, getOnly bool,
-	run func(context.Context, func([]string) []string) error,
+	ctx context.Context, bridges map[string]dockerbridge.Bridge, directory string, environment []string,
+	writable map[string]bool, run func(context.Context, func([]string) []string) error,
 ) error {
 	if len(bridges) == 0 {
 		return run(ctx, slices.Clone[[]string])
 	}
-	session, bridgeContext, err := dockerbridge.Start(ctx, directory, bridges, environment, getOnly)
+	session, bridgeContext, err := dockerbridge.Start(ctx, directory, bridges, environment, writable)
 	if err != nil {
 		slog.Error("tofu.docker_bridge.start_failed", "err", err)
 		return fmt.Errorf("start the Docker bridges: %w", err)
@@ -52,10 +63,10 @@ func runWithDockerBridges(
 	return runErr
 }
 
-// runInDockerBridgeDirectory creates a private directory for the bridge
-// sockets of a command that does not have a private run directory.
+// runInDockerBridgeDirectory creates a private directory for the read-only
+// bridge sockets of a command that does not have a private run directory.
 func runInDockerBridgeDirectory(
-	ctx context.Context, bridges map[string]dockerbridge.Bridge, environment []string, getOnly bool,
+	ctx context.Context, bridges map[string]dockerbridge.Bridge, environment []string,
 	run func(context.Context, func([]string) []string) error,
 ) error {
 	if len(bridges) == 0 {
@@ -70,7 +81,7 @@ func runInDockerBridgeDirectory(
 	if err := makePrivateDirectory(directory); err != nil {
 		return err
 	}
-	return runWithDockerBridges(ctx, bridges, directory, environment, getOnly, run)
+	return runWithDockerBridges(ctx, bridges, directory, environment, nil, run)
 }
 
 // dockerBridgeAccess reports whether an OpenTofu subcommand starts Docker
@@ -91,8 +102,21 @@ func dockerBridgeAccess(args []string) (bridged, getOnly bool) {
 	}
 }
 
-// requireDockerBridgeInputs rejects an operator docker_hosts value when bridges
-// exist. For commands that start bridges, it also requires each token secret.
+// writableDockerBridges marks an alias writable when lockedHosts contains the
+// guest_hosts host of its guest. The apply step checks lockedHosts against its
+// host lock scope.
+func writableDockerBridges(bridges map[string]dockerbridge.Bridge, guestHosts map[string]string, lockedHosts []string) map[string]bool {
+	writable := make(map[string]bool, len(bridges))
+	for alias, bridge := range bridges {
+		host, owned := guestHosts[bridge.GuestKey()]
+		writable[alias] = owned && slices.Contains(lockedHosts, host)
+	}
+	return writable
+}
+
+// requireDockerBridgeInputs rejects an operator docker_hosts value and an
+// option that selects another configuration when bridges exist. For commands
+// that start bridges, it also requires each token secret.
 func requireDockerBridgeInputs(bridges map[string]dockerbridge.Bridge, args, environment []string) error {
 	if len(bridges) == 0 {
 		return nil
@@ -106,6 +130,9 @@ func requireDockerBridgeInputs(bridges map[string]dockerbridge.Bridge, args, env
 	} else if assignsDockerHosts(args) {
 		err = fmt.Errorf("-var %s conflicts with the Docker bridges for %v; remove it because configsctl sets it for each command",
 			dockerbridge.HostsVariable, aliases)
+	} else if option := redirectionOption(args); option != "" {
+		err = fmt.Errorf("-%s selects another configuration, and the Docker bridges for %v run only for the validated workspace; remove it",
+			option, aliases)
 	} else if bridged, _ := dockerBridgeAccess(args); bridged {
 		err = requireDockerBridgeTokens(bridges, aliases, environment)
 	}
@@ -126,20 +153,35 @@ func requireDockerBridgeTokens(bridges map[string]dockerbridge.Bridge, aliases, 
 	return nil
 }
 
-// withDockerHostsArgument inserts the docker_hosts argument after the
-// subcommand options and before the first positional argument or --.
+// optionName returns the name of an option argument before any value.
+func optionName(argument string) (string, bool) {
+	if !strings.HasPrefix(argument, "-") {
+		return "", false
+	}
+	name, _, _ := strings.Cut(strings.TrimLeft(argument, "-"), "=")
+	return name, true
+}
+
+// redirectionOption returns the first option before -- that selects another
+// configuration directory.
+func redirectionOption(args []string) string {
+	for _, argument := range args {
+		if argument == argumentTerminator {
+			return ""
+		}
+		if name, option := optionName(argument); option && slices.Contains(dockerBridgeRedirections, name) {
+			return name
+		}
+	}
+	return ""
+}
+
+// withDockerHostsArgument inserts the docker_hosts argument before the first
+// -- or at the end of the arguments.
 func withDockerHostsArgument(args []string, argument string) []string {
-	subcommand := slices.IndexFunc(args, func(value string) bool { return !strings.HasPrefix(value, "-") })
-	position := len(args)
-	for index := subcommand + 1; subcommand >= 0 && index < len(args); index++ {
-		value := args[index]
-		if value == argumentTerminator || !strings.HasPrefix(value, "-") {
-			position = index
-			break
-		}
-		if tofuargs.ConsumesValue(value) {
-			index++
-		}
+	position := slices.Index(args, argumentTerminator)
+	if position < 0 {
+		position = len(args)
 	}
 	return slices.Insert(slices.Clone(args), position, argument)
 }
@@ -149,10 +191,11 @@ func assignsDockerHosts(args []string) bool {
 		if argument == argumentTerminator {
 			return false
 		}
-		name, value, inline := strings.Cut(strings.TrimLeft(argument, "-"), "=")
-		if !strings.HasPrefix(argument, "-") || name != tofuVariableArgument {
+		name, option := optionName(argument)
+		if !option || name != tofuVariableArgument {
 			continue
 		}
+		_, value, inline := strings.Cut(strings.TrimLeft(argument, "-"), "=")
 		if !inline && index+1 < len(args) {
 			value = args[index+1]
 		}
@@ -219,8 +262,20 @@ func requireDockerBridgeVariables(directory string, bridges map[string]dockerbri
 	return nil
 }
 
+// tofuOverrideFile reports whether OpenTofu merges path as an override file.
+func tofuOverrideFile(path string) bool {
+	name := filepath.Base(path)
+	for _, extension := range tofuSourceExtensions {
+		if stem, matched := strings.CutSuffix(name, extension); matched {
+			return stem == overrideStem || strings.HasSuffix(stem, overrideSuffix)
+		}
+	}
+	return false
+}
+
 // tofuVariableFlags reports, for each variable in directory, whether any of
-// the named literal boolean attributes is true.
+// the named literal boolean attributes is true. An attribute in an override
+// file replaces the primary value, and override files apply in name order.
 func tofuVariableFlags(directory string, names []string) (map[string]bool, error) {
 	blocks, err := tofuModuleBlocks(directory, tofuVariableSchema)
 	if err != nil {
@@ -231,22 +286,51 @@ func tofuVariableFlags(directory string, names []string) (map[string]bool, error
 		attributes = append(attributes, hcl.AttributeSchema{Name: name, Required: false})
 	}
 	schema := &hcl.BodySchema{Attributes: attributes}
-	result := make(map[string]bool, len(blocks))
+	primary := make(map[string]map[string]bool, len(blocks))
+	var overrides hcl.Blocks
 	for _, block := range blocks {
-		content, _, diagnostics := block.Body.PartialContent(schema)
-		if diagnostics.HasErrors() {
-			slog.Error("tofu.operator.variable_failed", "variable", block.Labels[0], "err", diagnostics.Error())
-			return nil, fmt.Errorf("read variable protection flags: %w", diagnostics)
+		if tofuOverrideFile(block.DefRange.Filename) {
+			overrides = append(overrides, block)
+			continue
 		}
-		enabled := false
-		for _, attribute := range content.Attributes {
-			value, diagnostics := attribute.Expr.Value(nil)
-			if diagnostics.HasErrors() || value.IsNull() || !value.Type().Equals(cty.Bool) {
-				return nil, fmt.Errorf("variable %s requires literal boolean protection flags", block.Labels[0])
-			}
-			enabled = enabled || value.RawEquals(cty.True)
+		values, err := variableFlagValues(block, schema)
+		if err != nil {
+			return nil, err
 		}
-		result[block.Labels[0]] = enabled
+		primary[block.Labels[0]] = values
+	}
+	slices.SortStableFunc(overrides, func(first, second *hcl.Block) int {
+		return strings.Compare(filepath.Base(first.DefRange.Filename), filepath.Base(second.DefRange.Filename))
+	})
+	for _, block := range overrides {
+		values, err := variableFlagValues(block, schema)
+		if err != nil {
+			return nil, err
+		}
+		if base, declared := primary[block.Labels[0]]; declared {
+			maps.Copy(base, values)
+		}
+	}
+	result := make(map[string]bool, len(primary))
+	for name, values := range primary {
+		result[name] = slices.Contains(slices.Collect(maps.Values(values)), true)
 	}
 	return result, nil
+}
+
+func variableFlagValues(block *hcl.Block, schema *hcl.BodySchema) (map[string]bool, error) {
+	content, _, diagnostics := block.Body.PartialContent(schema)
+	if diagnostics.HasErrors() {
+		slog.Error("tofu.operator.variable_failed", "variable", block.Labels[0], "err", diagnostics.Error())
+		return nil, fmt.Errorf("read variable protection flags: %w", diagnostics)
+	}
+	values := make(map[string]bool, len(content.Attributes))
+	for name, attribute := range content.Attributes {
+		value, diagnostics := attribute.Expr.Value(nil)
+		if diagnostics.HasErrors() || value.IsNull() || !value.Type().Equals(cty.Bool) {
+			return nil, fmt.Errorf("variable %s requires literal boolean protection flags", block.Labels[0])
+		}
+		values[name] = value.RawEquals(cty.True)
+	}
+	return values, nil
 }
