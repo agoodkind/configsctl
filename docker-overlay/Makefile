@@ -21,6 +21,13 @@ DOCKER_OVERLAY_VERSION := 4.6.0-configsctl.1
 RELEASE_TAG            ?= $(BINARY)-v$(DOCKER_OVERLAY_VERSION)-$(GIT_COMMIT)
 export RELEASE_TAG
 
+# Upstream v4.6.0 builds Linux binaries without cgo and darwin binaries with cgo.
+# On darwin, Docker Compose uses github.com/fsnotify/fsevents, which watches
+# files with cgo code. The overlay CI and release jobs set darwin_runner and
+# build darwin binaries on macOS, where the toolchain compiles that cgo code.
+RELEASE_BINS :=$(BINARY):$(CMD):platforms=linux/amd64,platforms=linux/arm64 \
+	$(BINARY):$(CMD):cgo=1,platforms=darwin/amd64,platforms=darwin/arm64
+
 # The explicit file list gives gocyclo the overlay's Go file and excludes src.
 # Without file names, gocyclo prints usage text that the gate reports as
 # findings. The go-makefile default excludes findings in _test.go files.

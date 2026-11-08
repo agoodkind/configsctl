@@ -48,4 +48,5 @@ jobs:
     with:
       working_directory: docker-overlay
       go_version_file: docker-overlay/go.mod
+      darwin_runner: macos-15
       pre_make_commands: go run ./.github/install-opentofu

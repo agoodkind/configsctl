@@ -31,5 +31,6 @@ jobs:
     with:
       binary: terraform-provider-docker
       require_darwin_codesign: true
+      darwin_runner: macos-15
       working_directory: docker-overlay
     secrets: inherit
