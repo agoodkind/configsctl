@@ -33,3 +33,19 @@ jobs:
     with:
       apt_packages: python3-jinja2
       pre_make_commands: go run ./.github/install-opentofu
+
+  # The shared go-makefile workflow runs in docker-overlay and installs pinned
+  # OpenTofu before make runs the test against Docker. The workflow includes
+  # working_directory in build and package artifact names to distinguish them
+  # from the root job's artifacts.
+  docker-overlay:
+    uses: agoodkind/go-makefile/.github/workflows/_ci.yml@main
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    secrets: inherit
+    with:
+      working_directory: docker-overlay
+      go_version_file: docker-overlay/go.mod
+      pre_make_commands: go run ./.github/install-opentofu
