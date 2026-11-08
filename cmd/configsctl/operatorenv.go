@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
 	"path/filepath"
@@ -42,15 +44,39 @@ func registerOperatorRedaction(env cmdEnv, settings tofuSettings, workspace stri
 	return env, restore, nil
 }
 
-func prepareTofuRedaction(env cmdEnv, settings tofuSettings, workspace string, args, environment []string) (cmdEnv, []string, func(), error) {
-	env, restore, err := registerOperatorRedaction(env, settings, workspace, args, environment)
+func prepareTofuRun(env cmdEnv, settings tofuSettings, workspace, passwordFile string, args []string) (cmdEnv, []string, []string, func(), error) {
+	expanded, environment, err := tofuInvocation(settings, workspace, passwordFile, args)
 	if err != nil {
-		return env, nil, nil, err
+		return env, nil, nil, nil, err
 	}
-	if bridged, _ := dockerBridgeAccess(args); bridged && len(settings.dockerBridges) > 0 {
-		args = canonicalTofuArguments(args)
+	env, restore, err := registerOperatorRedaction(env, settings, workspace, expanded, environment)
+	if err != nil {
+		return env, nil, nil, nil, err
 	}
-	return env, args, restore, nil
+	safeArgs, environment, err := prepareTofuInputs(settings, workspace, expanded, environment)
+	if err != nil {
+		err = redactedError(err, env.secrets)
+		restore()
+		return env, nil, nil, nil, err
+	}
+	if bridged, _ := dockerBridgeAccess(safeArgs); bridged && len(settings.dockerBridges) > 0 {
+		safeArgs = canonicalTofuArguments(safeArgs)
+	}
+	return env, safeArgs, environment, restore, nil
+}
+
+func redactedError(err error, patterns []redact.Pattern) error {
+	if len(patterns) == 0 {
+		return err
+	}
+	var buffer bytes.Buffer
+	writer := redact.New(&buffer, patterns)
+	_, writeErr := io.WriteString(writer, err.Error())
+	if closeErr := errors.Join(writeErr, writer.Close()); closeErr != nil {
+		slog.Error("tofu.operator.error_redaction_failed", "err", closeErr)
+		return errors.New("prepare the OpenTofu command: the error text contains a protected value and could not be redacted")
+	}
+	return errors.New(buffer.String())
 }
 
 func protectedOperatorPatterns(settings tofuSettings, workspace string, environment []string) ([]redact.Pattern, error) {

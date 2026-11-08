@@ -294,11 +294,8 @@ func runTofuWithSource(ctx context.Context, env cmdEnv, args []string) error {
 	if err != nil {
 		return err
 	}
-	safeArgs, childEnv, err := prepareTofuInvocation(loaded.Tofu, workspaceDir, passwordFile, tofuArgs)
-	if err != nil {
-		return err
-	}
-	env, safeArgs, restoreOperator, err := prepareTofuRedaction(cmdEnv{secrets: env.secrets, dockerBridges: loaded.Tofu.dockerBridges}, loaded.Tofu, workspaceDir, safeArgs, childEnv)
+	bridgeEnv := cmdEnv{secrets: env.secrets, dockerBridges: loaded.Tofu.dockerBridges}
+	env, safeArgs, childEnv, restoreOperator, err := prepareTofuRun(bridgeEnv, loaded.Tofu, workspaceDir, passwordFile, tofuArgs)
 	if err != nil {
 		return err
 	}
@@ -472,10 +469,10 @@ var tofuArgPattern = regexp.MustCompile(`^[\x20-\x7E]+$`)
 // sanitizeTofuArgs validates each argument and returns the validated copies.
 func sanitizeTofuArgs(args []string) ([]string, error) {
 	safe := make([]string, 0, len(args))
-	for _, arg := range args {
+	for index, arg := range args {
 		match := tofuArgPattern.FindString(arg)
 		if match != arg {
-			return nil, fmt.Errorf("tofu argument %q contains non-printable characters", arg)
+			return nil, fmt.Errorf("tofu argument %d contains a character that is not printable ASCII", index+1)
 		}
 		safe = append(safe, match)
 	}

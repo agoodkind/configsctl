@@ -28,11 +28,7 @@ func tofuInvocation(settings tofuSettings, workspace, passwordFile string, args 
 	return expandTofuEnvironment(args, append(os.Environ(), secrets...))
 }
 
-func prepareTofuInvocation(settings tofuSettings, workspace, passwordFile string, args []string) (safeArgs, childEnv []string, err error) {
-	expanded, childEnv, err := tofuInvocation(settings, workspace, passwordFile, args)
-	if err != nil {
-		return nil, nil, err
-	}
+func prepareTofuInputs(settings tofuSettings, workspace string, expanded, childEnv []string) (safeArgs, preparedEnv []string, err error) {
 	if settings.source != nil {
 		if settings.ProviderMirror == nil {
 			childEnv, err = settings.source.environment(childEnv)
