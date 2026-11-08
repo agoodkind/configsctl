@@ -159,6 +159,8 @@ func (watcher *interfaceWatcher) checkSocket(ctx context.Context, unit *keaUnit)
 		return
 	}
 	unit.missingPolls++
+	slog.Info("network_watch.interface.socket_missing_poll",
+		"unit", unit.name, "port", unit.port, "polls", unit.missingPolls)
 	if unit.missingPolls < missingSocketPolls {
 		return
 	}

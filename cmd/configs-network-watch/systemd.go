@@ -8,15 +8,21 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"time"
 
 	systemddbus "github.com/coreos/go-systemd/v22/dbus"
 )
 
 const (
-	jobModeReplace   = "replace"
-	jobResultDone    = "done"
-	loadStateMissing = "not-found"
+	jobModeReplace     = "replace"
+	jobResultDone      = "done"
+	loadStateMissing   = "not-found"
+	jobConnectionCheck = time.Second
 )
+
+// errJobConnectionClosed marks a job wait that ended because the systemd
+// connection closed before systemd reported the job result.
+var errJobConnectionClosed = errors.New("systemd connection closed before the job result")
 
 // activeStates lists the ActiveState values that `systemctl is-active`
 // accepts as active.
@@ -123,14 +129,42 @@ func (manager *unitManager) restart(ctx context.Context, unit string, verb resta
 	if err != nil {
 		return unitFailure(unit, operation, err)
 	}
-	select {
-	case result := <-results:
-		if result != jobResultDone {
-			return unitFailure(unit, operation, fmt.Errorf("job result %s", result))
+	return awaitJob(ctx, connection, unit, operation, results)
+}
+
+// awaitJob waits for the result of one systemd job. It fails when ctx ends
+// or when the connection closes before systemd reports the result.
+func awaitJob(
+	ctx context.Context, connection *systemddbus.Conn, unit string, operation string, results <-chan string,
+) error {
+	ticker := time.NewTicker(jobConnectionCheck)
+	defer ticker.Stop()
+	for {
+		select {
+		case result := <-results:
+			return jobOutcome(unit, operation, result)
+		case <-ctx.Done():
+			return unitFailure(unit, operation, ctx.Err())
+		case <-ticker.C:
+			if connection.Connected() {
+				continue
+			}
+			select {
+			case result := <-results:
+				return jobOutcome(unit, operation, result)
+			default:
+				return unitFailure(unit, operation, errJobConnectionClosed)
+			}
 		}
-		slog.Info("network_watch.systemd.restarted", "unit", unit, "verb", operation)
-		return nil
-	case <-ctx.Done():
-		return unitFailure(unit, operation, ctx.Err())
 	}
+}
+
+// jobOutcome converts a systemd job result into an error, or logs the
+// restart and returns nil for the result done.
+func jobOutcome(unit string, operation string, result string) error {
+	if result != jobResultDone {
+		return unitFailure(unit, operation, fmt.Errorf("job result %s", result))
+	}
+	slog.Info("network_watch.systemd.restarted", "unit", unit, "verb", operation)
+	return nil
 }
