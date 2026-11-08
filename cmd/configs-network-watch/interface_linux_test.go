@@ -33,11 +33,17 @@ const (
 	activeState          = "active"
 	inactiveState        = "inactive"
 
-	watcherStartWait  = 10 * time.Second
-	unitChangeWait    = 15 * time.Second
-	unchangedPolls    = 6 * time.Second
-	missingSocketWait = 45 * time.Second
-	beforeMissingWait = 20 * time.Second
+	dhcp4Port              = 67
+	dhcp6Port              = 547
+	missingSocketThreshold = 15
+	frozenPollCount        = 5
+
+	watcherStartWait        = 10 * time.Second
+	unitChangeWait          = 15 * time.Second
+	unchangedPolls          = 6 * time.Second
+	missingSocketWait       = 45 * time.Second
+	belowThresholdCheck     = 1500 * time.Millisecond
+	inspectionFailureWindow = 7 * time.Second
 )
 
 // unitTemplate is the input to the test unit templates.
@@ -72,7 +78,7 @@ func requireSystemd(t *testing.T) {
 	}
 }
 
-func newInterfaceLab(t *testing.T, dhcp6Mode string) *interfaceLab {
+func newInterfaceLab(t *testing.T, dhcp4Mode string, dhcp6Mode string) *interfaceLab {
 	t.Helper()
 	requireRoot(t)
 	requireSystemd(t)
@@ -86,7 +92,7 @@ func newInterfaceLab(t *testing.T, dhcp6Mode string) *interfaceLab {
 	prefix := fmt.Sprintf("configs-network-watch-test-%d-", os.Getpid())
 	lab := &interfaceLab{
 		namespace:     namespace,
-		namespacePath: filepath.Join("/run/netns", name),
+		namespacePath: filepath.Join(namespaceMountDirectory, name),
 		handle:        namespaceHandle(t, namespace),
 		systemd:       systemd,
 		dhcp4Unit:     prefix + "dhcp4.service",
@@ -99,7 +105,7 @@ func newInterfaceLab(t *testing.T, dhcp6Mode string) *interfaceLab {
 	if err != nil {
 		t.Fatalf("find the test executable: %v", err)
 	}
-	lab.writeUnit(t, lab.dhcp4Unit, helperTemplatePath, lab.unitInput(executable, helperUDP4, dhcp4ListenAddress))
+	lab.writeUnit(t, lab.dhcp4Unit, helperTemplatePath, lab.unitInput(executable, dhcp4Mode, dhcp4ListenAddress))
 	lab.writeUnit(t, lab.dhcp6Unit, helperTemplatePath, lab.unitInput(executable, dhcp6Mode, dhcp6ListenAddress))
 	lab.writeUnit(t, lab.routeUnit, oneshotTemplatePath, lab.unitInput(executable, helperExit, ""))
 	if err := systemd.ReloadContext(context.Background()); err != nil {
@@ -143,7 +149,9 @@ func (lab *interfaceLab) writeUnit(t *testing.T, unit string, templatePath strin
 		t.Fatalf("write %s: %v", path, err)
 	}
 	t.Cleanup(func() {
-		lab.runJob(t, unit, lab.systemd.StopUnitContext)
+		if err := lab.jobResult(unit, lab.systemd.StopUnitContext); err != nil {
+			t.Errorf("stop %s: %v", unit, err)
+		}
 		if err := os.Remove(path); err != nil {
 			t.Errorf("remove %s: %v", path, err)
 		}
@@ -156,19 +164,28 @@ func (lab *interfaceLab) writeUnit(t *testing.T, unit string, templatePath strin
 // systemdJob is the signature of the go-systemd start and stop calls.
 type systemdJob func(ctx context.Context, name string, mode string, results chan<- string) (int, error)
 
-func (lab *interfaceLab) runJob(t *testing.T, unit string, job systemdJob) {
-	t.Helper()
+// jobResult queues job for unit and returns an error unless systemd reports
+// the result done within unitChangeWait.
+func (lab *interfaceLab) jobResult(unit string, job systemdJob) error {
 	results := make(chan string, 1)
 	if _, err := job(context.Background(), unit, "replace", results); err != nil {
-		t.Fatalf("queue a job for %s: %v", unit, err)
+		return fmt.Errorf("queue a job for %s: %w", unit, err)
 	}
 	select {
 	case result := <-results:
 		if result != jobResultDone {
-			t.Fatalf("job for %s finished with %s", unit, result)
+			return fmt.Errorf("job for %s finished with %s", unit, result)
 		}
+		return nil
 	case <-time.After(unitChangeWait):
-		t.Fatalf("job for %s did not finish within %s", unit, unitChangeWait)
+		return fmt.Errorf("job for %s did not finish within %s", unit, unitChangeWait)
+	}
+}
+
+func (lab *interfaceLab) runJob(t *testing.T, unit string, job systemdJob) {
+	t.Helper()
+	if err := lab.jobResult(unit, job); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -254,7 +271,7 @@ func (lab *interfaceLab) requireUnchanged(t *testing.T, before map[string]string
 }
 
 func TestInterfaceWatcherRestartsUnitsAfterIndexChange(t *testing.T) {
-	lab := newInterfaceLab(t, helperUDP6Device)
+	lab := newInterfaceLab(t, helperUDP4, helperUDP6Device)
 	process := lab.startWatcher(t)
 	before := lab.invocations(t)
 
@@ -291,20 +308,78 @@ func TestInterfaceWatcherRestartsUnitsAfterIndexChange(t *testing.T) {
 	}
 }
 
+// missingPollLine is the start of the watcher line for poll count polls of a
+// unit without its socket.
+func missingPollLine(unit string, port int, polls int) string {
+	return fmt.Sprintf("msg=network_watch.interface.socket_missing_poll unit=%s port=%d polls=%d", unit, port, polls)
+}
+
+// requireFrozenCount lowers the descriptor limit of the watcher after poll
+// frozenAt for unit, requires failed inspections without counted polls, and
+// requires the next counted poll after the limit returns to be frozenAt+1.
+func requireFrozenCount(t *testing.T, process *commandProcess, unit string, port int, frozenAt int) {
+	t.Helper()
+	process.waitForLine(t, missingSocketWait, missingPollLine(unit, port, frozenAt))
+	restore := process.limitNewDescriptors(t)
+	limited := process.linesFor(inspectionFailureWindow)
+	restore()
+	failures := 0
+	for _, line := range limited {
+		if strings.Contains(line, "msg=network_watch.interface.inspection_failed") {
+			failures++
+		}
+		if strings.Contains(line, "msg=network_watch.interface.socket_missing_poll unit="+unit+" ") {
+			t.Fatalf("the watcher counted a missing socket poll while inspection failed: %s", line)
+		}
+	}
+	if failures == 0 {
+		t.Fatalf("the watcher did not report a failed inspection under the descriptor limit:\n%s",
+			strings.Join(limited, "\n"))
+	}
+	next := process.waitForLine(t, missingSocketWait, "msg=network_watch.interface.socket_missing_poll unit="+unit+" ")
+	if !strings.HasSuffix(next, missingPollLine(unit, port, frozenAt+1)) {
+		t.Fatalf("first counted poll after recovery = %q, want polls=%d", next, frozenAt+1)
+	}
+}
+
 func TestInterfaceWatcherRestartsKeaAfterMissingSocketPolls(t *testing.T) {
-	lab := newInterfaceLab(t, helperIdle)
-	process := lab.startWatcher(t)
-	before := lab.invocations(t)
+	cases := []struct {
+		name              string
+		dhcp4Mode         string
+		dhcp6Mode         string
+		missingDHCPv6     bool
+		inspectionFailure bool
+	}{
+		{name: "DHCPv6 socket missing", dhcp4Mode: helperUDP4, dhcp6Mode: helperIdle,
+			missingDHCPv6: true, inspectionFailure: true},
+		{name: "DHCPv4 socket missing", dhcp4Mode: helperIdle, dhcp6Mode: helperUDP6Device},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			lab := newInterfaceLab(t, testCase.dhcp4Mode, testCase.dhcp6Mode)
+			missing, missingPort, listening := lab.dhcp4Unit, dhcp4Port, lab.dhcp6Unit
+			if testCase.missingDHCPv6 {
+				missing, missingPort, listening = lab.dhcp6Unit, dhcp6Port, lab.dhcp4Unit
+			}
+			process := lab.startWatcher(t)
+			before := lab.invocations(t)
 
-	time.Sleep(beforeMissingWait)
-	lab.requireUnchanged(t, before, "fewer than fifteen polls without a socket")
+			if testCase.inspectionFailure {
+				requireFrozenCount(t, process, missing, missingPort, frozenPollCount)
+			}
+			process.waitForLine(t, missingSocketWait, missingPollLine(missing, missingPort, missingSocketThreshold-1))
+			time.Sleep(belowThresholdCheck)
+			lab.requireUnchanged(t, before, "fourteen polls without a socket")
 
-	process.waitForLine(t, missingSocketWait, "msg=network_watch.interface.socket_missing unit="+lab.dhcp6Unit)
-	waitFor(t, unitChangeWait, "the DHCPv6 unit without a socket to restart", func() bool {
-		return lab.invocation(t, lab.dhcp6Unit) != before[lab.dhcp6Unit]
-	})
-	if lab.invocation(t, lab.dhcp4Unit) != before[lab.dhcp4Unit] {
-		t.Fatal("the DHCPv4 unit with a socket restarted")
+			process.waitForLine(t, missingSocketWait, missingPollLine(missing, missingPort, missingSocketThreshold))
+			process.waitForLine(t, unitChangeWait, "msg=network_watch.interface.socket_missing unit="+missing)
+			waitFor(t, unitChangeWait, "the unit without a socket to restart", func() bool {
+				return lab.invocation(t, missing) != before[missing]
+			})
+			if lab.invocation(t, listening) != before[listening] {
+				t.Fatalf("%s restarted although its socket listened for more than fifteen polls", listening)
+			}
+		})
 	}
 }
 

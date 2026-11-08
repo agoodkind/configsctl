@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"os"
 	"os/exec"
@@ -36,6 +37,9 @@ const (
 
 	pollStep        = 200 * time.Millisecond
 	processStopWait = 15 * time.Second
+
+	namespaceMountDirectory = "/run/netns"
+	standardDescriptorCount = 3
 )
 
 var (
@@ -149,10 +153,20 @@ func inNamespace(namespace netns.NsHandle, operation func() error) error {
 	return <-result
 }
 
-// newNamespace creates a network namespace. A nonempty name also mounts it
-// under /run/netns for systemd NetworkNamespacePath.
+// newNamespace creates a network namespace and mounts it when name is nonempty.
 func newNamespace(t *testing.T, name string) netns.NsHandle {
 	t.Helper()
+	mountpoint := ""
+	if name != "" {
+		mountpoint = filepath.Join(namespaceMountDirectory, name)
+		_, err := os.Lstat(mountpoint)
+		if err == nil {
+			t.Fatalf("network namespace mountpoint %s already exists", mountpoint)
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("check network namespace mountpoint %s: %v", mountpoint, err)
+		}
+	}
 	created := make(chan netns.NsHandle, 1)
 	failed := make(chan error, 1)
 	go func() {
@@ -182,6 +196,13 @@ func newNamespace(t *testing.T, name string) netns.NsHandle {
 		})
 		return namespace
 	case err := <-failed:
+		if mountpoint != "" {
+			if _, statErr := os.Lstat(mountpoint); statErr == nil {
+				if removeErr := os.Remove(mountpoint); removeErr != nil {
+					t.Errorf("remove unmounted network namespace file %s: %v", mountpoint, removeErr)
+				}
+			}
+		}
 		t.Fatalf("create network namespace %q: %v", name, err)
 		return netns.None()
 	}
@@ -325,8 +346,8 @@ func (process *commandProcess) capturedOutput() string {
 	return process.output.String()
 }
 
-// waitForLine reads stderr lines until one contains text.
-func (process *commandProcess) waitForLine(t *testing.T, timeout time.Duration, text string) {
+// waitForLine reads stderr lines until one contains text and returns it.
+func (process *commandProcess) waitForLine(t *testing.T, timeout time.Duration, text string) string {
 	t.Helper()
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
@@ -334,12 +355,55 @@ func (process *commandProcess) waitForLine(t *testing.T, timeout time.Duration, 
 		select {
 		case line := <-process.lines:
 			if strings.Contains(line, text) {
-				return
+				return line
 			}
 		case <-timer.C:
 			t.Fatalf("timed out after %s waiting for a line with %q", timeout, text)
+			return ""
 		}
 	}
+}
+
+// linesFor reads the stderr lines that arrive during duration.
+func (process *commandProcess) linesFor(duration time.Duration) []string {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	lines := make([]string, 0)
+	for {
+		select {
+		case line := <-process.lines:
+			lines = append(lines, line)
+		case <-timer.C:
+			return lines
+		}
+	}
+}
+
+// limitNewDescriptors lowers the process open file limit and returns a
+// function that restores it.
+func (process *commandProcess) limitNewDescriptors(t *testing.T) func() {
+	t.Helper()
+	pid := process.command.Process.Pid
+	var original unix.Rlimit
+	if err := unix.Prlimit(pid, unix.RLIMIT_NOFILE, nil, &original); err != nil {
+		t.Fatalf("read the open file limit of %d: %v", pid, err)
+	}
+	limited := unix.Rlimit{Cur: standardDescriptorCount, Max: original.Max}
+	if err := unix.Prlimit(pid, unix.RLIMIT_NOFILE, &limited, nil); err != nil {
+		t.Fatalf("lower the open file limit of %d: %v", pid, err)
+	}
+	restored := false
+	restore := func() {
+		if restored {
+			return
+		}
+		restored = true
+		if err := unix.Prlimit(pid, unix.RLIMIT_NOFILE, &original, nil); err != nil {
+			t.Errorf("restore the open file limit of %d: %v", pid, err)
+		}
+	}
+	t.Cleanup(restore)
+	return restore
 }
 
 // stop sends stopSignal and returns the exit status.
