@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,18 +10,50 @@ import (
 	"path/filepath"
 
 	"goodkind.io/configsctl/hostlock"
+	"goodkind.io/configsctl/internal/dockerbridge"
 	"goodkind.io/configsctl/internal/installedsource"
 	"goodkind.io/configsctl/internal/tofuargs"
 	"goodkind.io/configsctl/internal/tofulock"
 	"goodkind.io/configsctl/tofurun"
 )
 
+const (
+	lockTargetsOutput   = "lock_targets"
+	dockerBridgesOutput = "docker_bridges"
+)
+
 type nativeConfigurationPlan struct {
 	PlannedValues struct {
-		Outputs map[string]struct {
-			Value tofulock.Targets `json:"value"`
-		} `json:"outputs"`
+		Outputs map[string]json.RawMessage `json:"outputs"`
 	} `json:"planned_values"`
+}
+
+type lockTargetsValue struct {
+	Value tofulock.Targets `json:"value"`
+}
+
+type dockerBridgesValue struct {
+	Value dockerBridgeOutput `json:"value"`
+}
+
+type dockerBridgeOutput map[string]dockerbridge.Bridge
+
+func (output *dockerBridgeOutput) UnmarshalJSON(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var bridges map[string]dockerbridge.Bridge
+	if err := decoder.Decode(&bridges); err != nil {
+		slog.Error("tofu.configuration.docker_bridges_invalid", "err", err)
+		return fmt.Errorf("decode the Docker bridge entries: %w", err)
+	}
+	*output = bridges
+	return nil
+}
+
+// nativeProjection contains the lock targets and Docker bridges of one workspace.
+type nativeProjection struct {
+	targets       tofulock.Targets
+	dockerBridges map[string]dockerbridge.Bridge
 }
 
 func nativeLockTarget(ctx context.Context, repository, workspace, host string) (hostlock.Host, error) {
@@ -110,38 +143,75 @@ func loadTofuWorkspace(ctx context.Context, args []string) (settings, string, []
 
 // evaluateNativeConfiguration evaluates only the selected provider-free module.
 // Initialization and planning receive the same constant workspace selector.
-func evaluateNativeConfiguration(ctx context.Context, tofu tofuSettings, workspaceDir string) (tofulock.Targets, error) {
+func evaluateNativeConfiguration(ctx context.Context, tofu tofuSettings, workspaceDir string) (nativeProjection, error) {
 	repository, err := os.Getwd()
 	if err != nil {
 		slog.Error("tofu.configuration.repository_failed", "err", err)
-		return tofulock.Targets{}, fmt.Errorf("resolve the configuration repository: %w", err)
+		return nativeProjection{}, fmt.Errorf("resolve the configuration repository: %w", err)
 	}
-	return evaluateNativeConfigurationAt(ctx, tofu, repository, workspaceDir)
+	return evaluateNativeProjectionAt(ctx, tofu, repository, workspaceDir)
 }
 
 func evaluateNativeConfigurationAt(ctx context.Context, tofu tofuSettings, repository, workspaceDir string) (tofulock.Targets, error) {
-	var targets tofulock.Targets
+	projection, err := evaluateNativeProjectionAt(ctx, tofu, repository, workspaceDir)
+	return projection.targets, err
+}
+
+func evaluateNativeProjectionAt(ctx context.Context, tofu tofuSettings, repository, workspaceDir string) (nativeProjection, error) {
+	var projection nativeProjection
+	outputs, selector, err := readNativeOutputs(ctx, tofu, repository, workspaceDir)
+	if err != nil {
+		return projection, err
+	}
+	targets := outputs.targets
+	if err := targets.Validate(); err != nil {
+		slog.Error("tofu.configuration.targets_invalid", "workspace", selector, "err", err)
+		return projection, fmt.Errorf("validate native lock targets for %s: %w", selector, err)
+	}
+	if targets.LockEndpoints == nil && (len(targets.ModuleHosts)+len(targets.ModuleKeyHosts)+len(targets.NodeHosts)+len(targets.GuestHosts) > 0) {
+		return projection, fmt.Errorf("native configuration for %s must export lock_endpoints", selector)
+	}
+	projection.targets = targets
+	bridges := outputs.dockerBridges
+	if err := validateDockerBridges(selector, bridges, targets); err != nil {
+		return projection, err
+	}
+	variableDirectory := workspaceDir
+	if tofu.source != nil {
+		variableDirectory = tofu.source.path(workspaceDir)
+	}
+	if err := requireDockerBridgeVariables(variableDirectory, bridges); err != nil {
+		return projection, err
+	}
+	projection.dockerBridges = bridges
+	return projection, nil
+}
+
+// readNativeOutputs decodes lock targets and Docker bridges from the projection.
+func readNativeOutputs(ctx context.Context, tofu tofuSettings, repository, workspaceDir string) (nativeProjection, string, error) {
+	var outputs nativeProjection
 	if tofu.ConfigurationRoot == "" {
-		return targets, fmt.Errorf("tofu.configuration_root is required for native configuration")
+		return outputs, "", fmt.Errorf("tofu.configuration_root is required for native configuration")
 	}
 	if err := validateWorkspaceSelector(tofu.ConfigurationRoot); err != nil {
-		return targets, err
+		return outputs, "", err
 	}
 	root, err := repositoryDirectory(sourceExecutionPath(ctx, filepath.Join(repository, tofu.ConfigurationRoot)))
 	if err != nil {
-		return targets, err
+		return outputs, "", err
 	}
 	selector, err := nativeWorkspaceSelector(tofu, workspaceDir)
 	if err != nil {
-		return targets, err
+		return outputs, "", err
 	}
 	binary, err := tofuBinary()
 	if err != nil {
-		return targets, err
+		return outputs, "", err
 	}
 	directory, err := os.MkdirTemp("", "configsctl-configuration-*")
 	if err != nil {
-		return targets, fmt.Errorf("create the native configuration directory: %w", err)
+		slog.Error("tofu.configuration.directory_failed", "err", err)
+		return outputs, "", fmt.Errorf("create the native configuration directory: %w", err)
 	}
 	defer removePrivateDirectory(directory)
 	home := filepath.Join(directory, "home")
@@ -149,7 +219,7 @@ func evaluateNativeConfigurationAt(ctx context.Context, tofu tofuSettings, repos
 	data := filepath.Join(directory, "data")
 	for _, path := range []string{home, temporary, data} {
 		if err := makePrivateDirectory(path); err != nil {
-			return targets, err
+			return outputs, "", err
 		}
 	}
 	request := tofurun.Request{
@@ -165,16 +235,16 @@ func evaluateNativeConfigurationAt(ctx context.Context, tofu tofuSettings, repos
 	} {
 		if args[0] == "plan" {
 			if err := checkNativeResolvedModules(ctx, tofu, binary, data, selector); err != nil {
-				return targets, err
+				return outputs, "", err
 			}
 		}
 		request.Args = tofuargs.WithWorkspaceSelector(args, selector)
 		result, err := tofurun.Run(ctx, request, nil)
 		if err != nil {
-			return targets, fmt.Errorf("evaluate native configuration for %s: %w", selector, err)
+			return outputs, "", fmt.Errorf("evaluate native configuration for %s: %w", selector, err)
 		}
 		if result.ExitCode != 0 && (args[0] != "plan" || result.ExitCode != tofuPendingExitCode) {
-			return targets, fmt.Errorf("evaluate native configuration for %s: tofu exited with status %d; output: %s", selector, result.ExitCode, result.LogPath)
+			return outputs, "", fmt.Errorf("evaluate native configuration for %s: tofu exited with status %d; output: %s", selector, result.ExitCode, result.LogPath)
 		}
 	}
 	request.Args = []string{"show", "-json", plan}
@@ -182,32 +252,50 @@ func evaluateNativeConfigurationAt(ctx context.Context, tofu tofuSettings, repos
 	request.JSONPath = filepath.Join(temporary, "configuration.json")
 	result, err := tofurun.Run(ctx, request, nil)
 	if err != nil {
-		return targets, fmt.Errorf("read native configuration for %s: %w", selector, err)
+		return outputs, "", fmt.Errorf("read native configuration for %s: %w", selector, err)
 	}
 	if result.ExitCode != 0 {
-		return targets, fmt.Errorf("read native configuration for %s: tofu exited with status %d", selector, result.ExitCode)
+		return outputs, "", fmt.Errorf("read native configuration for %s: tofu exited with status %d", selector, result.ExitCode)
 	}
 	body, err := os.ReadFile(request.JSONPath)
 	if err != nil {
-		return targets, fmt.Errorf("read the native configuration projection: %w", err)
+		return outputs, "", fmt.Errorf("read the native configuration projection: %w", err)
 	}
+	outputs, err = decodeNativeOutputs(selector, body)
+	return outputs, selector, err
+}
+
+func decodeNativeOutputs(selector string, body []byte) (nativeProjection, error) {
+	var outputs nativeProjection
 	var document nativeConfigurationPlan
 	if err := json.Unmarshal(body, &document); err != nil {
-		return targets, fmt.Errorf("decode the native configuration projection: %w", err)
+		slog.Error("tofu.configuration.projection_invalid", "workspace", selector, "err", err)
+		return outputs, fmt.Errorf("decode the native configuration projection for %s: %w", selector, err)
 	}
-	projection, found := document.PlannedValues.Outputs["lock_targets"]
+	planned := document.PlannedValues.Outputs
+	encodedTargets, found := planned[lockTargetsOutput]
 	if !found {
-		return targets, fmt.Errorf("native configuration for %s must export lock_targets", selector)
+		return outputs, fmt.Errorf("native configuration for %s must export lock_targets", selector)
 	}
-	targets = projection.Value
-	if err := targets.Validate(); err != nil {
+	var targets lockTargetsValue
+	if err := json.Unmarshal(encodedTargets, &targets); err != nil {
 		slog.Error("tofu.configuration.targets_invalid", "workspace", selector, "err", err)
-		return targets, fmt.Errorf("validate native lock targets for %s: %w", selector, err)
+		return outputs, fmt.Errorf("decode the native lock targets for %s: %w", selector, err)
 	}
-	if targets.LockEndpoints == nil && (len(targets.ModuleHosts)+len(targets.ModuleKeyHosts)+len(targets.NodeHosts)+len(targets.GuestHosts) > 0) {
-		return targets, fmt.Errorf("native configuration for %s must export lock_endpoints", selector)
+	outputs.targets = targets.Value
+	encodedBridges, declared := planned[dockerBridgesOutput]
+	if !declared {
+		return outputs, nil
 	}
-	return targets, nil
+	var bridges dockerBridgesValue
+	if err := json.Unmarshal(encodedBridges, &bridges); err != nil {
+		slog.Error("tofu.configuration.docker_bridges_invalid", "workspace", selector, "err", err)
+		return outputs, fmt.Errorf("decode the docker_bridges output for %s: %w", selector, err)
+	}
+	if len(bridges.Value) > 0 {
+		outputs.dockerBridges = bridges.Value
+	}
+	return outputs, nil
 }
 
 func checkNativeResolvedModules(ctx context.Context, tofu tofuSettings, binary, data, selector string) error {
@@ -258,11 +346,12 @@ func (t tofuSettings) withNativeConfiguration(ctx context.Context, workspace str
 	if t.ConfigurationRoot == "" {
 		return t, nil
 	}
-	targets, err := evaluateNativeConfiguration(ctx, t, workspace)
+	projection, err := evaluateNativeConfiguration(ctx, t, workspace)
 	if err != nil {
 		return t, err
 	}
-	t.LockTargets = map[string]tofulock.Targets{tofuWorkspaceKey(workspace): targets}
+	t.LockTargets = map[string]tofulock.Targets{tofuWorkspaceKey(workspace): projection.targets}
+	t.dockerBridges = projection.dockerBridges
 	if err := validateEndpointCredentials(t); err != nil {
 		return t, err
 	}

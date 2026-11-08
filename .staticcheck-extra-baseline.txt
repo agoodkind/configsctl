@@ -1,4 +1,57 @@
-# staticcheck-extra: generated_at=2026-10-04T22:38:15Z
+# staticcheck-extra: generated_at=2026-11-08T01:05:06Z
+hostlock/additional.go:14:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+hostlock/guest.go:9:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+hostlock/hostlock.go:90:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+hostlock/scope.go:45:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+hostlock/server.go:80:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+hostlock/set.go:70:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+hostlock/state.go:130:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+hostlock/transport.go:69:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/clock/clock.go:7:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/dellcredential/credential.go:88:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/fileowner/owner_unix.go:24:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/gate/checkout.go:84:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/gate/finish.go:18:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/gate/gate.go:49:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/gate/record.go:95:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/gate/request.go:94:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/hclsources/request.go:24:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/installedsource/arguments.go:34:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/installedsource/backend.go:37:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/installedsource/credential.go:11:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/installedsource/modulecache.go:39:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/installedsource/source.go:61:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/lint/expr.go:327:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/lint/run.go:54:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/migrationpause/lease_unix.go:30:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/migrationpause/pause.go:22:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/oracle/oracle.go:48:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/procgroup/group_unix.go:20:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/procgroup/procgroup_unix.go:15:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/redact/writer.go:97:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/runid/runid.go:30:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/runlog/runlog.go:74:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/statemigration/engine.go:52:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/statemigration/manifest.go:63:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/statemigration/native.go:99:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/statemigration/plan.go:15:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/statemigration/preflight.go:19:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/statemigration/restore.go:375:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/statemigration/session.go:22:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/statemigration/state.go:48:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/statemigration/validateaction.go:23:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/tofuargs/selector.go:5:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/tofuargs/workspace.go:5:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/tofufiles/files.go:41:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/tofulock/decide.go:91:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/tofulock/targets.go:36:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/tofuplansource/cache.go:88:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/tofurun/run.go:50:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/vault/patterns.go:14:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/vault/vault.go:91:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+internal/version/version.go:71:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+tofurun/files.go:54:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
+tofurun/tofurun.go:90:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-08T01:05:06Z last_seen=2026-11-08T01:05:06Z
 cmd/configsctl/main_test.go:13:6: Test TestApplyDeployArgTags calls the unexported function applyDeployArg of the package under test. A test must enter through the exported API or the built command. Call the exported entry point that uses applyDeployArg.	# staticcheck-extra:first_added=2026-10-04T22:38:15Z last_seen=2026-10-04T22:38:15Z
 cmd/configsctl/main_test.go:45:6: Test TestParseDeployFlags calls the unexported function parseDeploy of the package under test. A test must enter through the exported API or the built command. Call the exported entry point that uses parseDeploy.	# staticcheck-extra:first_added=2026-10-04T22:38:15Z last_seen=2026-10-04T22:38:15Z
 cmd/configsctl/runlog_test.go:136:6: Test TestOpenRunLogRefusesAWorldReadableDirectory calls the unexported function runLogRoot of the package under test. A test must enter through the exported API or the built command. Call the exported entry point that uses runLogRoot.	# staticcheck-extra:first_added=2026-10-04T22:38:15Z last_seen=2026-10-04T22:38:15Z

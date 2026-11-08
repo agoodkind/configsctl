@@ -16,6 +16,7 @@ import (
 	"sync"
 	"syscall"
 
+	"goodkind.io/configsctl/internal/dockerbridge"
 	"goodkind.io/configsctl/internal/hclsources"
 	"goodkind.io/configsctl/internal/lint"
 	"goodkind.io/configsctl/internal/redact"
@@ -59,7 +60,8 @@ func main() {
 // secret patterns to build a redactor over its own log file, which sits outside
 // the stdout and stderr redactors installed for the process.
 type cmdEnv struct {
-	secrets []redact.Pattern
+	secrets       []redact.Pattern
+	dockerBridges map[string]dockerbridge.Bridge
 }
 
 // handlers dispatches a subcommand name to its implementation.
@@ -292,11 +294,8 @@ func runTofuWithSource(ctx context.Context, env cmdEnv, args []string) error {
 	if err != nil {
 		return err
 	}
-	safeArgs, childEnv, err := prepareTofuInvocation(loaded.Tofu, workspaceDir, passwordFile, tofuArgs)
-	if err != nil {
-		return err
-	}
-	env, restoreOperator, err := registerOperatorRedaction(env, loaded.Tofu, workspaceDir, safeArgs, childEnv)
+	bridgeEnv := cmdEnv{secrets: env.secrets, dockerBridges: loaded.Tofu.dockerBridges}
+	env, safeArgs, childEnv, restoreOperator, err := prepareTofuRun(bridgeEnv, loaded.Tofu, workspaceDir, passwordFile, tofuArgs)
 	if err != nil {
 		return err
 	}
@@ -384,7 +383,20 @@ func executeTofu(ctx context.Context, env cmdEnv, workspaceDir string, safeArgs,
 	request := tofurun.Request{
 		Root: sourceExecutionPath(ctx, workspaceDir), Args: commandArgs, Environment: childEnv, DisplayArgs: safeArgs, Patterns: env.secrets,
 	}
+	bridges := env.dockerBridges
+	if bridged, _ := dockerBridgeAccess(commandArgs); !bridged || tofuMutates(commandArgs) {
+		bridges = nil
+	}
+	return runInDockerBridgeDirectory(ctx, bridges, childEnv, func(bridgeContext context.Context, bridgeArguments func([]string) []string) error {
+		request.Args = bridgeArguments(commandArgs)
+		return finishTofu(bridgeContext, request, workspaceDir, planPath, safeArgs, source)
+	})
+}
+
+func finishTofu(ctx context.Context, request tofurun.Request, workspaceDir, planPath string, safeArgs []string, source tofuPlanSource) error {
+	commandArgs := request.Args
 	result, err := tofurun.Run(ctx, request)
+
 	if errors.Is(err, tofurun.ErrIncomplete) {
 		return tofuFailure(ctx, err, result.LogPath)
 	}
@@ -457,10 +469,10 @@ var tofuArgPattern = regexp.MustCompile(`^[\x20-\x7E]+$`)
 // sanitizeTofuArgs validates each argument and returns the validated copies.
 func sanitizeTofuArgs(args []string) ([]string, error) {
 	safe := make([]string, 0, len(args))
-	for _, arg := range args {
+	for index, arg := range args {
 		match := tofuArgPattern.FindString(arg)
 		if match != arg {
-			return nil, fmt.Errorf("tofu argument %q contains non-printable characters", arg)
+			return nil, fmt.Errorf("tofu argument %d contains a character that is not printable ASCII", index+1)
 		}
 		safe = append(safe, match)
 	}

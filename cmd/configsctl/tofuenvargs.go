@@ -28,9 +28,8 @@ func tofuInvocation(settings tofuSettings, workspace, passwordFile string, args 
 	return expandTofuEnvironment(args, append(os.Environ(), secrets...))
 }
 
-func prepareTofuInvocation(settings tofuSettings, workspace, passwordFile string, args []string) (safeArgs, childEnv []string, err error) {
-	expanded, childEnv, err := tofuInvocation(settings, workspace, passwordFile, args)
-	if err != nil {
+func prepareTofuInputs(settings tofuSettings, workspace string, expanded, childEnv []string) (safeArgs, preparedEnv []string, err error) {
+	if _, err := sanitizeTofuArgs(expanded); err != nil {
 		return nil, nil, err
 	}
 	if settings.source != nil {
@@ -55,6 +54,9 @@ func prepareTofuInvocation(settings tofuSettings, workspace, passwordFile string
 	}
 	safeArgs, err = sanitizeTofuArgs(expanded)
 	if err != nil {
+		return nil, nil, err
+	}
+	if err := requireDockerBridgeInputs(settings.dockerBridges, safeArgs, childEnv); err != nil {
 		return nil, nil, err
 	}
 	return safeArgs, childEnv, nil

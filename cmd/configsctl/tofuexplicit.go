@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"goodkind.io/configsctl/hostlock"
+	"goodkind.io/configsctl/internal/dockerbridge"
 	"goodkind.io/configsctl/internal/redact"
 	"goodkind.io/configsctl/internal/tofuargs"
 	"goodkind.io/configsctl/internal/tofulock"
@@ -405,9 +406,12 @@ func lockHostNames(hosts []hostlock.Host) []string {
 }
 
 type explicitRunner struct {
-	base     tofurun.Request
-	planPath string
-	jsonPath string
+	base          tofurun.Request
+	planPath      string
+	jsonPath      string
+	directory     string
+	dockerBridges map[string]dockerbridge.Bridge
+	guestHosts    map[string]string
 }
 
 // newExplicitRunner creates the private directory and the request that every
@@ -504,8 +508,10 @@ func newExplicitRunner(settings tofuSettings, request tofuLockRequest, passwordF
 			RequiredEnvironment: required, SecretEnvironment: redacted, SecretFiles: nil,
 			OutputMode: tofurun.RedactedProgress, JSONPath: "", RequiredHosts: nil,
 		},
-		planPath: filepath.Join(temporary, mutationPlanName),
-		jsonPath: filepath.Join(temporary, explicitPlanJSONName),
+		planPath:  filepath.Join(temporary, mutationPlanName),
+		jsonPath:  filepath.Join(temporary, explicitPlanJSONName),
+		directory: directory, dockerBridges: settings.dockerBridges,
+		guestHosts: request.lockTargets[tofuWorkspaceKey(request.workspaceDir)].GuestHosts,
 	}
 	return runner, cleanup, nil
 }
@@ -643,6 +649,26 @@ func (r explicitRunner) run(
 	request.OutputMode = mode
 	request.JSONPath = jsonPath
 	request.RequiredHosts = requiredHosts
+	bridges := r.dockerBridges
+	bridged, getOnly := dockerBridgeAccess(args)
+	if !bridged {
+		bridges = nil
+	}
+	var writable map[string]bool
+	if !getOnly && scope != nil {
+		writable = writableDockerBridges(bridges, r.guestHosts, requiredHosts)
+	}
+	var result tofurun.Result
+	err := runWithDockerBridges(ctx, bridges, r.directory, request.Environment, writable, func(bridgeContext context.Context, bridgeArguments func([]string) []string) error {
+		request.Args = bridgeArguments(args)
+		var runErr error
+		result, runErr = runExplicitStep(bridgeContext, step, request, scope)
+		return runErr
+	})
+	return result, err
+}
+
+func runExplicitStep(ctx context.Context, step string, request tofurun.Request, scope *hostlock.Scope) (tofurun.Result, error) {
 	result, err := tofurun.Run(ctx, request, scope)
 	if errors.Is(err, tofurun.ErrIncomplete) {
 		return result, tofuFailure(ctx, err, result.LogPath)

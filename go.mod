@@ -5,7 +5,7 @@ go 1.27.1
 toolchain go1.27.3
 
 require (
-	github.com/agoodkind/terraform-provider-pveguest v0.1.2-0.20261105091400-67c013408690
+	github.com/agoodkind/terraform-provider-pveguest v0.1.2-0.20261107101252-87e6a8b7e4fc
 	github.com/hashicorp/hcl/v2 v2.25.0
 	github.com/mattn/go-shellwords v1.0.16
 	github.com/nikolalohinski/gonja/v2 v2.9.1
