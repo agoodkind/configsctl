@@ -63,13 +63,22 @@ type Bridge struct {
 	Insecure       bool   `json:"insecure"`
 }
 
-// GuestKey returns the guest key in the <node>/<vmid> form of guest_hosts.
+// GuestKey returns the guest key in the guest_hosts format.
+//
+// The key joins Node and the decimal representation of VMID with a slash.
+//
+//   - A bridge with Node "pve1" and VMID 123 returns "pve1/123".
 func (b Bridge) GuestKey() string {
 	return b.Node + "/" + strconv.FormatInt(b.VMID, 10)
 }
 
-// Validate requires the guest identity, a supported guest kind, the API
-// endpoint, and both token fields.
+// Validate checks the Docker bridge configuration.
+//
+// The bridge requires a node, a positive VMID, an API endpoint, a token
+// principal, and a token variable. Its kind must be lxc or qemu.
+//
+//   - A bridge with an empty Node returns an error.
+//   - A bridge with Kind "lxc" or "qemu" passes the kind check.
 func (b Bridge) Validate() error {
 	var missing []string
 	if b.Node == "" {
@@ -97,7 +106,13 @@ func (b Bridge) Validate() error {
 	return nil
 }
 
-// ValidateAlias requires an OpenTofu provider alias name.
+// ValidateAlias checks the format of an OpenTofu provider alias.
+//
+// The alias must start with an ASCII letter or an underscore. The remaining
+// characters can be ASCII letters, digits, underscores, or hyphens.
+//
+//   - ValidateAlias("tack_qa_suburban") returns nil.
+//   - ValidateAlias("1guest") returns an error.
 func ValidateAlias(alias string) error {
 	if !aliasPattern.MatchString(alias) {
 		return fmt.Errorf("the Docker bridge alias %q is not an OpenTofu provider alias name", alias)
@@ -126,13 +141,16 @@ type prepared struct {
 	guest  transport.Guest
 }
 
-// Start creates <directory>/docker, starts one proxy on a private socket for
-// each alias, and returns after every socket accepts a connection. For each
-// alias, Start builds a Proxmox API token from TokenPrincipal and the secret
-// that tokens maps to the alias. The proxy accepts every method when writable
-// maps its alias to true. Every other proxy accepts only GET and HEAD requests.
-// The context that Start returns ends when ctx ends or when any proxy stops
-// before Stop. The caller calls Stop after a nil error.
+// Start creates a Docker socket proxy for each provider alias.
+//
+// Start creates <directory>/docker and starts each proxy on a private socket.
+// For each alias, it builds a Proxmox API token from TokenPrincipal and the
+// secret that tokens maps to the alias. Start returns after every socket
+// accepts a connection. The returned context ends when ctx ends or when any
+// proxy stops before Stop. The caller calls Stop after a nil error.
+//
+//   - A proxy accepts every method when writable maps its alias to true.
+//   - Every other proxy accepts only GET and HEAD requests.
 func Start(
 	ctx context.Context, directory string, bridges map[string]Bridge, tokens map[string]string, writable map[string]bool,
 ) (*Session, context.Context, error) {
@@ -191,15 +209,23 @@ func Start(
 	return session, commandContext, nil
 }
 
-// Argument returns the -var=docker_hosts=<map> OpenTofu argument. The map
-// assigns each alias the unix:// address of its socket.
+// Argument returns the OpenTofu argument for docker_hosts.
+//
+// The argument assigns each alias the unix:// address of its socket.
+//
+//   - An alias "web" with socket "/tmp/docker/0.sock" produces
+//     -var=docker_hosts={"web":"unix:///tmp/docker/0.sock"}.
 func (s *Session) Argument() string {
 	return s.argument
 }
 
-// Stop cancels every proxy, waits for each one to return, removes the socket
-// directory, and returns the joined proxy and removal errors. Later calls
-// return the same result.
+// Stop stops the session's Docker socket proxies.
+//
+// Stop cancels every proxy, waits for each one to return, and removes the
+// socket directory. It returns the joined proxy and removal errors. Later
+// calls return the same result.
+//
+//   - Stop returns nil when the proxies and directory removal report no errors.
 func (s *Session) Stop() error {
 	s.stopOnce.Do(func() {
 		s.stopping.Store(true)

@@ -42,8 +42,13 @@ var booleanFlags = map[string]bool{
 	"suppress-forget-errors": true,
 }
 
-// Subcommand returns the first argument that is not a flag. OpenTofu runs
-// that subcommand.
+// Subcommand returns the first argument that does not start with a dash.
+//
+// The function returns an empty command when every argument starts with a
+// dash or args is empty.
+//
+//   - Subcommand([]string{"-chdir=prod", "plan"}) returns "plan".
+//   - Subcommand([]string{"-chdir", "prod", "plan"}) returns "prod".
 func Subcommand(args []string) Command {
 	for _, arg := range args {
 		if !strings.HasPrefix(arg, "-") {
@@ -53,10 +58,15 @@ func Subcommand(args []string) Command {
 	return ""
 }
 
-// Streams reports whether an invocation writes progress to a run log. Plan and
-// refresh return true. Apply and destroy return true when AutoApprove returns
-// true and otherwise keep terminal output for approval prompts. Other
-// subcommands return false.
+// Streams reports whether an invocation writes progress to a run log.
+//
+// Plan and refresh return true. Apply and destroy return the result of
+// AutoApprove, which keeps terminal output for approval prompts when false.
+// Other subcommands return false.
+//
+//   - Streams([]string{"plan"}) returns true.
+//   - Streams([]string{"apply"}) returns false.
+//   - Streams([]string{"apply", "-auto-approve"}) returns true.
 func Streams(args []string) bool {
 	switch Subcommand(args) {
 	case Plan, Refresh:
@@ -68,17 +78,29 @@ func Streams(args []string) bool {
 	}
 }
 
-// AutoApprove reports whether the arguments skip the approval prompt. It
-// accepts every spelling tofu does: one or two leading dashes, bare or with an
-// explicit value.
+// AutoApprove reports whether the arguments select automatic approval.
+//
+// The function reads the auto-approve flag with BooleanArgument and uses
+// false as the default. It accepts one or two leading dashes and accepts a
+// bare flag or an explicit value.
+//
+//   - AutoApprove([]string{"-auto-approve"}) returns true.
+//   - AutoApprove([]string{"--auto-approve=false"}) returns false.
 func AutoApprove(args []string) bool {
 	return BooleanArgument(args, "auto-approve", false)
 }
 
-// BooleanArgument returns the last valid value for name or defaultValue when
-// absent. It accepts one or two dashes, treats a bare flag as true, parses
-// values with [strconv.ParseBool], retains the current result for invalid values,
-// and skips values of other flags that consume an argument.
+// BooleanArgument returns the last valid value of a boolean flag.
+//
+// The function uses defaultValue until it finds a valid value. It accepts
+// one or two leading dashes, treats a bare flag as true, and parses explicit
+// values with [strconv.ParseBool]. Invalid values leave the current result
+// unchanged. The function skips the next argument when another flag consumes
+// a value.
+//
+//   - BooleanArgument([]string{"-input=false", "--input"}, "input", false) returns true.
+//   - BooleanArgument([]string{"-var", "-input", "-input=false"}, "input", true) returns false.
+//   - BooleanArgument([]string{"-input=invalid"}, "input", true) returns true.
 func BooleanArgument(args []string, name string, defaultValue bool) bool {
 	value := defaultValue
 	for index := 0; index < len(args); index++ {
@@ -105,8 +127,14 @@ func BooleanArgument(args []string, name string, defaultValue bool) bool {
 	return value
 }
 
-// ConsumesValue reports whether arg is a flag without "=" that takes the next
-// argument as its value. Every flag except a known boolean flag takes a value.
+// ConsumesValue reports whether arg consumes the next argument as its value.
+//
+// The function returns true when arg starts with "-" and contains no "=",
+// unless the flag name matches a known boolean flag.
+//
+//   - ConsumesValue("-var") returns true.
+//   - ConsumesValue("-var=name=value") returns false.
+//   - ConsumesValue("-no-color") returns false.
 func ConsumesValue(arg string) bool {
 	if !strings.HasPrefix(arg, "-") || strings.Contains(arg, "=") {
 		return false
