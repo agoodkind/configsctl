@@ -479,6 +479,48 @@ The command rejects configurations with unknown or duplicate keys, missing requi
 
 Go callers can use `goodkind.io/configsctl/tofurun` and call `Run(ctx, request, scope)` with a `tofurun.Request`. `Run` returns a `tofurun.Result` and an error. A saved-plan `apply` requires a `*hostlock.Scope` from `(*hostlock.Set).Scope`; the scope must cover every host in `Request.RequiredHosts`. `Scope.Check` verifies the scope and its required hosts.
 
+## configs-network-watch
+
+`configs-network-watch` monitors an IPv6 route or a network interface on Linux. Each configsctl GitHub release includes `configs-network-watch_linux_amd64.tar.gz` and `configs-network-watch_linux_arm64.tar.gz`.
+
+```text
+configs-network-watch route --destination PREFIX --gateway ADDRESS --interface NAME --interval-seconds SECONDS --failure-threshold COUNT --metric METRIC
+configs-network-watch interface --interface NAME --dhcp4-unit UNIT --dhcp6-unit UNIT --route-unit UNIT
+```
+
+Each subcommand requires every flag shown for that subcommand. Unit names must end in `.service`.
+
+The flags configure the route and interface checks.
+
+Flags:
+
+| Subcommand | Flag | Value |
+| --- | --- | --- |
+| `route` | `--destination` | IPv6 destination prefix with host bits clear. |
+| `route` | `--gateway` | IPv6 gateway address without a zone. |
+| `route`, `interface` | `--interface` | Network interface name. |
+| `route` | `--interval-seconds` | Seconds to wait after each probe. The value must be at least 1. |
+| `route` | `--failure-threshold` | Consecutive failed probes before route deletion. The value must be at least 1. |
+| `route` | `--metric` | Route metric. The value must be at least 1. |
+| `interface` | `--dhcp4-unit` | Kea DHCPv4 service unit. |
+| `interface` | `--dhcp6-unit` | Kea DHCPv6 service unit. |
+| `interface` | `--route-unit` | Route service unit. |
+
+The `route` subcommand sends an ICMPv6 echo request to the gateway on the specified interface and waits up to one second for a reply. After a reply, it replaces the static route in the main table using the supplied destination, gateway, interface, and metric. After the configured number of consecutive failed probes, it deletes the matching route and repeats the deletion after each later failed probe. It also deletes that route before exit, including after `SIGINT` or `SIGTERM`. Routes with different attributes remain. The command requires `CAP_NET_RAW` and `CAP_NET_ADMIN`, which root has.
+
+The `interface` subcommand checks the interface index every two seconds. When a found index differs from the last known index, it runs `try-restart` for each installed Kea unit and `restart` for the installed route unit, including when the route unit is inactive. A missing interface retains the last known index. A carrier change that preserves the index does not restart units. The command skips units that systemd reports as `not-found`.
+
+For each active Kea unit, the `interface` subcommand checks its UDP socket while the interface is up. DHCPv4 requires a listening UDP 67 socket on an IPv4 address of the interface. DHCPv6 requires a listening UDP 547 socket bound to the interface index. After 15 polls without the required socket, the command runs `try-restart` for that unit and resets its count. An inactive unit, a missing or down interface, or a present socket also resets the count. A failed systemd, netlink, or socket query leaves the count unchanged. The command logs failed restarts and continues polling. It connects to systemd at `/run/systemd/private` and requires root.
+
+Both subcommands use these exit statuses:
+
+| Status | Meaning |
+| --- | --- |
+| `0` | The command stopped after `SIGTERM`. |
+| `130` | The command stopped after `SIGINT`. |
+| `1` | A runtime operation failed. |
+| `2` | The command line was invalid. |
+
 ## Prerequisites
 
 - Go at the version in `go.mod`.
@@ -497,3 +539,4 @@ Lint, build, test, and release come from the shared go-makefile pipeline, so use
 1. Run `make build` to run the build and its required checks.
 2. Run `make test` to run the tests.
 3. Run `make help` to list every other target.
+4. Run `sudo env "PATH=$PATH" make test "GO_TEST_TARGETS=-count=1 -v ./cmd/configs-network-watch/"` on a Linux host booted with systemd to run the network namespace and temporary systemd unit tests.
