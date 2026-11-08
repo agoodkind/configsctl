@@ -167,13 +167,36 @@ func optionName(argument string) (string, bool) {
 	return name, true
 }
 
-func redirectionOption(args []string) string {
-	for _, argument := range args {
+type tofuOption struct {
+	name  string
+	value string
+}
+
+func tofuOptions(args []string) []tofuOption {
+	var options []tofuOption
+	for index := 0; index < len(args); index++ {
+		argument := args[index]
 		if argument == argumentTerminator {
-			return ""
+			break
 		}
-		if name, option := optionName(argument); option && slices.Contains(dockerBridgeRedirections, name) {
-			return name
+		name, option := optionName(argument)
+		if !option {
+			continue
+		}
+		_, value, inline := strings.Cut(strings.TrimLeft(argument, "-"), "=")
+		if !inline && tofuargs.ConsumesValue(argument) && index+1 < len(args) {
+			index++
+			value = args[index]
+		}
+		options = append(options, tofuOption{name: name, value: value})
+	}
+	return options
+}
+
+func redirectionOption(args []string) string {
+	for _, option := range tofuOptions(args) {
+		if slices.Contains(dockerBridgeRedirections, option.name) {
+			return option.name
 		}
 	}
 	return ""
@@ -201,24 +224,18 @@ func canonicalTofuArguments(args []string, generated ...string) []string {
 			options = append(options, args[index])
 		}
 	}
-	return slices.Concat(args[:subcommand+1], options, generated, positionals, terminated)
+	if terminated == nil {
+		return slices.Concat(args[:subcommand+1], options, generated, positionals)
+	}
+	return slices.Concat(args[:subcommand+1], options, generated, terminated[:1], positionals, terminated[1:])
 }
 
 func variableAssignments(args []string) []string {
 	var assignments []string
-	for index, argument := range args {
-		if argument == argumentTerminator {
-			break
+	for _, option := range tofuOptions(args) {
+		if option.name == tofuVariableArgument {
+			assignments = append(assignments, option.value)
 		}
-		name, option := optionName(argument)
-		if !option || name != tofuVariableArgument {
-			continue
-		}
-		_, value, inline := strings.Cut(strings.TrimLeft(argument, "-"), "=")
-		if !inline && index+1 < len(args) {
-			value = args[index+1]
-		}
-		assignments = append(assignments, value)
 	}
 	return assignments
 }
