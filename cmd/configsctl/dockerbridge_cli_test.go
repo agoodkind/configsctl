@@ -370,18 +370,24 @@ func TestTofuDockerBridgeRedactsOperatorToken(t *testing.T) {
 			}
 		})
 	}
-	t.Run("plan with a misspelled option", func(t *testing.T) {
-		fixture := newDockerBridgeFixture(t, configuration, workspace)
-		fixture.extraEnv = append(fixture.extraEnv, "TF_VAR_vault_operator="+environmentToken)
-		result := fixture.mutate(t, "plan", "-no-colour", "-var=vault_operator="+argumentToken)
-		if !strings.Contains(result.stderr, "tofu run") {
-			t.Fatalf("configsctl did not log the OpenTofu arguments: %s", result.stderr)
-		}
-		output := result.stdout + result.stderr
-		if strings.Contains(output, environmentToken) || strings.Contains(output, argumentToken) {
-			t.Fatal("the plan output disclosed an operator Docker bridge token after a misspelled option")
-		}
-	})
+	misspelled := map[string][]string{
+		"inline":   {"plan", "-no-colour", "-var=vault_operator=" + argumentToken},
+		"separate": {"plan", "-no-colour", "-var", "vault_operator=" + argumentToken, "-input=false"},
+	}
+	for spelling, args := range misspelled {
+		t.Run("plan with a misspelled option and "+spelling+" -var", func(t *testing.T) {
+			fixture := newDockerBridgeFixture(t, configuration, workspace)
+			fixture.extraEnv = append(fixture.extraEnv, "TF_VAR_vault_operator="+environmentToken)
+			result := fixture.mutate(t, args...)
+			if !strings.Contains(result.stderr, "tofu run") {
+				t.Fatalf("configsctl did not log the OpenTofu arguments: %s", result.stderr)
+			}
+			output := result.stdout + result.stderr
+			if strings.Contains(output, environmentToken) || strings.Contains(output, argumentToken) {
+				t.Fatal("the plan output disclosed an operator Docker bridge token after a misspelled option")
+			}
+		})
+	}
 	t.Run("plan with a consumed terminator", func(t *testing.T) {
 		fixture := newDockerBridgeFixture(t, configuration, workspace)
 		fixture.extraEnv = append(fixture.extraEnv, "TF_VAR_vault_operator="+environmentToken)
