@@ -388,6 +388,24 @@ func TestTofuDockerBridgeRedactsOperatorToken(t *testing.T) {
 			}
 		})
 	}
+	controlCharacter := map[string][]string{
+		"inline":   {"plan", "-input=false", "-var=vault_operator=" + argumentToken + "\t"},
+		"separate": {"plan", "-input=false", "-var", "vault_operator=" + argumentToken + "\t"},
+	}
+	for spelling, args := range controlCharacter {
+		t.Run("plan with a control character in the "+spelling+" -var", func(t *testing.T) {
+			fixture := newDockerBridgeFixture(t, configuration, workspace)
+			fixture.extraEnv = append(fixture.extraEnv, "TF_VAR_vault_operator="+environmentToken)
+			result := fixture.mutate(t, args...)
+			output := result.stdout + result.stderr
+			if strings.Contains(output, environmentToken) || strings.Contains(output, argumentToken) {
+				t.Fatal("the refusal disclosed an operator Docker bridge token")
+			}
+			if result.exitCode == 0 || !strings.Contains(result.stderr, "contains a character that is not printable ASCII") {
+				t.Fatalf("configsctl did not refuse the control character: %s", result.stderr)
+			}
+		})
+	}
 	t.Run("plan with a consumed terminator", func(t *testing.T) {
 		fixture := newDockerBridgeFixture(t, configuration, workspace)
 		fixture.extraEnv = append(fixture.extraEnv, "TF_VAR_vault_operator="+environmentToken)
