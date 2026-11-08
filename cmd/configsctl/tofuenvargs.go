@@ -29,6 +29,9 @@ func tofuInvocation(settings tofuSettings, workspace, passwordFile string, args 
 }
 
 func prepareTofuInputs(settings tofuSettings, workspace string, expanded, childEnv []string) (safeArgs, preparedEnv []string, err error) {
+	if _, err := sanitizeTofuArgs(expanded); err != nil {
+		return nil, nil, err
+	}
 	if settings.source != nil {
 		if settings.ProviderMirror == nil {
 			childEnv, err = settings.source.environment(childEnv)
