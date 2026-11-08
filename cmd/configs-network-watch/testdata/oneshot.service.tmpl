@@ -1,0 +1,8 @@
+[Unit]
+Description=configs-network-watch test route unit
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment={{.ModeVariable}}={{.Mode}}
+ExecStart={{.Executable}}

@@ -1,0 +1,10 @@
+[Unit]
+Description=configs-network-watch test helper {{.Mode}}
+
+[Service]
+Type=simple
+NetworkNamespacePath={{.NamespacePath}}
+Environment={{.ModeVariable}}={{.Mode}}
+Environment={{.AddressVariable}}={{.Address}}
+Environment={{.InterfaceVariable}}={{.Interface}}
+ExecStart={{.Executable}}
