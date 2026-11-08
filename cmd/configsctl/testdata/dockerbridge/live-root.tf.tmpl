@@ -1,0 +1,37 @@
+terraform {
+  required_providers {
+    docker = {
+      source  = "kreuzwerker/docker"
+      version = "4.6.0"
+    }
+  }
+}
+
+variable "docker_hosts" {
+  type      = map(string)
+  ephemeral = true
+}
+
+variable "{{.TokenVariable}}" {
+  type      = string
+  sensitive = true
+  ephemeral = true
+}
+
+provider "docker" {
+  alias = "guest"
+  host  = var.docker_hosts["guest"]
+}
+
+module "base" {
+  source       = "./item"
+  for_each     = toset(["guest"])
+  providers    = { docker = docker.guest }
+  run_label    = "{{.RunLabel}}"
+  pause_marker = "{{.PauseMarker}}"
+  volumes = {
+{{- range $key, $name := .Volumes}}
+    {{$key}} = "{{$name}}"
+{{- end}}
+  }
+}

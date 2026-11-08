@@ -1,0 +1,24 @@
+output "lock_targets" {
+  value = {
+    guest_hosts      = { "{{.Node}}/{{.VMID}}" = "{{.LockHost}}" }
+    module_key_hosts = { "module.base" = { guest = "{{.LockHost}}" } }
+    lock_endpoints = {
+      "{{.LockHost}}" = { user = "{{.LockUser}}", address = "{{.LockAddress}}" }
+    }
+  }
+}
+
+output "docker_bridges" {
+  value = {
+    guest = {
+      node            = "{{.Node}}"
+      node_name       = "{{.Node}}"
+      endpoint        = "{{.Endpoint}}"
+      insecure        = {{.Insecure}}
+      vmid            = {{.VMID}}
+      kind            = "{{.Kind}}"
+      token_principal = "{{.TokenPrincipal}}"
+      token_variable  = "{{.TokenVariable}}"
+    }
+  }
+}
