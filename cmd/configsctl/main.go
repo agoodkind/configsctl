@@ -60,8 +60,7 @@ func main() {
 // secret patterns to build a redactor over its own log file, which sits outside
 // the stdout and stderr redactors installed for the process.
 type cmdEnv struct {
-	secrets []redact.Pattern
-	// dockerBridges maps each Docker provider alias of the selected workspace to its guest.
+	secrets       []redact.Pattern
 	dockerBridges map[string]dockerbridge.Bridge
 }
 
