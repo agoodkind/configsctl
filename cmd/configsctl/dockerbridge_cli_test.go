@@ -197,6 +197,11 @@ func TestTofuRefusesInvalidDockerBridges(t *testing.T) {
 			files: nil, extraEnv: nil, args: []string{"-chdir=" + t.TempDir()},
 			want: "-chdir selects another configuration",
 		},
+		"config after a consumed terminator": {
+			configuration: configuration, workspace: workspace,
+			files: nil, extraEnv: nil, args: []string{"-state", "--", "-config=" + t.TempDir()},
+			want: "-config selects another configuration",
+		},
 		"config redirection": {
 			configuration: configuration, workspace: workspace,
 			files: nil, extraEnv: nil, args: []string{"-config=" + t.TempDir()},
@@ -236,6 +241,27 @@ func TestTofuDockerBridgeKeepsFlagsAfterDescriptionOverride(t *testing.T) {
 // TestTofuDockerBridgeOverridesLaterImportVariables places the decoy
 // -var-file after the import address and ID. The docker_hosts validation rule
 // fails when the decoy value wins.
+func TestTofuDockerBridgeServesSavedPlanBeforeTerminator(t *testing.T) {
+	fixture, variableFile := newDecoyDockerBridgeFixture(t)
+	plan := fixture.mutate(t, "plan", "-input=false", variableFile, "-out=bridge.plan")
+	requireSuccess(t, plan)
+	apply := fixture.mutate(t, "apply", "-input=false", variableFile, "bridge.plan", "--")
+	requireSuccess(t, apply)
+	fixture.requireBridgeSocketUsed(t, plan, apply)
+}
+
+func TestTofuDockerBridgeImportsPositionalsAroundTerminator(t *testing.T) {
+	fixture := newDockerBridgeFixture(t, dockerBridgeFixtureFile(t, "configuration.tf"), dockerBridgeFixtureFile(t, "root.tf"))
+	address := `module.base["guest_alpha"].terraform_data.item`
+	result := fixture.mutate(t, "import", "-input=false", address, "--", "00000000-0000-4000-8000-000000000004")
+	requireSuccess(t, result)
+	state := fixture.mutate(t, "state", "list")
+	requireSuccess(t, state)
+	if !strings.Contains(state.stdout, address) {
+		t.Fatalf("the import did not add %s to the state: %s", address, state.stdout)
+	}
+}
+
 func TestTofuDockerBridgeKeepsImportPositionalsAfterBooleanOption(t *testing.T) {
 	fixture := newDockerBridgeFixture(t, dockerBridgeFixtureFile(t, "configuration.tf"), dockerBridgeFixtureFile(t, "root.tf"))
 	address := `module.base["guest_alpha"].terraform_data.item`
@@ -344,4 +370,16 @@ func TestTofuDockerBridgeRedactsOperatorToken(t *testing.T) {
 			}
 		})
 	}
+	t.Run("plan with a consumed terminator", func(t *testing.T) {
+		fixture := newDockerBridgeFixture(t, configuration, workspace)
+		fixture.extraEnv = append(fixture.extraEnv, "TF_VAR_vault_operator="+environmentToken)
+		result := fixture.mutate(t, "plan", "-input=false", "-state", "--", "-var=vault_operator="+argumentToken)
+		if !strings.Contains(result.stderr, "tofu run") {
+			t.Fatalf("configsctl did not log the OpenTofu arguments: %s", result.stderr)
+		}
+		output := result.stdout + result.stderr
+		if strings.Contains(output, environmentToken) || strings.Contains(output, argumentToken) {
+			t.Fatal("the plan output disclosed an operator Docker bridge token after a consumed terminator")
+		}
+	})
 }
