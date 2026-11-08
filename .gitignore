@@ -1,5 +1,7 @@
 .make/
 /dist/
+/docker-overlay/dist/
+/docker-overlay/src/
 go.work
 go.work.sum
 !.golangci-lint-baseline.txt

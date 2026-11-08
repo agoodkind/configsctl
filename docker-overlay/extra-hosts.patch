@@ -1,0 +1,13 @@
+diff --git a/internal/provider/resource_docker_container_structures.go b/internal/provider/resource_docker_container_structures.go
+index 2ec7ada..48cf995 100644
+--- a/internal/provider/resource_docker_container_structures.go
++++ b/internal/provider/resource_docker_container_structures.go
+@@ -449,7 +449,7 @@ func getDockerContainerMounts(container container.InspectResponse) []map[string]
+ func flattenExtraHosts(in []string) []interface{} {
+ 	extraHosts := make([]interface{}, len(in))
+ 	for i, extraHost := range in {
+-		extraHostSplit := strings.Split(extraHost, ":")
++		extraHostSplit := strings.SplitN(extraHost, ":", 2)
+ 		extraHosts[i] = map[string]interface{}{
+ 			"host": extraHostSplit[0],
+ 			"ip":   extraHostSplit[1],

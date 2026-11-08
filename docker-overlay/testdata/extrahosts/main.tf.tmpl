@@ -1,0 +1,34 @@
+terraform {
+  required_providers {
+    docker = {
+      source  = "kreuzwerker/docker"
+      version = {{printf "%q" .ProviderVersion}}
+    }
+  }
+}
+
+variable "container_name" {
+  type = string
+}
+
+resource "docker_image" "busybox" {
+  name         = "busybox:1.37.0"
+  keep_locally = true
+}
+
+resource "docker_container" "probe" {
+  name        = var.container_name
+  image       = docker_image.busybox.image_id
+  command     = ["sleep", "3600"]
+  stop_signal = "SIGKILL"
+
+  host {
+    host = {{printf "%q" .IPv4Host}}
+    ip   = {{printf "%q" .IPv4Address}}
+  }
+
+  host {
+    host = {{printf "%q" .IPv6Host}}
+    ip   = {{printf "%q" .IPv6Address}}
+  }
+}
