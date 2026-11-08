@@ -499,14 +499,16 @@ Flags:
 | `route` | `--destination` | IPv6 destination prefix with host bits clear. |
 | `route` | `--gateway` | IPv6 gateway address without a zone. |
 | `route`, `interface` | `--interface` | Network interface name. |
-| `route` | `--interval-seconds` | Seconds to wait after each probe. The value must be at least 1. |
-| `route` | `--failure-threshold` | Consecutive failed probes before route deletion. The value must be at least 1. |
-| `route` | `--metric` | Route metric. The value must be at least 1. |
+| `route` | `--interval-seconds` | Seconds to wait after each probe, from 1 through 9223372036. |
+| `route` | `--failure-threshold` | Consecutive failed probes before route deletion, from 1 through the largest Go `int`. |
+| `route` | `--metric` | Route metric, from 1 through 4294967295. |
 | `interface` | `--dhcp4-unit` | Kea DHCPv4 service unit. |
 | `interface` | `--dhcp6-unit` | Kea DHCPv6 service unit. |
 | `interface` | `--route-unit` | Route service unit. |
 
-The `route` subcommand sends an ICMPv6 echo request to the gateway on the specified interface and waits up to one second for a reply. After a reply, it replaces the static route in the main table using the supplied destination, gateway, interface, and metric. After the configured number of consecutive failed probes, it deletes the matching route and repeats the deletion after each later failed probe. It also deletes that route before exit, including after `SIGINT` or `SIGTERM`. Routes with different attributes remain. The command requires `CAP_NET_RAW` and `CAP_NET_ADMIN`, which root has.
+The `route` subcommand sends an ICMPv6 echo request to the gateway on the specified interface. A deadline of one second covers the send and the reply. After a successful probe, the command checks the IPv6 main table for an ordinary unicast static route with the configured destination, gateway, interface, and metric. If that route is absent, the command adds it unless another route uses the same destination and metric. The command logs `network_watch.route.conflict` when another route prevents installation and continues probing.
+
+After the configured number of consecutive failed probes, after each later failed probe, and before exit, the command deletes the tracked route if it exists. It refuses deletion and logs `network_watch.route.conflict` if a route using a nexthop object has the same destination, metric, and static protocol. The command continues probing after a refused deletion, but exits with status `1` if it cannot delete the route on exit. Other routes remain. The command requires `CAP_NET_RAW` and `CAP_NET_ADMIN`, which root has.
 
 The `interface` subcommand checks the interface index every two seconds. When a found index differs from the last known index, it runs `try-restart` for each installed Kea unit and `restart` for the installed route unit, including when the route unit is inactive. A missing interface retains the last known index. A carrier change that preserves the index does not restart units. The command skips units that systemd reports as `not-found`.
 
@@ -518,7 +520,7 @@ Both subcommands use these exit statuses:
 | --- | --- |
 | `0` | The command stopped after `SIGTERM`. |
 | `130` | The command stopped after `SIGINT`. |
-| `1` | A runtime operation failed. |
+| `1` | A runtime operation failed, the raw ICMPv6 socket permission was denied, or route deletion was refused on exit. |
 | `2` | The command line was invalid. |
 
 ## Prerequisites
