@@ -12,6 +12,10 @@ CMD    := ./cmd/configsctl
 # so `configsctl version` reports the commit a binary was built from.
 VPKG   := goodkind.io/configsctl/internal/version
 
+# Release configsctl on all supported platforms and configs-network-watch
+# on Linux amd64 and arm64.
+RELEASE_BINS :=configsctl:./cmd/configsctl configs-network-watch:./cmd/configs-network-watch:platforms=linux/amd64,platforms=linux/arm64
+
 # Native encrypted state and real Ansible tests exceed ten minutes on CI runners.
 GO_TEST_TARGETS := -timeout=30m ./...
 
