@@ -299,7 +299,7 @@ func runTofuWithSource(ctx context.Context, env cmdEnv, args []string) error {
 	if err != nil {
 		return err
 	}
-	env, restoreOperator, err := registerOperatorRedaction(cmdEnv{secrets: env.secrets, dockerBridges: loaded.Tofu.dockerBridges}, loaded.Tofu, workspaceDir, safeArgs, childEnv)
+	env, safeArgs, restoreOperator, err := prepareTofuRedaction(cmdEnv{secrets: env.secrets, dockerBridges: loaded.Tofu.dockerBridges}, loaded.Tofu, workspaceDir, safeArgs, childEnv)
 	if err != nil {
 		return err
 	}

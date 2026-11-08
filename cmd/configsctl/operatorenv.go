@@ -42,6 +42,17 @@ func registerOperatorRedaction(env cmdEnv, settings tofuSettings, workspace stri
 	return env, restore, nil
 }
 
+func prepareTofuRedaction(env cmdEnv, settings tofuSettings, workspace string, args, environment []string) (cmdEnv, []string, func(), error) {
+	env, restore, err := registerOperatorRedaction(env, settings, workspace, args, environment)
+	if err != nil {
+		return env, nil, nil, err
+	}
+	if bridged, _ := dockerBridgeAccess(args); bridged && len(settings.dockerBridges) > 0 {
+		args = canonicalTofuArguments(args)
+	}
+	return env, args, restore, nil
+}
+
 func protectedOperatorPatterns(settings tofuSettings, workspace string, environment []string) ([]redact.Pattern, error) {
 	inputWorkspace := workspace
 	if settings.source != nil {

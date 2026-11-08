@@ -60,9 +60,6 @@ func prepareTofuInvocation(settings tofuSettings, workspace, passwordFile string
 	if err := requireDockerBridgeInputs(settings.dockerBridges, safeArgs, childEnv); err != nil {
 		return nil, nil, err
 	}
-	if bridged, _ := dockerBridgeAccess(safeArgs); bridged && len(settings.dockerBridges) > 0 {
-		safeArgs = canonicalTofuArguments(safeArgs)
-	}
 	return safeArgs, childEnv, nil
 }
 
