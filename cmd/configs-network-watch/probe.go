@@ -27,9 +27,8 @@ const (
 
 var echoPayload = []byte("configs-network-watch")
 
-// errProbeSocket marks a failure to open the raw ICMPv6 socket, which the
-// tracker cannot recover from by probing again.
-var errProbeSocket = errors.New("open ICMPv6 socket")
+// errProbePermission marks a permission error when opening a raw ICMPv6 socket.
+var errProbePermission = errors.New("no permission to open a raw ICMPv6 socket")
 
 // errProbeStopped marks a probe that ended because its context ended.
 var errProbeStopped = errors.New("ICMPv6 probe stopped")
@@ -79,9 +78,12 @@ func (prober *echoProber) openSocket(ctx context.Context, target netip.Addr) (ne
 	if bindErr != nil {
 		return nil, probeFailure(target, prober.interfaceName, "bind ICMPv6 socket to "+prober.interfaceName, bindErr)
 	}
+	if errors.Is(err, unix.EPERM) || errors.Is(err, unix.EACCES) {
+		slog.Error("network_watch.probe.socket_permission_denied", "interface", prober.interfaceName, "err", err)
+		return nil, fmt.Errorf("%w: %w", errProbePermission, err)
+	}
 	if err != nil {
-		slog.Error("network_watch.probe.socket_failed", "interface", prober.interfaceName, "err", err)
-		return nil, fmt.Errorf("%w: %w", errProbeSocket, err)
+		return nil, probeFailure(target, prober.interfaceName, "open ICMPv6 socket", err)
 	}
 	return packetConn, nil
 }
@@ -113,8 +115,8 @@ func (prober *echoProber) probe(ctx context.Context, target netip.Addr, timeout 
 	if err != nil {
 		return probeFailure(target, prober.interfaceName, "marshal ICMPv6 echo request", err)
 	}
-	if err := packetConn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
-		return probeFailure(target, prober.interfaceName, "set ICMPv6 read deadline", err)
+	if err := packetConn.SetDeadline(time.Now().Add(timeout)); err != nil {
+		return probeFailure(target, prober.interfaceName, "set ICMPv6 deadline", err)
 	}
 	destination := &net.IPAddr{IP: target.AsSlice(), Zone: ""}
 	if target.IsLinkLocalUnicast() {
