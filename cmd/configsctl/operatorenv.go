@@ -65,9 +65,25 @@ func protectedOperatorPatterns(settings tofuSettings, workspace string, environm
 	return patterns, nil
 }
 
+func rawVariableAssignments(args []string) []string {
+	var assignments []string
+	for index, argument := range args {
+		name, value, inline := strings.Cut(strings.TrimLeft(argument, "-"), "=")
+		if !strings.HasPrefix(argument, "-") || name != tofuVariableArgument {
+			continue
+		}
+		if inline {
+			assignments = append(assignments, value)
+		} else if index+1 < len(args) {
+			assignments = append(assignments, args[index+1])
+		}
+	}
+	return assignments
+}
+
 func dockerBridgeTokenPatterns(bridges map[string]dockerbridge.Bridge, args, environment []string) []redact.Pattern {
 	var patterns []redact.Pattern
-	assignments := variableAssignments(args)
+	assignments := rawVariableAssignments(args)
 	for _, alias := range slices.Sorted(maps.Keys(bridges)) {
 		token := bridges[alias].TokenVariable
 		key := tofuVariablePrefix + token
