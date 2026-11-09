@@ -12,11 +12,13 @@ func TestValidate(t *testing.T) {
 	if key, valid := Validate(ok); !valid {
 		t.Fatalf("Validate(16-char) = (%q,false), want valid", key)
 	}
+
 	short := []Pattern{{Value: []byte("short"), Label: "vault_bad"}}
 	key, valid := Validate(short)
 	if valid || key != "vault_bad" {
 		t.Fatalf("Validate(short) = (%q,%v), want (vault_bad,false)", key, valid)
 	}
+
 	empty := []Pattern{{Value: []byte(""), Label: "vault_empty"}}
 	if key, valid := Validate(empty); !valid {
 		t.Fatalf("Validate(empty value) = (%q,false), want valid (empty ignored)", key)
@@ -25,7 +27,10 @@ func TestValidate(t *testing.T) {
 
 func TestMergeSpans(t *testing.T) {
 	in := []labeledSpan{
-		{span{1, 3}, "a"}, {span{2, 4}, "b"}, {span{4, 6}, "c"}, {span{8, 9}, "d"},
+		{span{1, 3}, "a"},
+		{span{2, 4}, "b"},
+		{span{4, 6}, "c"},
+		{span{8, 9}, "d"},
 	}
 	// [1,3)&[2,4) overlap (2<3) -> [1,4); [4,6) only touches end 4, stays separate;
 	// [8,9) separate.
@@ -40,14 +45,17 @@ func redactAll(t *testing.T, patterns []Pattern, chunks ...string) string {
 	t.Helper()
 	var sb strings.Builder
 	w := New(&sb, patterns)
+
 	for _, c := range chunks {
 		if _, err := w.Write([]byte(c)); err != nil {
 			t.Fatalf("Write: %v", err)
 		}
 	}
+
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
+
 	return sb.String()
 }
 
@@ -88,9 +96,11 @@ func TestWriterEmptyPatternsPassthrough(t *testing.T) {
 func TestWriterByteAtATime(t *testing.T) {
 	pats := []Pattern{{Value: []byte("supersecretvalue1234"), Label: "vault_token"}}
 	chunks := make([]string, 0, len("a=supersecretvalue1234;b"))
+
 	for _, b := range []byte("a=supersecretvalue1234;b") {
 		chunks = append(chunks, string([]byte{b}))
 	}
+
 	got := redactAll(t, pats, chunks...)
 	if got != "a=<redacted:vault_token>;b" {
 		t.Fatalf("got %q", got)
@@ -112,6 +122,7 @@ func TestWriterEmitsNonMatchingTextImmediately(t *testing.T) {
 	if _, err := w.Write([]byte(line)); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
+
 	if sb.String() != line {
 		t.Fatalf("held back non-matching text: got %q, want %q", sb.String(), line)
 	}
@@ -130,19 +141,24 @@ func TestWriterHoldsBackOnlyThePartialMatch(t *testing.T) {
 	if _, err := w.Write([]byte("ok line\n" + head)); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
+
 	if got := sb.String(); got != "ok line\n" {
 		t.Fatalf("after partial secret, dst = %q, want %q", got, "ok line\n")
 	}
+
 	if _, err := w.Write([]byte(secret[8:] + "\n")); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
+
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
+
 	want := "ok line\n<redacted:vault_token>\n"
 	if got := sb.String(); got != want {
 		t.Fatalf("dst = %q, want %q", got, want)
 	}
+
 	if strings.Contains(sb.String(), head) {
 		t.Fatalf("leaked a secret fragment: %q", sb.String())
 	}

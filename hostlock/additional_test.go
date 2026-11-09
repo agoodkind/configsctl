@@ -14,7 +14,14 @@ func TestAcquireAdditionalRetainsTheHostAndLocksTheSelectedGuest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	set, err := hostlock.AcquireAll(t.Context(), []hostlock.Host{host}, firstRun, "controller-a", hostlock.DefaultLease())
+
+	set, err := hostlock.AcquireAll(
+		t.Context(),
+		[]hostlock.Host{host},
+		firstRun,
+		"controller-a",
+		hostlock.DefaultLease(),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,24 +32,36 @@ func TestAcquireAdditionalRetainsTheHostAndLocksTheSelectedGuest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if err := set.AcquireAdditional(t.Context(), []hostlock.Host{host, guest}); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := before.Check([]string{guest.Name}); !errors.Is(err, hostlock.ErrScope) {
 		t.Fatal("the earlier scope accepted a guest that it did not lock")
 	}
+
 	after, err := set.Scope()
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if err := after.Check([]string{host.Name, guest.Name}); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := set.RenewAll(t.Context()); err != nil {
 		t.Fatal(err)
 	}
+
 	for _, target := range []hostlock.Host{host, guest} {
-		_, err := hostlock.AcquireAll(t.Context(), []hostlock.Host{target}, secondRun, "controller-b", hostlock.DefaultLease())
+		_, err := hostlock.AcquireAll(
+			t.Context(),
+			[]hostlock.Host{target},
+			secondRun,
+			"controller-b",
+			hostlock.DefaultLease(),
+		)
 		var held *hostlock.HeldError
 		if !errors.As(err, &held) || held.Host != target.Name {
 			t.Fatal("another run acquired a host or guest lock from the existing set")
@@ -56,12 +75,25 @@ func TestAdditionalConflictRetainsTheCredentialHostLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	set, err := hostlock.AcquireAll(t.Context(), []hostlock.Host{host}, firstRun, "controller-a", hostlock.DefaultLease())
+
+	set, err := hostlock.AcquireAll(
+		t.Context(),
+		[]hostlock.Host{host},
+		firstRun,
+		"controller-a",
+		hostlock.DefaultLease(),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer set.ReleaseAll(context.WithoutCancel(t.Context()))
-	other, err := hostlock.AcquireAll(t.Context(), []hostlock.Host{guest}, secondRun, "controller-b", hostlock.DefaultLease())
+	other, err := hostlock.AcquireAll(
+		t.Context(),
+		[]hostlock.Host{guest},
+		secondRun,
+		"controller-b",
+		hostlock.DefaultLease(),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,10 +102,12 @@ func TestAdditionalConflictRetainsTheCredentialHostLock(t *testing.T) {
 	if err := set.AcquireAdditional(t.Context(), []hostlock.Host{guest}); !errors.As(err, &held) {
 		t.Fatal("the additional acquisition did not refuse another run's guest lock")
 	}
+
 	scope, err := set.Scope()
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if err := scope.Check([]string{host.Name}); err != nil {
 		t.Fatal(err)
 	}

@@ -63,48 +63,84 @@ type Set struct {
 
 // AcquireAll requires a lock on every host. On failure, it attempts to release
 // the locks already acquired and returns the error.
-func AcquireAll(ctx context.Context, hosts []Host, run, controller string, lease Lease) (*Set, error) {
+func AcquireAll(
+	ctx context.Context,
+	hosts []Host,
+	run string,
+	controller string,
+	lease Lease,
+) (*Set, error) {
 	return AcquireAllWithOptions(ctx, hosts, run, controller, lease, Options{})
 }
 
 // AcquireAllWithOptions acquires one Set using the selected transport and renewal policy.
-func AcquireAllWithOptions(ctx context.Context, hosts []Host, run, controller string, lease Lease, options Options) (*Set, error) {
+func AcquireAllWithOptions(
+	ctx context.Context,
+	hosts []Host,
+	run string,
+	controller string,
+	lease Lease,
+	options Options,
+) (*Set, error) {
 	if options.RequestTimeout < 0 {
 		return nil, errors.New("host lock request timeout must not be negative")
 	}
+
 	if lease.TTL < time.Second || lease.RenewInterval <= 0 || lease.RenewInterval >= lease.TTL {
-		return nil, fmt.Errorf("lease of %s with renewal each %s is not usable", lease.TTL, lease.RenewInterval)
+		return nil, fmt.Errorf(
+			"lease of %s with renewal each %s is not usable",
+			lease.TTL,
+			lease.RenewInterval,
+		)
 	}
+
 	stateDir, err := newStateDir()
 	if err != nil {
 		return nil, err
 	}
+
 	set := &Set{
-		run: run, controller: controller, lease: lease, stateDir: stateDir,
-		mu: sync.Mutex{}, membership: sync.Mutex{}, changed: make(chan struct{}, 1), held: nil, deadlines: map[string]time.Time{},
-		acquired: false, released: false, lost: nil, renewalDone: nil,
-		options: options,
+		run:         run,
+		controller:  controller,
+		lease:       lease,
+		stateDir:    stateDir,
+		mu:          sync.Mutex{},
+		membership:  sync.Mutex{},
+		changed:     make(chan struct{}, 1),
+		held:        nil,
+		deadlines:   map[string]time.Time{},
+		acquired:    false,
+		released:    false,
+		lost:        nil,
+		renewalDone: nil,
+		options:     options,
 	}
 	request := command{op: Acquire, run: run, controller: controller, lease: lease.TTL}
+
 	for _, host := range hosts {
 		asked := clock.NowUTC()
 		granted, err := set.options.operation(ctx, host, request)
 		if err != nil {
 			set.ReleaseAll(context.WithoutCancel(ctx))
 			slog.Error("hostlock.acquire_failed", "host", host.Name, "run", run, "err", err)
+
 			return nil, fmt.Errorf("lock %s: %w", host.Name, err)
 		}
+
 		set.held = append(set.held, host)
 		set.advance(host.Name, asked, granted.remaining)
 	}
+
 	if err := set.writeState(set.held); err != nil {
 		set.ReleaseAll(context.WithoutCancel(ctx))
 		return nil, err
 	}
+
 	set.mu.Lock()
 	set.acquired = true
 	set.mu.Unlock()
 	slog.Info("hostlock.acquired", "run", run, "hosts", len(set.held))
+
 	return set, nil
 }
 
@@ -135,15 +171,18 @@ func (s *Set) overdue(now time.Time) (name string, deadline time.Time, lost bool
 	s.readDeclarations()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	for _, host := range s.held {
 		hostDeadline := s.deadlines[host.Name]
 		if !now.Before(hostDeadline) {
 			return host.Name, hostDeadline, true
 		}
+
 		if deadline.IsZero() || hostDeadline.Before(deadline) {
 			name, deadline = host.Name, hostDeadline
 		}
 	}
+
 	return name, deadline, false
 }
 
@@ -151,6 +190,7 @@ func (s *Set) deadline(name string) time.Time {
 	s.readDeclarations()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	return s.deadlines[name]
 }
 
@@ -163,13 +203,16 @@ func (s *Set) RenewAll(ctx context.Context) error {
 	if s.options.StrictRenewal && s.lost != nil {
 		err := s.lost
 		s.mu.Unlock()
+
 		return err
 	}
+
 	hosts := append([]Host{}, s.held...)
 	s.mu.Unlock()
 	roundCtx, endRound := context.WithCancel(ctx)
 	defer endRound()
 	request := command{op: Renew, run: s.run, controller: s.controller, lease: s.lease.TTL}
+
 	results := make(chan renewal, len(hosts))
 	for _, host := range hosts {
 		go func() {
@@ -177,7 +220,15 @@ func (s *Set) RenewAll(ctx context.Context) error {
 			defer func() {
 				if r := recover(); r != nil {
 					err := fmt.Errorf("renew lock on %s panicked: %v", host.Name, r)
-					slog.Error("hostlock.renew_panicked", "host", host.Name, "run", s.run, "err", err)
+					slog.Error(
+						"hostlock.renew_panicked",
+						"host",
+						host.Name,
+						"run",
+						s.run,
+						"err",
+						err,
+					)
 					results <- renewal{host: host, asked: asked, renewed: noLease(), err: err}
 				}
 			}()
@@ -185,12 +236,15 @@ func (s *Set) RenewAll(ctx context.Context) error {
 			results <- renewal{host: host, asked: asked, renewed: renewed, err: err}
 		}()
 	}
+
 	var lost error
+
 	for range hosts {
 		result := <-results
 		if lost != nil {
 			continue
 		}
+
 		if lost = s.record(result); lost != nil {
 			endRound()
 			if s.options.StrictRenewal {
@@ -199,9 +253,11 @@ func (s *Set) RenewAll(ctx context.Context) error {
 			}
 		}
 	}
+
 	if lost != nil {
 		s.markLost(lost)
 	}
+
 	return lost
 }
 
@@ -212,6 +268,7 @@ func (s *Set) markLost(err error) {
 		s.mu.Unlock()
 		return
 	}
+
 	s.lost = err
 	notify := s.notifyStrictLoss
 	s.mu.Unlock()
@@ -233,9 +290,15 @@ func (s *Set) renewHost(ctx context.Context, host Host, request command) (answer
 	if s.options.RequestTimeout > 0 {
 		return s.options.operation(ctx, host, request)
 	}
+
 	timeout := s.lease.RenewTimeout()
-	attemptCtx, cancel := context.WithTimeoutCause(ctx, timeout, fmt.Errorf("%w within %s", errNoAnswer, timeout))
+	attemptCtx, cancel := context.WithTimeoutCause(
+		ctx,
+		timeout,
+		fmt.Errorf("%w within %s", errNoAnswer, timeout),
+	)
 	defer cancel()
+
 	return s.options.operation(attemptCtx, host, request)
 }
 
@@ -247,17 +310,27 @@ func (s *Set) record(result renewal) error {
 		s.advance(host, result.asked, result.renewed.remaining)
 		return nil
 	}
+
 	if s.options.StrictRenewal || errors.Is(err, ErrNotHeld) {
 		slog.Error("hostlock.lost", "host", host, "run", s.run, "err", err)
 		return fmt.Errorf("%w: %s: %w", ErrLost, host, err)
 	}
+
 	deadline := s.deadline(host)
 	if !clock.NowUTC().Before(deadline) {
 		slog.Error("hostlock.lost", "host", host, "run", s.run, "deadline", deadline, "err", err)
-		return fmt.Errorf("%w: %s gave no answer until %s: %w",
-			ErrLost, host, deadline.Format(time.RFC3339), err)
+
+		return fmt.Errorf(
+			"%w: %s gave no answer until %s: %w",
+			ErrLost,
+			host,
+			deadline.Format(time.RFC3339),
+			err,
+		)
 	}
+
 	slog.Warn("hostlock.renew_failed", "host", host, "run", s.run, "deadline", deadline, "err", err)
+
 	return nil
 }
 
@@ -273,6 +346,7 @@ func (s *Set) KeepRenewed(ctx context.Context, lost func(error)) (stop func()) {
 			if renewCtx.Err() == nil {
 				lost(err)
 			}
+
 			cancel()
 		})
 	}
@@ -283,15 +357,18 @@ func (s *Set) KeepRenewed(ctx context.Context, lost func(error)) (stop func()) {
 	if s.options.StrictRenewal {
 		s.notifyStrictLoss = notify
 	}
+
 	s.mu.Unlock()
 	if s.options.StrictRenewal && priorLoss != nil {
 		notify(priorLoss)
 	}
+
 	report := func(err error) {
 		s.markLost(err)
 		notify(err)
 	}
 	var running sync.WaitGroup
+
 	for _, loop := range []func(context.Context, func(error)){s.renewEachInterval, s.watchDeadlines} {
 		running.Go(func() {
 			defer func() {
@@ -302,6 +379,7 @@ func (s *Set) KeepRenewed(ctx context.Context, lost func(error)) (stop func()) {
 			loop(renewCtx, report)
 		})
 	}
+
 	return func() {
 		cancel()
 		running.Wait()
@@ -309,6 +387,7 @@ func (s *Set) KeepRenewed(ctx context.Context, lost func(error)) (stop func()) {
 		if s.renewalDone == renewCtx.Done() {
 			s.notifyStrictLoss = nil
 		}
+
 		s.mu.Unlock()
 	}
 }
@@ -316,6 +395,7 @@ func (s *Set) KeepRenewed(ctx context.Context, lost func(error)) (stop func()) {
 func (s *Set) renewEachInterval(ctx context.Context, report func(error)) {
 	ticker := time.NewTicker(s.lease.RenewInterval)
 	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -336,11 +416,28 @@ func (s *Set) watchDeadlines(ctx context.Context, report func(error)) {
 		now := clock.NowUTC()
 		name, deadline, lost := s.overdue(now)
 		if lost {
-			err := fmt.Errorf("%w: %s gave no answer until %s", ErrLost, name, deadline.Format(time.RFC3339))
-			slog.Error("hostlock.lost", "host", name, "run", s.run, "deadline", deadline, "err", err)
+			err := fmt.Errorf(
+				"%w: %s gave no answer until %s",
+				ErrLost,
+				name,
+				deadline.Format(time.RFC3339),
+			)
+			slog.Error(
+				"hostlock.lost",
+				"host",
+				name,
+				"run",
+				s.run,
+				"deadline",
+				deadline,
+				"err",
+				err,
+			)
 			report(err)
+
 			return
 		}
+
 		if deadline.IsZero() {
 			select {
 			case <-ctx.Done():
@@ -349,6 +446,7 @@ func (s *Set) watchDeadlines(ctx context.Context, report func(error)) {
 				continue
 			}
 		}
+
 		timer := time.NewTimer(deadline.Sub(now))
 		select {
 		case <-ctx.Done():
@@ -385,22 +483,36 @@ func (s *Set) releaseAll(ctx context.Context, checked bool) error {
 	if stop != nil {
 		stop()
 	}
+
 	var failures error
 	var retained []Host
+
 	for _, host := range hosts {
-		if _, err := s.options.operation(ctx, host, command{op: Release, run: s.run, controller: s.controller, lease: s.lease.TTL, restricted: checked}); err != nil {
+		if _, err := s.options.operation(
+			ctx,
+			host,
+			command{
+				op:         Release,
+				run:        s.run,
+				controller: s.controller,
+				lease:      s.lease.TTL,
+				restricted: checked,
+			},
+		); err != nil {
 			failures = errors.Join(failures, fmt.Errorf("release %s: %w", host.Name, err))
 			if checked {
 				retained = append(retained, host)
 			}
 		}
 	}
+
 	s.mu.Lock()
 	s.held = retained
 	s.mu.Unlock()
 	if !checked || failures == nil {
 		removeStateDir(s.stateDir)
 	}
+
 	return failures
 }
 
@@ -416,5 +528,6 @@ func (s *Set) Abandon() {
 	if stop != nil {
 		stop()
 	}
+
 	removeStateDir(s.stateDir)
 }

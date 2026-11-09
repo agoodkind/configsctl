@@ -111,16 +111,29 @@ func newGatedTree(t *testing.T, healthy bool) configsTree {
 	tree := newConfigsTree(t)
 	writeFixtureFile(t, filepath.Join(tree.root, "configsctl.yml"), settingsContent+gatedSettings)
 	guest := filepath.Join(tree.workspaces, "guest")
-	writeFixtureFile(t, filepath.Join(guest, "backend.tf"), fmt.Sprintf(localBackend, "guest.tfstate"))
+	writeFixtureFile(
+		t,
+		filepath.Join(guest, "backend.tf"),
+		fmt.Sprintf(localBackend, "guest.tfstate"),
+	)
 	writeFixtureFile(t, filepath.Join(guest, "main.tf"), fmt.Sprintf(gatedWorkspace, healthy))
 	writeFixtureFile(t, filepath.Join(guest, "item", "main.tf"), gatedItemModule)
 	writeFixtureFile(t, filepath.Join(tree.root, "ansible", "ansible.cfg"), lockedAnsibleConfig)
-	writeFixtureFile(t, filepath.Join(tree.root, "ansible", "inventory", "hosts.yml"), gatedInventory)
-	writeFixtureFile(t, filepath.Join(tree.root, "ansible", "playbooks", gatedPlaybookName+".yml"), gatedPlaybook)
+	writeFixtureFile(
+		t,
+		filepath.Join(tree.root, "ansible", "inventory", "hosts.yml"),
+		gatedInventory,
+	)
+	writeFixtureFile(
+		t,
+		filepath.Join(tree.root, "ansible", "playbooks", gatedPlaybookName+".yml"),
+		gatedPlaybook,
+	)
 
 	initArgs := tofuArgs("guest", "init", "-input=false")
 	requireSuccess(t, runConfigsctl(t, tree, initArgs...), initArgs...)
 	publishConfigsTree(t, tree)
+
 	return tree
 }
 
@@ -131,36 +144,51 @@ func playMarker(tree configsTree) string {
 func requireRefusal(t *testing.T, tree configsTree, result commandResult, fragments ...string) {
 	t.Helper()
 	if result.exitCode == 0 {
-		t.Fatalf("Deploy succeeded. The test expected the plan gate to refuse it.\nstderr: %s", result.stderr)
+		t.Fatalf(
+			"Deploy succeeded. The test expected the plan gate to refuse it.\nstderr: %s",
+			result.stderr,
+		)
 	}
+
 	for _, fragment := range fragments {
 		if !strings.Contains(result.stderr, fragment) {
 			t.Fatalf("stderr = %q, want it to mention %q", result.stderr, fragment)
 		}
 	}
+
 	requireNoFile(t, playMarker(tree))
 }
 
 func writePlanStreams() int {
 	var writers sync.WaitGroup
+
 	streams := map[*os.File]string{os.Stdout: planStdoutLine, os.Stderr: planStderrLine}
 	for stream, line := range streams {
 		writers.Go(func() {
 			_, _ = stream.WriteString(strings.Repeat(line+"\n", planStreamLines))
 		})
 	}
+
 	writers.Wait()
+
 	return 1
 }
 
 func planFailureEvent(t *testing.T, stderr string) string {
 	t.Helper()
+
 	for line := range strings.SplitSeq(stderr, "\n") {
 		if strings.Contains(line, planFailedEvent) {
 			return line
 		}
 	}
-	t.Fatalf("stderr does not contain the %s event\nevents:\n%s", planFailedEvent, eventLines(stderr))
+
+	t.Fatalf(
+		"stderr does not contain the %s event\nevents:\n%s",
+		planFailedEvent,
+		eventLines(stderr),
+	)
+
 	return ""
 }
 
@@ -171,35 +199,44 @@ func readPlanLog(t *testing.T, stderr string) string {
 
 func readRunLog(t *testing.T, output, notice string) string {
 	t.Helper()
+
 	for line := range strings.SplitSeq(output, "\n") {
 		path, found := strings.CutPrefix(line, notice)
 		if !found {
 			continue
 		}
+
 		contents, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("read the run log: %v", err)
 		}
+
 		return string(contents)
 	}
+
 	t.Fatalf("the output does not contain %q\nevents:\n%s", notice, eventLines(output))
+
 	return ""
 }
 
 func eventLines(text string) string {
 	var lines []string
 	inRaceReport := false
+
 	for line := range strings.SplitSeq(text, "\n") {
 		if line == raceReportStart {
 			inRaceReport = true
 		}
+
 		if inRaceReport || strings.Contains(line, slogErrorLevel) {
 			lines = append(lines, line[:min(len(line), eventLineLimit)])
 		}
+
 		if line == raceReportEnd {
 			inRaceReport = false
 		}
 	}
+
 	return strings.Join(lines, "\n")
 }
 
@@ -223,6 +260,7 @@ func writeSplitSecret(secret, between string, args []string) int {
 		fmt.Printf(listHostsFormat, os.Getenv(splitPlayHostVar))
 		return 0
 	}
+
 	half := len(secret) / 2
 	_, _ = os.Stdout.WriteString(secret[:half])
 	time.Sleep(splitWritePause)
@@ -230,7 +268,9 @@ func writeSplitSecret(secret, between string, args []string) int {
 		_, _ = os.Stderr.WriteString(between)
 		time.Sleep(splitWritePause)
 	}
+
 	_, _ = os.Stdout.WriteString(secret[half:] + "\n")
+
 	return 1
 }
 
@@ -248,10 +288,12 @@ func linkTestBinary(t *testing.T, name string) string {
 	if err != nil {
 		t.Fatalf("resolve the test binary: %v", err)
 	}
+
 	binDir := t.TempDir()
 	if err := os.Symlink(testBinary, filepath.Join(binDir, name)); err != nil {
 		t.Fatalf("link the test binary as %s: %v", name, err)
 	}
+
 	return binDir + string(os.PathListSeparator) + os.Getenv("PATH")
 }
 
@@ -264,15 +306,24 @@ func requireSplitSecretRedactedAs(t *testing.T, log, secret, between, label stri
 	t.Helper()
 	half := len(secret) / 2
 	shown := strings.NewReplacer(
-		secret, "<SECRET>", secret[:half], "<SECRET_FIRST_HALF>", secret[half:], "<SECRET_SECOND_HALF>",
-	).Replace(log)
+		secret,
+		"<SECRET>",
+		secret[:half],
+		"<SECRET_FIRST_HALF>",
+		secret[half:],
+		"<SECRET_SECOND_HALF>",
+	).Replace(
+		log,
+	)
 	if strings.Contains(log, secret[:half]) || strings.Contains(log, secret[half:]) {
 		t.Fatalf("the run log contains part of the secret: %q", shown)
 	}
+
 	placeholder := "<redacted:" + label + ">\n"
 	if !strings.Contains(log, placeholder) {
 		t.Fatalf("the run log does not contain %q: %q", placeholder, shown)
 	}
+
 	if !strings.Contains(log, between) {
 		t.Fatalf("the run log does not contain %q: %q", between, shown)
 	}
@@ -284,15 +335,22 @@ func registerSplitSecret(t *testing.T, tree configsTree) string {
 	if _, err := rand.Read(random); err != nil {
 		t.Fatalf("generate the secret: %v", err)
 	}
+
 	secret := splitSecretPrefix + hex.EncodeToString(random)
 	vaultFile := filepath.Join(tree.root, "ansible", "inventory", "group_vars", "all", "vault.yml")
 	content, err := ansiblevault.DecryptFile(vaultFile, vaultUnlockText)
 	if err != nil {
 		t.Fatalf("decrypt the vault: %v", err)
 	}
-	if err := ansiblevault.EncryptFile(vaultFile, content+splitSecretKey+": "+secret+"\n", vaultUnlockText); err != nil {
+
+	if err := ansiblevault.EncryptFile(
+		vaultFile,
+		content+splitSecretKey+": "+secret+"\n",
+		vaultUnlockText,
+	); err != nil {
 		t.Fatalf("encrypt the vault: %v", err)
 	}
+
 	return secret
 }
 
@@ -302,18 +360,28 @@ func workspaceFixture(t *testing.T, name string) string {
 	if err != nil {
 		t.Fatalf("read workspace fixture %s: %v", name, err)
 	}
+
 	return string(data)
 }
 
 func independentGatedTree(t *testing.T) configsTree {
 	t.Helper()
 	tree := newGatedTree(t, true)
-	writeFixtureFile(t, filepath.Join(tree.root, settingsName), workspaceFixture(t, "guest-modules.yml"))
+	writeFixtureFile(
+		t,
+		filepath.Join(tree.root, settingsName),
+		workspaceFixture(t, "guest-modules.yml"),
+	)
 	root := filepath.Join(tree.workspaces, "suburban", "tack")
-	writeFixtureFile(t, filepath.Join(root, "backend.tf"), fmt.Sprintf(localBackend, "tack.tfstate"))
+	writeFixtureFile(
+		t,
+		filepath.Join(root, "backend.tf"),
+		fmt.Sprintf(localBackend, "tack.tfstate"),
+	)
 	writeFixtureFile(t, filepath.Join(root, "main.tf"), workspaceFixture(t, "gate.tf"))
 	writeFixtureFile(t, filepath.Join(root, "item", "main.tf"), gatedItemModule)
 	applyWorkspace(t, tree, "suburban/tack")
+
 	return tree
 }
 

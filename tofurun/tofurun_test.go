@@ -76,23 +76,36 @@ func newFixture(t *testing.T, module string) fixture {
 	if err != nil {
 		t.Fatalf("find tofu: %v", err)
 	}
+
 	binary, err = filepath.Abs(binary)
 	if err != nil {
 		t.Fatalf("resolve tofu: %v", err)
 	}
+
 	built := fixture{
-		binary: binary, root: t.TempDir(), tmpdir: privateDirectory(t), home: privateDirectory(t),
-		token: filepath.Join(privateDirectory(t), "token"), pidFile: "", waitScript: "",
+		binary:     binary,
+		root:       t.TempDir(),
+		tmpdir:     privateDirectory(t),
+		home:       privateDirectory(t),
+		token:      filepath.Join(privateDirectory(t), "token"),
+		pidFile:    "",
+		waitScript: "",
 	}
 	built.pidFile = filepath.Join(built.tmpdir, "sleep.pid")
 	built.waitScript = filepath.Join(privateDirectory(t), filepath.Base(waitScript))
 	if module != "" {
 		writeFile(t, filepath.Join(built.root, "main.tf"), readTestdata(t, module))
 	}
+
 	writeFile(t, built.token, tokenValue)
-	if err := os.WriteFile(built.waitScript, []byte(readTestdata(t, waitScript)), 0o700); err != nil {
+	if err := os.WriteFile(
+		built.waitScript,
+		[]byte(readTestdata(t, waitScript)),
+		0o700,
+	); err != nil {
 		t.Fatalf("the test cannot write the local-exec script: %v", err)
 	}
+
 	return built
 }
 
@@ -102,6 +115,7 @@ func readTestdata(t *testing.T, path string) string {
 	if err != nil {
 		t.Fatalf("the test cannot read %s: %v", path, err)
 	}
+
 	return string(body)
 }
 
@@ -111,6 +125,7 @@ func privateDirectory(t *testing.T) string {
 	if err := os.Chmod(directory, 0o700); err != nil {
 		t.Fatalf("restrict %s: %v", directory, err)
 	}
+
 	return directory
 }
 
@@ -137,11 +152,17 @@ func (f fixture) environment() []string {
 
 func (f fixture) request(args ...string) tofurun.Request {
 	return tofurun.Request{
-		Binary: f.binary, Root: f.root, Workspace: testWorkspace,
-		Args: args, Environment: f.environment(),
-		RequiredEnvironment: []string{pidVariable}, SecretEnvironment: []string{passphraseVariable},
-		SecretFiles: map[string]string{tokenVariable: f.token},
-		OutputMode:  tofurun.RedactedProgress, JSONPath: "", RequiredHosts: []string{lockedHost},
+		Binary:              f.binary,
+		Root:                f.root,
+		Workspace:           testWorkspace,
+		Args:                args,
+		Environment:         f.environment(),
+		RequiredEnvironment: []string{pidVariable},
+		SecretEnvironment:   []string{passphraseVariable},
+		SecretFiles:         map[string]string{tokenVariable: f.token},
+		OutputMode:          tofurun.RedactedProgress,
+		JSONPath:            "",
+		RequiredHosts:       []string{lockedHost},
 	}
 }
 
@@ -151,13 +172,20 @@ func run(t *testing.T, request tofurun.Request, scope *hostlock.Scope) tofurun.R
 	if err != nil {
 		t.Fatalf("Run %v: %v", request.Args, err)
 	}
+
 	return result
 }
 
 func requireExit(t *testing.T, result tofurun.Result, want int, args []string) {
 	t.Helper()
 	if result.ExitCode != want {
-		t.Fatalf("Run %v exited with %d, want %d; log %s", args, result.ExitCode, want, result.LogPath)
+		t.Fatalf(
+			"Run %v exited with %d, want %d; log %s",
+			args,
+			result.ExitCode,
+			want,
+			result.LogPath,
+		)
 	}
 }
 
@@ -173,6 +201,7 @@ func (f fixture) tofu(t *testing.T, args ...string) string {
 	if err := command.Run(); err != nil {
 		t.Fatalf("tofu %v: %v\n%s", args, err, stderr.String())
 	}
+
 	return stdout.String()
 }
 
@@ -195,12 +224,20 @@ func (f fixture) plan(t *testing.T, label string) string {
 	writeFile(t, variables, "label = \""+label+"\"\n")
 	args := planArgs(path, "-var-file="+variables)
 	requireExit(t, run(t, f.request(args...), nil), 2, args)
+
 	return path
 }
 
 // planArgs returns the plan arguments that Run requires, followed by extra.
 func planArgs(out string, extra ...string) []string {
-	args := []string{"plan", "-input=false", "-no-color", "-detailed-exitcode", "-parallelism=1", "-out=" + out}
+	args := []string{
+		"plan",
+		"-input=false",
+		"-no-color",
+		"-detailed-exitcode",
+		"-parallelism=1",
+		"-out=" + out,
+	}
 	return append(args, extra...)
 }
 
@@ -211,15 +248,22 @@ func applyArgs(planPath string) []string {
 
 func acquire(t *testing.T, lease hostlock.Lease, hosts ...string) *hostlock.Set {
 	t.Helper()
+
 	targets := make([]hostlock.Host, 0, len(hosts))
 	for _, name := range hosts {
-		targets = append(targets, hostlock.Host{Name: name, User: "", Address: "", Dir: t.TempDir()})
+		targets = append(
+			targets,
+			hostlock.Host{Name: name, User: "", Address: "", Dir: t.TempDir()},
+		)
 	}
+
 	set, err := hostlock.AcquireAll(t.Context(), targets, lockRun, "controller-a", lease)
 	if err != nil {
 		t.Fatalf("AcquireAll: %v", err)
 	}
+
 	t.Cleanup(func() { set.ReleaseAll(context.WithoutCancel(t.Context())) })
+
 	return set
 }
 
@@ -229,6 +273,7 @@ func scopeOf(t *testing.T, set *hostlock.Set) *hostlock.Scope {
 	if err != nil {
 		t.Fatalf("Scope: %v", err)
 	}
+
 	return scope
 }
 
@@ -238,6 +283,7 @@ func readLog(t *testing.T, result tofurun.Result) string {
 	if err != nil {
 		t.Fatalf("read the run log: %v", err)
 	}
+
 	return string(body)
 }
 
@@ -257,11 +303,13 @@ func TestRunRedactsSecretValuesAndSecretFileContents(t *testing.T) {
 	result := run(t, f.request(args...), nil)
 	requireExit(t, result, 2, args)
 	logText := readLog(t, result)
+
 	for _, secret := range []string{passphraseValue, tokenValue} {
 		if strings.Contains(logText, secret) {
 			t.Fatalf("the run log contains a secret value:\n%s", logText)
 		}
 	}
+
 	for _, label := range []string{passphraseVariable, tokenVariable} {
 		if !strings.Contains(logText, "<redacted:"+label+">") {
 			t.Fatalf("the run log lacks the redaction marker for %s:\n%s", label, logText)
@@ -277,6 +325,7 @@ func TestRunWritesPrivateJSONWithTheUnchangedShowOutput(t *testing.T) {
 	if err := os.Mkdir(jsonDirectory, 0o700); err != nil {
 		t.Fatalf("create the JSON directory: %v", err)
 	}
+
 	request := f.request("show", "-json", planPath)
 	request.OutputMode = tofurun.PrivateJSON
 	request.JSONPath = filepath.Join(jsonDirectory, "plan.json")
@@ -286,17 +335,21 @@ func TestRunWritesPrivateJSONWithTheUnchangedShowOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat the JSON file: %v", err)
 	}
+
 	if mode := info.Mode(); !mode.IsRegular() || mode.Perm() != 0o600 {
 		t.Fatalf("the JSON file has mode %v, want a regular file with mode 0600", mode)
 	}
+
 	written, err := os.ReadFile(request.JSONPath)
 	if err != nil {
 		t.Fatalf("read the JSON file: %v", err)
 	}
+
 	direct := f.tofu(t, "show", "-json", planPath)
 	if !bytes.Equal(written, []byte(direct)) {
 		t.Fatalf("the JSON file differs from the output of tofu show -json")
 	}
+
 	if _, err := tofurun.Run(t.Context(), request, nil); !errors.Is(err, tofurun.ErrRejected) {
 		t.Fatalf("Run with an existing JSONPath: err = %v, want ErrRejected", err)
 	}
@@ -311,10 +364,12 @@ func TestRunAppliesTheSavedPlanCopiedBeforeTheOriginalChanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the first plan: %v", err)
 	}
+
 	secondBytes, err := os.ReadFile(secondPlan)
 	if err != nil {
 		t.Fatalf("read the second plan: %v", err)
 	}
+
 	set := acquire(t, hostlock.DefaultLease(), lockedHost)
 	replaced := make(chan error, 1)
 	go replaceAfterCopy(f.tmpdir, firstPlan, firstBytes, secondBytes, replaced)
@@ -324,9 +379,11 @@ func TestRunAppliesTheSavedPlanCopiedBeforeTheOriginalChanged(t *testing.T) {
 	if err := <-replaced; err != nil {
 		t.Fatalf("replace the original plan after the copy: %v", err)
 	}
+
 	if label := strings.TrimSpace(f.tofu(t, "output", "-raw", "label")); label != firstLabel {
 		t.Fatalf("the applied label is %q, want %q from the copied plan", label, firstLabel)
 	}
+
 	copies, err := filepath.Glob(filepath.Join(f.tmpdir, "tofurun-plan-*"))
 	if err != nil || len(copies) != 0 {
 		t.Fatalf("Run left private plan copies %v (err %v)", copies, err)
@@ -339,25 +396,34 @@ func replaceAfterCopy(tmpdir, original string, contents, replacement []byte, don
 	deadline := time.Now().Add(waitLimit)
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
+
 	for time.Now().Before(deadline) {
-		copies, err := filepath.Glob(filepath.Join(tmpdir, "tofurun-plan-*", filepath.Base(original)))
+		copies, err := filepath.Glob(
+			filepath.Join(tmpdir, "tofurun-plan-*", filepath.Base(original)),
+		)
 		if err != nil {
 			done <- err
 			return
 		}
+
 		if len(copies) == 1 {
-			if copied, readErr := os.ReadFile(copies[0]); readErr == nil && bytes.Equal(copied, contents) {
+			if copied, readErr := os.ReadFile(copies[0]); readErr == nil &&
+				bytes.Equal(copied, contents) {
 				staged := original + ".new"
 				if err := os.WriteFile(staged, replacement, 0o600); err != nil {
 					done <- err
 					return
 				}
+
 				done <- os.Rename(staged, original)
+
 				return
 			}
 		}
+
 		<-ticker.C
 	}
+
 	done <- errors.New("the private plan copy did not appear")
 }
 
@@ -405,6 +471,7 @@ func TestRunStopsTheProcessGroupWhenTheContextEnds(t *testing.T) {
 	if err := <-finished; !errors.Is(err, tofurun.ErrIncomplete) {
 		t.Fatalf("Run after cancellation: err = %v, want ErrIncomplete", err)
 	}
+
 	waitForExit(t, pid)
 }
 
@@ -413,6 +480,7 @@ func waitForPID(t *testing.T, path string) int {
 	deadline := time.Now().Add(waitLimit)
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
+
 	for time.Now().Before(deadline) {
 		body, err := os.ReadFile(path)
 		if err == nil && strings.HasSuffix(string(body), "\n") {
@@ -420,11 +488,15 @@ func waitForPID(t *testing.T, path string) int {
 			if parseErr != nil {
 				t.Fatalf("read the process id in %s: %v", path, parseErr)
 			}
+
 			return pid
 		}
+
 		<-ticker.C
 	}
+
 	t.Fatalf("the provisioner did not write %s", path)
+
 	return 0
 }
 
@@ -433,12 +505,15 @@ func waitForExit(t *testing.T, pid int) {
 	deadline := time.Now().Add(waitLimit)
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
+
 	for time.Now().Before(deadline) {
 		if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
 			return
 		}
+
 		<-ticker.C
 	}
+
 	t.Fatalf("process %d of the OpenTofu process group still runs after Run returned", pid)
 }
 
@@ -452,6 +527,7 @@ func TestRunRefusesMutationWithoutAValidScope(t *testing.T) {
 	if _, err := unacquired.Scope(); !errors.Is(err, hostlock.ErrScope) {
 		t.Fatalf("Scope of a Set without AcquireAll: err = %v, want ErrScope", err)
 	}
+
 	if err := scopeOf(t, acquire(t, hostlock.DefaultLease())).Check(nil); err != nil {
 		t.Fatalf("Check of a scope from an acquired Set without hosts: %v", err)
 	}
@@ -460,7 +536,11 @@ func TestRunRefusesMutationWithoutAValidScope(t *testing.T) {
 	releasedScope := scopeOf(t, released)
 	released.ReleaseAll(t.Context())
 
-	expiring := acquire(t, hostlock.Lease{TTL: 3 * time.Second, RenewInterval: time.Second}, lockedHost)
+	expiring := acquire(
+		t,
+		hostlock.Lease{TTL: 3 * time.Second, RenewInterval: time.Second},
+		lockedHost,
+	)
 	expiredScope := scopeOf(t, expiring)
 
 	renewed := acquire(t, hostlock.DefaultLease(), lockedHost)
@@ -476,9 +556,13 @@ func TestRunRefusesMutationWithoutAValidScope(t *testing.T) {
 	partialRequest.RequiredHosts = []string{lockedHost, otherHost}
 
 	stateRequest := f.request(args...)
-	stateRequest.Environment = append(stateRequest.Environment, hostlock.StateEnvVar+"="+partial.StateDir())
+	stateRequest.Environment = append(
+		stateRequest.Environment,
+		hostlock.StateEnvVar+"="+partial.StateDir(),
+	)
 
 	waitUntilExpired(t, expiring)
+
 	cases := []struct {
 		name    string
 		request tofurun.Request
@@ -486,24 +570,54 @@ func TestRunRefusesMutationWithoutAValidScope(t *testing.T) {
 		want    error
 	}{
 		{name: "missing", request: f.request(args...), scope: nil, want: hostlock.ErrScope},
-		{name: "zero value", request: f.request(args...), scope: &hostlock.Scope{}, want: hostlock.ErrScope},
-		{name: "released", request: f.request(args...), scope: releasedScope, want: hostlock.ErrScope},
-		{name: "expired", request: f.request(args...), scope: expiredScope, want: hostlock.ErrScope},
-		{name: "canceled", request: f.request(args...), scope: canceledScope, want: hostlock.ErrScope},
-		{name: "incomplete target", request: partialRequest, scope: partialScope, want: hostlock.ErrScope},
+		{
+			name:    "zero value",
+			request: f.request(args...),
+			scope:   &hostlock.Scope{},
+			want:    hostlock.ErrScope,
+		},
+		{
+			name:    "released",
+			request: f.request(args...),
+			scope:   releasedScope,
+			want:    hostlock.ErrScope,
+		},
+		{
+			name:    "expired",
+			request: f.request(args...),
+			scope:   expiredScope,
+			want:    hostlock.ErrScope,
+		},
+		{
+			name:    "canceled",
+			request: f.request(args...),
+			scope:   canceledScope,
+			want:    hostlock.ErrScope,
+		},
+		{
+			name:    "incomplete target",
+			request: partialRequest,
+			scope:   partialScope,
+			want:    hostlock.ErrScope,
+		},
 		{name: "lock state variable", request: stateRequest, scope: nil, want: hostlock.ErrScope},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			result, err := tofurun.Run(t.Context(), tc.request, tc.scope)
-			if !errors.Is(err, tc.want) {
-				t.Fatalf("Run apply: err = %v, want %v", err, tc.want)
-			}
-			if result.LogPath != "" {
-				t.Fatalf("Run apply opened the run log %s before refusing", result.LogPath)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				result, err := tofurun.Run(t.Context(), tc.request, tc.scope)
+				if !errors.Is(err, tc.want) {
+					t.Fatalf("Run apply: err = %v, want %v", err, tc.want)
+				}
+
+				if result.LogPath != "" {
+					t.Fatalf("Run apply opened the run log %s before refusing", result.LogPath)
+				}
+			},
+		)
 	}
+
 	requireNoState(t, f)
 }
 
@@ -517,6 +631,7 @@ func TestRunChecksTheScopeAgainBeforeStartingOpenTofu(t *testing.T) {
 	if err := os.Truncate(largePlan, largePlanSize); err != nil {
 		t.Fatalf("extend the large plan file: %v", err)
 	}
+
 	set := acquire(t, hostlock.DefaultLease(), lockedHost)
 	scope := scopeOf(t, set)
 	released := make(chan error, 1)
@@ -526,9 +641,11 @@ func TestRunChecksTheScopeAgainBeforeStartingOpenTofu(t *testing.T) {
 	if releaseErr := <-released; releaseErr != nil {
 		t.Fatalf("release the Set during the copy: %v", releaseErr)
 	}
+
 	if !errors.Is(err, hostlock.ErrScope) {
 		t.Fatalf("Run apply after release during preparation: err = %v, want ErrScope", err)
 	}
+
 	requireNoState(t, f)
 }
 
@@ -537,19 +654,24 @@ func releaseDuringCopy(tmpdir string, set *hostlock.Set, done chan<- error) {
 	deadline := time.Now().Add(waitLimit)
 	ticker := time.NewTicker(time.Millisecond)
 	defer ticker.Stop()
+
 	for time.Now().Before(deadline) {
 		copies, err := filepath.Glob(filepath.Join(tmpdir, "tofurun-plan-*"))
 		if err != nil {
 			done <- err
 			return
 		}
+
 		if len(copies) == 1 {
 			set.ReleaseAll(context.Background())
 			done <- nil
+
 			return
 		}
+
 		<-ticker.C
 	}
+
 	done <- errors.New("the private plan directory did not appear")
 }
 
@@ -558,12 +680,15 @@ func waitUntilExpired(t *testing.T, set *hostlock.Set) {
 	deadline := time.Now().Add(waitLimit)
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
+
 	for time.Now().Before(deadline) {
 		if _, err := set.Scope(); errors.Is(err, hostlock.ErrScope) {
 			return
 		}
+
 		<-ticker.C
 	}
+
 	t.Fatal("the short lease did not pass its loss deadline")
 }
 
@@ -578,12 +703,14 @@ func TestRunRefusesUnsafeRequestsBeforeStartingOpenTofu(t *testing.T) {
 	if err := os.Chmod(publicDirectory, 0o755); err != nil {
 		t.Fatalf("open the directory: %v", err)
 	}
+
 	publicToken := filepath.Join(publicDirectory, "token")
 	writeFile(t, publicToken, tokenValue)
 
 	modify := func(change func(*tofurun.Request), args ...string) tofurun.Request {
 		request := f.request(args...)
 		change(&request)
+
 		return request
 	}
 	keep := func(*tofurun.Request) {}
@@ -597,9 +724,11 @@ func TestRunRefusesUnsafeRequestsBeforeStartingOpenTofu(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(outside, "report"), 0o700); err != nil {
 		t.Fatalf("create the outside report directory: %v", err)
 	}
+
 	if err := os.Symlink(outside, filepath.Join(f.tmpdir, "link")); err != nil {
 		t.Fatalf("create the link to the outside directory: %v", err)
 	}
+
 	linkedJSON := filepath.Join(f.tmpdir, "link", "report", "plan.json")
 	existingPlan := filepath.Join(f.tmpdir, "existing.tfplan")
 	writeFile(t, existingPlan, "existing")
@@ -609,85 +738,254 @@ func TestRunRefusesUnsafeRequestsBeforeStartingOpenTofu(t *testing.T) {
 		request tofurun.Request
 		scope   *hostlock.Scope
 	}{
-		{name: "excluded variable", request: modify(func(r *tofurun.Request) {
-			r.RequiredEnvironment = append(r.RequiredEnvironment, "GITHUB_TOKEN")
-		}, validPlan...)},
-		{name: "duplicate assignment", request: modify(func(r *tofurun.Request) {
-			r.Environment = append(r.Environment, passphraseVariable+"="+passphraseValue)
-		}, validPlan...)},
-		{name: "missing secret", request: modify(func(r *tofurun.Request) {
-			r.SecretEnvironment = append(r.SecretEnvironment, "TF_VAR_absent")
-		}, validPlan...)},
-		{name: "unmaskable secret", request: modify(func(r *tofurun.Request) {
-			r.Environment = append(r.Environment, "TF_VAR_short=short")
-			r.SecretEnvironment = append(r.SecretEnvironment, "TF_VAR_short")
-		}, validPlan...)},
-		{name: "secret argument", request: modify(keep, planArgs(planPath, "-var-file="+filepath.Join(f.tmpdir, passphraseValue))...)},
-		{name: "public secret file", request: modify(func(r *tofurun.Request) {
-			r.SecretFiles = map[string]string{tokenVariable: publicToken}
-			r.Environment = append(r.Environment[:5:5], tokenVariable+"="+publicToken, pidVariable+"="+f.pidFile)
-		}, validPlan...)},
-		{name: "unbound secret file", request: modify(func(r *tofurun.Request) {
-			r.SecretFiles = map[string]string{tokenVariable: f.token + ".other"}
-		}, validPlan...)},
-		{name: "missing automation setting", request: modify(func(r *tofurun.Request) {
-			r.Environment = slicesWithout(r.Environment, "TF_IN_AUTOMATION=1")
-		}, validPlan...)},
-		{name: "workspace creation", request: modify(keep, "workspace", "select", "-or-create", testWorkspace)},
+		{
+			name: "excluded variable",
+			request: modify(
+				func(r *tofurun.Request) {
+					r.RequiredEnvironment = append(r.RequiredEnvironment, "GITHUB_TOKEN")
+				},
+				validPlan...,
+			),
+		},
+		{
+			name: "duplicate assignment",
+			request: modify(
+				func(r *tofurun.Request) {
+					r.Environment = append(r.Environment, passphraseVariable+"="+passphraseValue)
+				},
+				validPlan...,
+			),
+		},
+		{
+			name: "missing secret",
+			request: modify(
+				func(r *tofurun.Request) {
+					r.SecretEnvironment = append(r.SecretEnvironment, "TF_VAR_absent")
+				},
+				validPlan...,
+			),
+		},
+		{
+			name: "unmaskable secret",
+			request: modify(
+				func(r *tofurun.Request) {
+					r.Environment = append(r.Environment, "TF_VAR_short=short")
+					r.SecretEnvironment = append(r.SecretEnvironment, "TF_VAR_short")
+				},
+				validPlan...,
+			),
+		},
+		{
+			name: "secret argument",
+			request: modify(
+				keep,
+				planArgs(planPath, "-var-file="+filepath.Join(f.tmpdir, passphraseValue))...,
+			),
+		},
+		{
+			name: "public secret file",
+			request: modify(
+				func(r *tofurun.Request) {
+					r.SecretFiles = map[string]string{tokenVariable: publicToken}
+					r.Environment = append(
+						r.Environment[:5:5],
+						tokenVariable+"="+publicToken,
+						pidVariable+"="+f.pidFile,
+					)
+				},
+				validPlan...,
+			),
+		},
+		{
+			name: "unbound secret file",
+			request: modify(
+				func(r *tofurun.Request) {
+					r.SecretFiles = map[string]string{tokenVariable: f.token + ".other"}
+				},
+				validPlan...,
+			),
+		},
+		{
+			name: "missing automation setting",
+			request: modify(
+				func(r *tofurun.Request) {
+					r.Environment = slicesWithout(r.Environment, "TF_IN_AUTOMATION=1")
+				},
+				validPlan...,
+			),
+		},
+		{
+			name:    "workspace creation",
+			request: modify(keep, "workspace", "select", "-or-create", testWorkspace),
+		},
 		{name: "workspace new", request: modify(keep, "workspace", "new", testWorkspace)},
 		{name: "writable provider lock", request: modify(keep, "init", "-input=false")},
-		{name: "unlocked deployment plan", request: modify(keep, planArgs(planPath, "-lock=false")...), scope: scope},
-		{name: "plan without no-color", request: modify(keep, slicesWithout(validPlan, "-no-color")...)},
-		{name: "plan without detailed exit code", request: modify(keep, slicesWithout(validPlan, "-detailed-exitcode")...)},
-		{name: "plan without parallelism", request: modify(keep, slicesWithout(validPlan, "-parallelism=1")...)},
-		{name: "plan with zero parallelism", request: modify(keep, planArgs(planPath, "-parallelism=0")...)},
-		{name: "plan without output", request: modify(keep, slicesWithout(validPlan, "-out="+planPath)...)},
-		{name: "plan output outside TMPDIR", request: modify(keep, planArgs(filepath.Join(f.root, "plan"))...)},
-		{name: "plan output through a link", request: modify(keep, planArgs(filepath.Join(f.tmpdir, "link", "plan"))...)},
+		{
+			name:    "unlocked deployment plan",
+			request: modify(keep, planArgs(planPath, "-lock=false")...),
+			scope:   scope,
+		},
+		{
+			name:    "plan without no-color",
+			request: modify(keep, slicesWithout(validPlan, "-no-color")...),
+		},
+		{
+			name:    "plan without detailed exit code",
+			request: modify(keep, slicesWithout(validPlan, "-detailed-exitcode")...),
+		},
+		{
+			name:    "plan without parallelism",
+			request: modify(keep, slicesWithout(validPlan, "-parallelism=1")...),
+		},
+		{
+			name:    "plan with zero parallelism",
+			request: modify(keep, planArgs(planPath, "-parallelism=0")...),
+		},
+		{
+			name:    "plan without output",
+			request: modify(keep, slicesWithout(validPlan, "-out="+planPath)...),
+		},
+		{
+			name:    "plan output outside TMPDIR",
+			request: modify(keep, planArgs(filepath.Join(f.root, "plan"))...),
+		},
+		{
+			name:    "plan output through a link",
+			request: modify(keep, planArgs(filepath.Join(f.tmpdir, "link", "plan"))...),
+		},
 		{name: "existing plan output", request: modify(keep, planArgs(existingPlan)...)},
-		{name: "variable argument contains a declared secret", request: modify(keep, planArgs(planPath, "-var=label="+passphraseValue)...)},
-		{name: "saved apply variable contains a declared secret", request: modify(keep, "apply", "-input=false", "-parallelism=1", "-var=session="+passphraseValue, savedPlan), scope: scope},
-		{name: "unlocked apply", request: modify(keep, "apply", "-input=false", "-parallelism=1", "-lock=false", savedPlan), scope: scope},
-		{name: "apply without a saved plan", request: modify(keep, "apply", "-input=false", "-parallelism=1"), scope: scope},
-		{name: "apply without parallelism", request: modify(keep, "apply", "-input=false", savedPlan), scope: scope},
-		{name: "apply with negative parallelism", request: modify(keep, "apply", "-input=false", "-parallelism=-1", savedPlan), scope: scope},
-		{name: "apply with auto-approve", request: modify(keep, "apply", "-input=false", "-parallelism=1", "-auto-approve", savedPlan), scope: scope},
+		{
+			name:    "variable argument contains a declared secret",
+			request: modify(keep, planArgs(planPath, "-var=label="+passphraseValue)...),
+		},
+		{
+			name: "saved apply variable contains a declared secret",
+			request: modify(
+				keep,
+				"apply",
+				"-input=false",
+				"-parallelism=1",
+				"-var=session="+passphraseValue,
+				savedPlan,
+			),
+			scope: scope,
+		},
+		{
+			name: "unlocked apply",
+			request: modify(
+				keep,
+				"apply",
+				"-input=false",
+				"-parallelism=1",
+				"-lock=false",
+				savedPlan,
+			),
+			scope: scope,
+		},
+		{
+			name:    "apply without a saved plan",
+			request: modify(keep, "apply", "-input=false", "-parallelism=1"),
+			scope:   scope,
+		},
+		{
+			name:    "apply without parallelism",
+			request: modify(keep, "apply", "-input=false", savedPlan),
+			scope:   scope,
+		},
+		{
+			name:    "apply with negative parallelism",
+			request: modify(keep, "apply", "-input=false", "-parallelism=-1", savedPlan),
+			scope:   scope,
+		},
+		{
+			name: "apply with auto-approve",
+			request: modify(
+				keep,
+				"apply",
+				"-input=false",
+				"-parallelism=1",
+				"-auto-approve",
+				savedPlan,
+			),
+			scope: scope,
+		},
 		{name: "destroy", request: modify(keep, "destroy", "-auto-approve"), scope: scope},
-		{name: "state removal", request: modify(keep, "state", "rm", "terraform_data.item"), scope: scope},
-		{name: "private JSON plan", request: modify(privateJSON(filepath.Join(f.tmpdir, "plan.json")), validPlan...)},
-		{name: "private JSON with json false", request: modify(privateJSON(filepath.Join(f.tmpdir, "plan.json")), "show", "-json=false", savedPlan)},
-		{name: "private JSON through a link", request: modify(privateJSON(linkedJSON), "show", "-json", savedPlan)},
+		{
+			name:    "state removal",
+			request: modify(keep, "state", "rm", "terraform_data.item"),
+			scope:   scope,
+		},
+		{
+			name:    "private JSON plan",
+			request: modify(privateJSON(filepath.Join(f.tmpdir, "plan.json")), validPlan...),
+		},
+		{
+			name: "private JSON with json false",
+			request: modify(
+				privateJSON(filepath.Join(f.tmpdir, "plan.json")),
+				"show",
+				"-json=false",
+				savedPlan,
+			),
+		},
+		{
+			name:    "private JSON through a link",
+			request: modify(privateJSON(linkedJSON), "show", "-json", savedPlan),
+		},
 		{name: "show JSON to progress", request: modify(keep, "show", "-json", savedPlan)},
 	}
 	refusedPlans := []string{planPath}
+
 	for position, spelling := range []string{"0", "f", "F", "FALSE", "False", "false"} {
 		spellingPlan := filepath.Join(f.tmpdir, "plan-lock-"+strconv.Itoa(position))
 		refusedPlans = append(refusedPlans, spellingPlan)
-		cases = append(cases, struct {
-			name    string
-			request tofurun.Request
-			scope   *hostlock.Scope
-		}{name: "scoped plan with lock " + spelling, request: modify(keep, planArgs(spellingPlan, "-lock="+spelling)...), scope: scope})
+		cases = append(
+			cases,
+			struct {
+				name    string
+				request tofurun.Request
+				scope   *hostlock.Scope
+			}{
+				name:    "scoped plan with lock " + spelling,
+				request: modify(keep, planArgs(spellingPlan, "-lock="+spelling)...),
+				scope:   scope,
+			},
+		)
 	}
+
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			result, err := tofurun.Run(t.Context(), tc.request, tc.scope)
-			if !errors.Is(err, tofurun.ErrRejected) {
-				t.Fatalf("Run %v: err = %v, want ErrRejected", tc.request.Args, err)
-			}
-			if result.LogPath != "" {
-				t.Fatalf("Run %v opened the run log %s before refusing", tc.request.Args, result.LogPath)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				result, err := tofurun.Run(t.Context(), tc.request, tc.scope)
+				if !errors.Is(err, tofurun.ErrRejected) {
+					t.Fatalf("Run %v: err = %v, want ErrRejected", tc.request.Args, err)
+				}
+
+				if result.LogPath != "" {
+					t.Fatalf(
+						"Run %v opened the run log %s before refusing",
+						tc.request.Args,
+						result.LogPath,
+					)
+				}
+			},
+		)
 	}
-	if _, err := os.Lstat(filepath.Join(outside, "report", "plan.json")); !errors.Is(err, os.ErrNotExist) {
+
+	if _, err := os.Lstat(filepath.Join(outside, "report", "plan.json")); !errors.Is(
+		err,
+		os.ErrNotExist,
+	) {
 		t.Fatalf("check that the JSON file outside TMPDIR does not exist: %v", err)
 	}
+
 	for _, path := range refusedPlans {
 		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("check that the refused plan %s does not exist: %v", path, err)
 		}
 	}
+
 	requireNoState(t, f)
 }
 
@@ -698,9 +996,11 @@ func TestRunChecksTheWorkspaceInItsPrivateDataDirectory(t *testing.T) {
 	request.DataDirectory = privateDirectory(t)
 	writeFile(t, filepath.Join(request.DataDirectory, "environment"), "different")
 	_, err := tofurun.Run(t.Context(), request, nil)
-	if !errors.Is(err, tofurun.ErrRejected) || !strings.Contains(err.Error(), `selected workspace is "different"`) {
+	if !errors.Is(err, tofurun.ErrRejected) ||
+		!strings.Contains(err.Error(), `selected workspace is "different"`) {
 		t.Fatalf("Run did not check its private data directory workspace: %v", err)
 	}
+
 	requireNoState(t, f)
 }
 
@@ -717,6 +1017,7 @@ func TestRunRejectionDoesNotDiscloseDeclaredSecrets(t *testing.T) {
 		log.SetOutput(previousWriter)
 		log.SetFlags(previousFlags)
 	})
+
 	requests := [][]string{
 		{passphraseValue},
 		{tokenValue, "-input=false"},
@@ -727,8 +1028,12 @@ func TestRunRejectionDoesNotDiscloseDeclaredSecrets(t *testing.T) {
 	for _, args := range requests {
 		_, err := tofurun.Run(t.Context(), f.request(args...), nil)
 		if !errors.Is(err, tofurun.ErrRejected) {
-			t.Fatalf("Run with a secret argument at a checked position: err = %v, want ErrRejected", err)
+			t.Fatalf(
+				"Run with a secret argument at a checked position: err = %v, want ErrRejected",
+				err,
+			)
 		}
+
 		for _, secret := range []string{passphraseValue, tokenValue} {
 			if strings.Contains(err.Error(), secret) || strings.Contains(logs.String(), secret) {
 				t.Fatal("the rejection error or log contains a declared secret value")
@@ -742,19 +1047,23 @@ func TestRunRejectionDoesNotDiscloseDeclaredSecrets(t *testing.T) {
 // file before returning the archive.
 func TestRunReportsAProviderLockChangedDuringInit(t *testing.T) {
 	initArgs := []string{"init", "-input=false", "-lockfile=readonly", "-no-color"}
+
 	for _, change := range []bool{false, true} {
 		archive := moduleArchive(t)
 		f := newFixture(t, "")
 		lockFile := filepath.Join(f.root, ".terraform.lock.hcl")
-		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-			if change {
-				if err := os.WriteFile(lockFile, []byte(changedLock), 0o600); err != nil {
-					http.Error(writer, err.Error(), http.StatusInternalServerError)
-					return
+		server := httptest.NewServer(
+			http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				if change {
+					if err := os.WriteFile(lockFile, []byte(changedLock), 0o600); err != nil {
+						http.Error(writer, err.Error(), http.StatusInternalServerError)
+						return
+					}
 				}
-			}
-			_, _ = writer.Write(archive)
-		}))
+
+				_, _ = writer.Write(archive)
+			}),
+		)
 		t.Cleanup(server.Close)
 		writeFile(t, filepath.Join(f.root, "main.tf"), renderRemoteModuleRoot(t, server.URL))
 		writeFile(t, lockFile, initialLock)
@@ -762,9 +1071,14 @@ func TestRunReportsAProviderLockChangedDuringInit(t *testing.T) {
 		if result.ExitCode != 0 {
 			t.Fatalf("OpenTofu init exited with %d; log %s", result.ExitCode, result.LogPath)
 		}
+
 		if change && !errors.Is(err, tofurun.ErrProviderLockChanged) {
-			t.Fatalf("Run init with a changed lock file: err = %v, want ErrProviderLockChanged", err)
+			t.Fatalf(
+				"Run init with a changed lock file: err = %v, want ErrProviderLockChanged",
+				err,
+			)
 		}
+
 		if !change && err != nil {
 			t.Fatalf("Run init with an unchanged lock file: %v", err)
 		}
@@ -779,10 +1093,15 @@ func renderRemoteModuleRoot(t *testing.T, serverURL string) string {
 	if err != nil {
 		t.Fatalf("the test cannot parse %s: %v", remoteModuleRoot, err)
 	}
+
 	var rendered strings.Builder
-	if err := parsed.Execute(&rendered, struct{ ServerURL string }{ServerURL: serverURL}); err != nil {
+	if err := parsed.Execute(
+		&rendered,
+		struct{ ServerURL string }{ServerURL: serverURL},
+	); err != nil {
 		t.Fatalf("the test cannot render %s: %v", remoteModuleRoot, err)
 	}
+
 	return rendered.String()
 }
 
@@ -795,16 +1114,20 @@ func moduleArchive(t *testing.T) []byte {
 	if err != nil {
 		t.Fatalf("the test cannot read %s: %v", remoteModule, err)
 	}
+
 	file, err := writer.Create("main.tf")
 	if err != nil {
 		t.Fatalf("create the module archive entry: %v", err)
 	}
+
 	if _, err := file.Write(module); err != nil {
 		t.Fatalf("write the module archive entry: %v", err)
 	}
+
 	if err := writer.Close(); err != nil {
 		t.Fatalf("close the module archive: %v", err)
 	}
+
 	return archive.Bytes()
 }
 
@@ -815,5 +1138,6 @@ func slicesWithout(values []string, removed string) []string {
 			kept = append(kept, value)
 		}
 	}
+
 	return kept
 }

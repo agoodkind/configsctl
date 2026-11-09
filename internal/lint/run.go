@@ -21,8 +21,13 @@ type Finding struct {
 
 // String renders a finding as a stable line.
 func (f Finding) String() string {
-	return fmt.Sprintf("%s:%d: banned default or presence check: %s on %s",
-		f.File, f.Line, f.Kind, f.Root)
+	return fmt.Sprintf(
+		"%s:%d: banned default or presence check: %s on %s",
+		f.File,
+		f.Line,
+		f.Kind,
+		f.Root,
+	)
 }
 
 // Divergence is an expression no parser could read. The Go engine could not
@@ -58,21 +63,26 @@ type pendingForm struct {
 func Run(paths []string) ([]Finding, []Divergence, error) {
 	var findings []Finding
 	var pending []pendingForm
+
 	for _, path := range paths {
 		fileFindings, filePending, err := analyzeFile(path)
 		if err != nil {
 			return nil, nil, err
 		}
+
 		findings = append(findings, fileFindings...)
 		pending = append(pending, filePending...)
 	}
+
 	routedFindings, divergences, err := routePending(dedupePending(pending))
 	if err != nil {
 		return nil, nil, err
 	}
+
 	findings = dedupeFindings(append(findings, routedFindings...))
 	sortFindings(findings)
 	sortDivergences(divergences)
+
 	return findings, divergences, nil
 }
 
@@ -83,34 +93,57 @@ func routePending(pending []pendingForm) ([]Finding, []Divergence, error) {
 	if len(pending) == 0 {
 		return nil, nil, nil
 	}
+
 	forms := make([]oracle.Form, len(pending))
 	for i, form := range pending {
 		forms[i] = oracle.Form{Expr: form.text, Runtime: form.runtime}
 	}
+
 	results, err := oracle.Route(forms)
 	if err != nil {
 		slog.Error("route divergent forms failed", "count", len(forms), "err", err)
 		return nil, nil, fmt.Errorf("route divergent forms: %w", err)
 	}
+
 	if len(results) != len(pending) {
-		return nil, nil, fmt.Errorf("oracle returned %d results for %d forms", len(results), len(pending))
+		return nil, nil, fmt.Errorf(
+			"oracle returned %d results for %d forms",
+			len(results),
+			len(pending),
+		)
 	}
+
 	var findings []Finding
 	var divergences []Divergence
+
 	for i, form := range pending {
 		result := results[i]
 		if !result.Parsed {
-			divergences = append(divergences, Divergence{
-				File: form.file, Line: form.line, Reason: form.reason, Text: form.text,
-			})
+			divergences = append(
+				divergences,
+				Divergence{
+					File:   form.file,
+					Line:   form.line,
+					Reason: form.reason,
+					Text:   form.text,
+				},
+			)
 			continue
 		}
+
 		for _, violation := range result.Violations {
-			findings = append(findings, Finding{
-				File: form.file, Line: form.line, Kind: violation.Kind, Root: violation.Root,
-			})
+			findings = append(
+				findings,
+				Finding{
+					File: form.file,
+					Line: form.line,
+					Kind: violation.Kind,
+					Root: violation.Root,
+				},
+			)
 		}
 	}
+
 	return findings, divergences, nil
 }
 
@@ -120,37 +153,61 @@ func analyzeFile(path string) ([]Finding, []pendingForm, error) {
 		slog.Error("read lint input failed", "path", path, "err", err)
 		return nil, nil, fmt.Errorf("read %s: %w", path, err)
 	}
+
 	exprs, runtime, err := extractFile(path, string(content))
 	if err != nil {
 		return nil, nil, err
 	}
+
 	runtimeNames := sortedSet(runtime)
 	var findings []Finding
 	var pending []pendingForm
+
 	for _, expr := range exprs {
 		constructs, parsed := Analyze("{{ " + expr.text + " }}")
 		if !parsed {
-			pending = append(pending, pendingForm{
-				file: path, line: expr.line, reason: "parse-failed",
-				text: expr.text, runtime: runtimeNames,
-			})
+			pending = append(
+				pending,
+				pendingForm{
+					file:    path,
+					line:    expr.line,
+					reason:  "parse-failed",
+					text:    expr.text,
+					runtime: runtimeNames,
+				},
+			)
 			continue
 		}
+
 		for _, construct := range constructs {
 			if construct.Kind != "lookup-default" && construct.Root == "" {
-				pending = append(pending, pendingForm{
-					file: path, line: expr.line, reason: "unresolved-operand",
-					text: expr.text, runtime: runtimeNames,
-				})
+				pending = append(
+					pending,
+					pendingForm{
+						file:    path,
+						line:    expr.line,
+						reason:  "unresolved-operand",
+						text:    expr.text,
+						runtime: runtimeNames,
+					},
+				)
 				continue
 			}
+
 			if IsViolation(construct, runtime) {
-				findings = append(findings, Finding{
-					File: path, Line: expr.line, Kind: construct.Kind, Root: construct.Root,
-				})
+				findings = append(
+					findings,
+					Finding{
+						File: path,
+						Line: expr.line,
+						Kind: construct.Kind,
+						Root: construct.Root,
+					},
+				)
 			}
 		}
 	}
+
 	return findings, pending, nil
 }
 
@@ -162,13 +219,16 @@ func extractFile(path, content string) ([]templateExpr, map[string]struct{}, err
 	if strings.HasSuffix(path, ".j2") {
 		return spanExprs(content, 1), runtime, nil
 	}
+
 	var root yaml.Node
 	if err := yaml.Unmarshal([]byte(content), &root); err != nil {
 		slog.Error("parse lint input failed", "path", path, "err", err)
 		return nil, nil, fmt.Errorf("parse YAML %s: %w", path, err)
 	}
+
 	var exprs []templateExpr
 	walkYAML(&root, &exprs, runtime)
+
 	return exprs, runtime, nil
 }
 
@@ -176,49 +236,63 @@ func extractFile(path, content string) ([]templateExpr, map[string]struct{}, err
 // routing of an expression resolves every construct it carries.
 func dedupePending(pending []pendingForm) []pendingForm {
 	seen := make(map[string]struct{}, len(pending))
+
 	out := make([]pendingForm, 0, len(pending))
 	for _, form := range pending {
 		key := fmt.Sprintf("%s:%d:%s", form.file, form.line, form.text)
 		if _, ok := seen[key]; ok {
 			continue
 		}
+
 		seen[key] = struct{}{}
 		out = append(out, form)
 	}
+
 	return out
 }
 
 // dedupeFindings collapses findings that render to the same line.
 func dedupeFindings(findings []Finding) []Finding {
 	seen := make(map[string]struct{}, len(findings))
+
 	out := make([]Finding, 0, len(findings))
 	for _, finding := range findings {
 		key := finding.String()
 		if _, ok := seen[key]; ok {
 			continue
 		}
+
 		seen[key] = struct{}{}
 		out = append(out, finding)
 	}
+
 	return out
 }
 
 func sortFindings(findings []Finding) {
-	sort.Slice(findings, func(i, j int) bool {
-		if findings[i].File != findings[j].File {
-			return findings[i].File < findings[j].File
-		}
-		return findings[i].Line < findings[j].Line
-	})
+	sort.Slice(
+		findings,
+		func(i, j int) bool {
+			if findings[i].File != findings[j].File {
+				return findings[i].File < findings[j].File
+			}
+
+			return findings[i].Line < findings[j].Line
+		},
+	)
 }
 
 func sortDivergences(divergences []Divergence) {
-	sort.Slice(divergences, func(i, j int) bool {
-		if divergences[i].File != divergences[j].File {
-			return divergences[i].File < divergences[j].File
-		}
-		return divergences[i].Line < divergences[j].Line
-	})
+	sort.Slice(
+		divergences,
+		func(i, j int) bool {
+			if divergences[i].File != divergences[j].File {
+				return divergences[i].File < divergences[j].File
+			}
+
+			return divergences[i].Line < divergences[j].Line
+		},
+	)
 }
 
 func sortedSet(set map[string]struct{}) []string {
@@ -226,6 +300,8 @@ func sortedSet(set map[string]struct{}) []string {
 	for name := range set {
 		names = append(names, name)
 	}
+
 	sort.Strings(names)
+
 	return names
 }

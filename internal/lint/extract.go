@@ -37,7 +37,11 @@ func collectLoopVars(content string, runtime map[string]struct{}) {
 // bareFields are the Ansible task keys whose values are bare Jinja expressions
 // with no surrounding braces. `that` carries the assert module's conditions.
 var bareFields = map[string]struct{}{
-	"when": {}, "changed_when": {}, "failed_when": {}, "until": {}, "that": {},
+	"when":         {},
+	"changed_when": {},
+	"failed_when":  {},
+	"until":        {},
+	"that":         {},
 }
 
 func walkYAML(node *yaml.Node, exprs *[]templateExpr, registers map[string]struct{}) {
@@ -116,16 +120,20 @@ func bareExprs(node *yaml.Node) []templateExpr {
 		if strings.TrimSpace(node.Value) == "" {
 			return nil
 		}
+
 		return []templateExpr{{line: node.Line, text: node.Value}}
 	case yaml.SequenceNode:
 		var out []templateExpr
+
 		for _, child := range node.Content {
 			out = append(out, bareExprs(child)...)
 		}
+
 		return out
 	case yaml.DocumentNode, yaml.MappingNode, yaml.AliasNode:
 		return nil
 	}
+
 	return nil
 }
 
@@ -138,9 +146,12 @@ var rawBlockRE = regexp.MustCompile(`(?s)\{%-?\s*raw\s*-?%\}.*?\{%-?\s*endraw\s*
 // extracted as expressions, keeping the newline count so later line numbers
 // stay correct.
 func stripRawBlocks(text string) string {
-	return rawBlockRE.ReplaceAllStringFunc(text, func(match string) string {
-		return strings.Repeat("\n", strings.Count(match, "\n"))
-	})
+	return rawBlockRE.ReplaceAllStringFunc(
+		text,
+		func(match string) string {
+			return strings.Repeat("\n", strings.Count(match, "\n"))
+		},
+	)
 }
 
 // spanExprs extracts the `{{ }}` output expressions and the `{% if/elif/set %}`
@@ -149,6 +160,7 @@ func stripRawBlocks(text string) string {
 func spanExprs(text string, baseLine int) []templateExpr {
 	text = stripRawBlocks(text)
 	out := delimited(text, baseLine, "{{", "}}", nil)
+
 	return append(out, delimited(text, baseLine, "{%", "%}", controlExpr)...)
 }
 
@@ -164,36 +176,51 @@ func controlExpr(body string) string {
 		if _, rhs, ok := strings.Cut(body, "="); ok {
 			return strings.TrimSpace(rhs)
 		}
+
 		return ""
 	default:
 		return ""
 	}
 }
 
-func delimited(text string, baseLine int, opening, closing string, transform func(string) string) []templateExpr {
+func delimited(
+	text string,
+	baseLine int,
+	opening string,
+	closing string,
+	transform func(string) string,
+) []templateExpr {
 	var out []templateExpr
 	cursor := 0
+
 	for {
 		start := strings.Index(text[cursor:], opening)
 		if start < 0 {
 			return out
 		}
+
 		start += cursor
 		end := strings.Index(text[start:], closing)
 		if end < 0 {
 			return out
 		}
+
 		end += start
 		inner := trimMarkers(text[start+len(opening) : end])
 		if transform != nil {
 			inner = transform(inner)
 		}
+
 		if inner != "" {
-			out = append(out, templateExpr{
-				line: baseLine + strings.Count(text[:start], "\n"),
-				text: inner,
-			})
+			out = append(
+				out,
+				templateExpr{
+					line: baseLine + strings.Count(text[:start], "\n"),
+					text: inner,
+				},
+			)
 		}
+
 		cursor = end + len(closing)
 	}
 }
@@ -204,5 +231,6 @@ func trimMarkers(body string) string {
 	body = strings.TrimSpace(body)
 	body = strings.TrimPrefix(body, "-")
 	body = strings.TrimSuffix(body, "-")
+
 	return strings.TrimSpace(body)
 }

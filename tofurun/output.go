@@ -33,30 +33,41 @@ func openOutput(request Request, parsed command, built environment) (*output, er
 		slog.Error("tofurun.log_open_failed", "root", request.Root, "err", err)
 		return nil, fmt.Errorf("open the OpenTofu run log: %w", err)
 	}
+
 	console := os.Stdout
 	if request.ProgressToStderr || request.OutputMode == PrivateJSON {
 		console = os.Stderr
 	}
+
 	announcement := os.Stdout
 	if request.ProgressToStderr {
 		announcement = os.Stderr
 	}
+
 	log.AnnounceTo(announcement, "Tofu")
 	sink := &output{
-		stdout: nil, stderr: nil, logPath: log.Path(), log: log,
-		logStreams: log.Streams(), consoleStreams: runlog.NewStreamPair(console, patterns), json: nil,
+		stdout:         nil,
+		stderr:         nil,
+		logPath:        log.Path(),
+		log:            log,
+		logStreams:     log.Streams(),
+		consoleStreams: runlog.NewStreamPair(console, patterns),
+		json:           nil,
 	}
 	sink.stdout = &teeWriter{log: sink.logStreams.Stdout, console: sink.consoleStreams.Stdout}
 	sink.stderr = &teeWriter{log: sink.logStreams.Stderr, console: sink.consoleStreams.Stderr}
 	if request.OutputMode != PrivateJSON {
 		return sink, nil
 	}
+
 	file, err := createPrivateFile(built.tmpdir, request.JSONPath)
 	if err != nil {
 		closeErr := sink.close(false)
 		return nil, errors.Join(err, closeErr)
 	}
+
 	sink.json, sink.stdout = file, file
+
 	return sink, nil
 }
 
@@ -67,6 +78,7 @@ func createPrivateFile(tmpdir, path string) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	root, err := os.OpenRoot(tmpdir)
 	if err != nil {
 		slog.Error("tofurun.json_create_failed", "path", path, "err", err)
@@ -78,12 +90,15 @@ func createPrivateFile(tmpdir, path string) (*os.File, error) {
 		slog.Error("tofurun.json_create_failed", "path", path, "err", err)
 		return nil, fmt.Errorf("create the private JSON file: %w", err)
 	}
+
 	if err := file.Chmod(privateFileMode); err != nil {
 		closeQuietly(file)
 		removeQuietly(path)
 		slog.Error("tofurun.json_create_failed", "path", path, "err", err)
+
 		return nil, fmt.Errorf("restrict the private JSON file: %w", err)
 	}
+
 	return file, nil
 }
 
@@ -95,11 +110,13 @@ func (o *output) close(keep bool) error {
 		slog.Error("tofurun.console_flush_failed", "err", consoleErr)
 		consoleErr = fmt.Errorf("flush the redacted OpenTofu output: %w", consoleErr)
 	}
+
 	logErr := errors.Join(o.logStreams.Close(), o.log.Close())
 	if logErr != nil {
 		slog.Error("tofurun.log_close_failed", "log", o.logPath, "err", logErr)
 		logErr = fmt.Errorf("close the OpenTofu run log: %w", logErr)
 	}
+
 	var jsonErr error
 	if o.json != nil {
 		jsonErr = o.json.Close()
@@ -107,10 +124,12 @@ func (o *output) close(keep bool) error {
 			slog.Error("tofurun.json_close_failed", "path", o.json.Name(), "err", jsonErr)
 			jsonErr = fmt.Errorf("close the private JSON file: %w", jsonErr)
 		}
+
 		if !keep || jsonErr != nil {
 			removeQuietly(o.json.Name())
 		}
 	}
+
 	return errors.Join(consoleErr, logErr, jsonErr)
 }
 
@@ -131,8 +150,10 @@ func (t *teeWriter) Write(chunk []byte) (int, error) {
 	if _, err := t.log.Write(chunk); err != nil {
 		return 0, fmt.Errorf("write the OpenTofu run log: %w", err)
 	}
+
 	if _, err := t.console.Write(chunk); err != nil {
 		return 0, fmt.Errorf("write the redacted OpenTofu output: %w", err)
 	}
+
 	return len(chunk), nil
 }
