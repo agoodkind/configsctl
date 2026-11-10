@@ -114,6 +114,7 @@ func prepareMigrationCredentials(
 					"err",
 					fmt.Sprintf("%T", err),
 				)
+
 				return migrationCredentials{}, fmt.Errorf(
 					"generate the protected migration credential: %w",
 					err,
@@ -351,7 +352,8 @@ func sameMigrationCredentialBinding(left, right migrationCredentialBinding) bool
 
 	return a.LockHost == b.LockHost && a.UsernameVariable == b.UsernameVariable && a.PasswordVariable == b.PasswordVariable &&
 		a.Dell.Endpoint == b.Dell.Endpoint && a.Dell.AccountID == b.Dell.AccountID && a.Dell.Username == b.Dell.Username &&
-		a.Dell.RotatorUser == b.Dell.RotatorUser && a.Dell.RotatorPasswordKey == b.Dell.RotatorPasswordKey &&
+		a.Dell.RotatorUser == b.Dell.RotatorUser &&
+		a.Dell.RotatorPasswordKey == b.Dell.RotatorPasswordKey &&
 		a.Dell.ServerName == b.Dell.ServerName &&
 		left.certificate == right.certificate &&
 		slices.Equal(a.Dell.ReadPaths, b.Dell.ReadPaths)

@@ -138,7 +138,8 @@ func verifyIdentity(settings Settings, state transport.HostArtifactState) (Ident
 	}
 
 	installed := state.Installed
-	if state.Workspace != settings.Workspace || state.Node != settings.Node || state.Environment != settings.Environment ||
+	if state.Workspace != settings.Workspace || state.Node != settings.Node ||
+		state.Environment != settings.Environment ||
 		installed.Workspace != settings.Workspace ||
 		installed.Node != settings.Node ||
 		installed.Environment != settings.Environment {
