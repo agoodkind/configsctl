@@ -31,14 +31,11 @@ func Keys(vaultPath, passwordFile string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	names := make([]string, 0, len(mapping))
 	for name := range mapping {
 		names = append(names, name)
 	}
-
 	sort.Strings(names)
-
 	return names, nil
 }
 
@@ -61,32 +58,24 @@ func KeyDetails(vaultPath, passwordFile string) ([]KeyDetail, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	mapping, err := decryptMapping(vaultPath, passwordFile)
 	if err != nil {
 		return nil, err
 	}
-
 	names := make([]string, 0, len(mapping))
 	for name := range mapping {
 		names = append(names, name)
 	}
-
 	sort.Strings(names)
-
 	details := make([]KeyDetail, 0, len(names))
 	for _, name := range names {
 		value := mapping[name]
-		details = append(
-			details,
-			KeyDetail{
-				Name:        name,
-				Length:      len(value),
-				Fingerprint: fingerprint(password, value),
-			},
-		)
+		details = append(details, KeyDetail{
+			Name:        name,
+			Length:      len(value),
+			Fingerprint: fingerprint(password, value),
+		})
 	}
-
 	return details, nil
 }
 
@@ -96,7 +85,6 @@ func fingerprint(password, value string) string {
 	mac := hmac.New(sha256.New, []byte(password))
 	mac.Write([]byte(value))
 	sum := mac.Sum(nil)
-
 	return hex.EncodeToString(sum)[:fingerprintHexLen]
 }
 
@@ -106,12 +94,10 @@ func Secret(key, vaultPath, passwordFile string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-
 	value, ok := mapping[key]
 	if !ok {
 		return "", fmt.Errorf("vault key not found: %s", key)
 	}
-
 	return value, nil
 }
 
@@ -129,21 +115,17 @@ func SetSecrets(stdin, vaultPath, passwordFile string) ([]string, []string, erro
 	if err != nil {
 		return nil, nil, err
 	}
-
 	if len(incoming) == 0 {
 		return nil, nil, errors.New("stdin must contain a YAML mapping of key to value")
 	}
-
 	password, err := readPassword(passwordFile)
 	if err != nil {
 		return nil, nil, err
 	}
-
 	existing, err := decryptMapping(vaultPath, passwordFile)
 	if err != nil {
 		return nil, nil, err
 	}
-
 	added, updated := classifyKeys(incoming, existing)
 	merged := make(map[string]string, len(existing)+len(incoming))
 	maps.Copy(merged, existing)
@@ -151,7 +133,6 @@ func SetSecrets(stdin, vaultPath, passwordFile string) ([]string, []string, erro
 	if err := encryptMapping(vaultPath, password, merged); err != nil {
 		return nil, nil, err
 	}
-
 	return added, updated, nil
 }
 
@@ -162,24 +143,19 @@ func RenameSecret(oldKey, newKey, vaultPath, passwordFile string) error {
 	if err != nil {
 		return err
 	}
-
 	mapping, err := decryptMappingWithPassword(vaultPath, password)
 	if err != nil {
 		return err
 	}
-
 	value, ok := mapping[oldKey]
 	if !ok {
 		return fmt.Errorf("vault key not found: %s", oldKey)
 	}
-
 	if _, exists := mapping[newKey]; exists {
 		return fmt.Errorf("vault key already exists: %s", newKey)
 	}
-
 	delete(mapping, oldKey)
 	mapping[newKey] = value
-
 	return encryptMapping(vaultPath, password, mapping)
 }
 
@@ -190,22 +166,18 @@ func DeleteSecrets(keys []string, vaultPath, passwordFile string) error {
 	if err != nil {
 		return err
 	}
-
 	mapping, err := decryptMappingWithPassword(vaultPath, password)
 	if err != nil {
 		return err
 	}
-
 	for _, key := range keys {
 		if _, ok := mapping[key]; !ok {
 			return fmt.Errorf("vault key not found: %s", key)
 		}
 	}
-
 	for _, key := range keys {
 		delete(mapping, key)
 	}
-
 	return encryptMapping(vaultPath, password, mapping)
 }
 
@@ -214,7 +186,6 @@ func decryptMapping(vaultPath, passwordFile string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	return decryptMappingWithPassword(vaultPath, password)
 }
 
@@ -224,7 +195,6 @@ func decryptMappingWithPassword(vaultPath, password string) (map[string]string, 
 		slog.Error("vault decrypt failed", "path", vaultPath, "err", err)
 		return nil, fmt.Errorf("decrypt %s: %w", vaultPath, err)
 	}
-
 	return parseMapping(plain)
 }
 
@@ -234,12 +204,10 @@ func encryptMapping(vaultPath, password string, mapping map[string]string) error
 		slog.Error("vault marshal failed", "err", err)
 		return fmt.Errorf("marshal vault: %w", err)
 	}
-
 	if err := ansiblevault.EncryptFile(vaultPath, string(out), password); err != nil {
 		slog.Error("vault encrypt failed", "path", vaultPath, "err", err)
 		return fmt.Errorf("encrypt %s: %w", vaultPath, err)
 	}
-
 	return nil
 }
 
@@ -247,13 +215,11 @@ func parseMapping(content string) (map[string]string, error) {
 	if strings.TrimSpace(content) == "" {
 		return map[string]string{}, nil
 	}
-
 	mapping := map[string]string{}
 	if err := yaml.Unmarshal([]byte(content), &mapping); err != nil {
 		slog.Error("vault yaml parse failed", "err", err)
 		return nil, fmt.Errorf("parse vault yaml: %w", err)
 	}
-
 	return mapping, nil
 }
 
@@ -263,13 +229,11 @@ func readPassword(passwordFile string) (string, error) {
 		slog.Error("vault password read failed", "path", passwordFile, "err", err)
 		return "", fmt.Errorf("read vault password: %w", err)
 	}
-
 	return strings.TrimSpace(string(data)), nil
 }
 
 func classifyKeys(incoming, existing map[string]string) ([]string, []string) {
 	var added, updated []string
-
 	for key := range incoming {
 		if _, ok := existing[key]; ok {
 			updated = append(updated, key)
@@ -277,9 +241,7 @@ func classifyKeys(incoming, existing map[string]string) ([]string, []string) {
 			added = append(added, key)
 		}
 	}
-
 	sort.Strings(added)
 	sort.Strings(updated)
-
 	return added, updated
 }

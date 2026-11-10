@@ -39,55 +39,18 @@ type flagRule struct {
 
 var flagRules = map[string]flagRule{
 	initCommand: {
-		allowed: []string{
-			"input",
-			"lockfile",
-			"backend-config",
-			"backend",
-			"no-color",
-			"reconfigure",
-			"var",
-			"var-file",
-		},
+		allowed:  []string{"input", "lockfile", "backend-config", "backend", "no-color", "reconfigure", "var", "var-file"},
 		required: map[string]string{"input": falseValue, "lockfile": "readonly"},
 	},
 	workspaceCommand: {allowed: []string{"no-color"}, required: nil},
 	planCommand: {
 		allowed: []string{
-			"input",
-			"no-color",
-			"detailed-exitcode",
-			parallelismFlag,
-			outFlag,
-			"var",
-			"var-file",
-			"target",
-			"replace",
-			"destroy",
-			lockFlag,
-			"lock-timeout",
-			"refresh",
-			"refresh-only",
-			"exclude",
-			"exclude-file",
-			"target-file",
-			"generate-config-out",
-			"compact-warnings",
-			"concise",
-			"consolidate-errors",
-			"consolidate-warnings",
-			"deprecation",
-			"json",
-			"json-into",
-			"lint",
-			"show-sensitive",
-			"state",
+			"input", "no-color", "detailed-exitcode", parallelismFlag, outFlag, "var", "var-file", "target", "replace", "destroy", lockFlag, "lock-timeout", "refresh",
+			"refresh-only", "exclude", "exclude-file", "target-file", "generate-config-out",
+			"compact-warnings", "concise", "consolidate-errors", "consolidate-warnings", "deprecation",
+			"json", "json-into", "lint", "show-sensitive", "state",
 		},
-		required: map[string]string{
-			"input":             falseValue,
-			"no-color":          trueValue,
-			"detailed-exitcode": trueValue,
-		},
+		required: map[string]string{"input": falseValue, "no-color": trueValue, "detailed-exitcode": trueValue},
 	},
 	showCommand:     {allowed: []string{"no-color", jsonFlag}, required: nil},
 	validateCommand: {allowed: []string{"no-color", jsonFlag}, required: nil},
@@ -97,26 +60,10 @@ var flagRules = map[string]flagRule{
 	},
 	applyCommand: {
 		allowed: []string{
-			"input",
-			parallelismFlag,
-			"no-color",
-			"lock-timeout",
-			lockFlag,
-			"compact-warnings",
-			"concise",
-			"consolidate-errors",
-			"consolidate-warnings",
-			"deprecation",
-			"json",
-			"json-into",
-			"lint",
-			"show-sensitive",
-			"state",
-			"backup",
-			"state-out",
-			"suppress-forget-errors",
-			"var",
-			"var-file",
+			"input", parallelismFlag, "no-color", "lock-timeout", lockFlag,
+			"compact-warnings", "concise", "consolidate-errors", "consolidate-warnings", "deprecation",
+			"json", "json-into", "lint", "show-sensitive", "state", "backup", "state-out", "suppress-forget-errors",
+			"var", "var-file",
 		},
 		required: map[string]string{"input": falseValue},
 	},
@@ -143,35 +90,22 @@ type command struct {
 func parseCommand(args []string) (command, error) {
 	parsed := command{name: "", flags: nil, positionals: nil, positionalIndexes: nil}
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
-		return parsed, rejection(
-			"tofurun.command_missing",
-			"the arguments must start with an OpenTofu subcommand",
-		)
+		return parsed, rejection("tofurun.command_missing", "the arguments must start with an OpenTofu subcommand")
 	}
-
 	first := 1
 	parsed.name = args[0]
 	if args[0] == "workspace" {
 		if len(args) < 2 || args[1] != "select" {
-			return parsed, rejection(
-				"tofurun.command_unsupported",
-				"the workspace command accepts only the select subcommand",
-			)
+			return parsed, rejection("tofurun.command_unsupported", "the workspace command accepts only the select subcommand")
 		}
-
 		parsed.name, first = workspaceCommand, 2
 	}
-
 	// The rejection identifies argument 0 without including its text. Run checks
 	// the subcommand before registering declared secrets, and the argument
 	// can contain a secret.
 	if _, ok := flagRules[parsed.name]; !ok {
-		return parsed, rejection(
-			"tofurun.command_unsupported",
-			"argument 0 is not a supported OpenTofu subcommand",
-		)
+		return parsed, rejection("tofurun.command_unsupported", "argument 0 is not a supported OpenTofu subcommand")
 	}
-
 	for index := first; index < len(args); index++ {
 		argument := args[index]
 		if !strings.HasPrefix(argument, "-") {
@@ -179,15 +113,12 @@ func parseCommand(args []string) (command, error) {
 			parsed.positionalIndexes = append(parsed.positionalIndexes, index)
 			continue
 		}
-
 		name, value, found := strings.Cut(strings.TrimLeft(argument, "-"), "=")
 		if !found {
 			value = trueValue
 		}
-
 		parsed.flags = append(parsed.flags, flag{name: name, value: value, index: index})
 	}
-
 	return parsed, nil
 }
 
@@ -212,13 +143,11 @@ func (c command) usesWorkspace() bool {
 // value returns the last value of the named flag.
 func (c command) value(name string) (string, bool) {
 	value, found := "", false
-
 	for _, item := range c.flags {
 		if item.name == name {
 			value, found = item.value, true
 		}
 	}
-
 	return value, found
 }
 
@@ -227,40 +156,21 @@ func (c command) check(request Request, scoped bool) error {
 	rule := flagRules[c.name]
 	for _, item := range c.flags {
 		if !slices.Contains(rule.allowed, item.name) {
-			return rejection(
-				"tofurun.flag_refused",
-				fmt.Sprintf(
-					"OpenTofu %s does not accept the flag in argument %d",
-					c.name,
-					item.index,
-				),
-			)
+			return rejection("tofurun.flag_refused", fmt.Sprintf("OpenTofu %s does not accept the flag in argument %d", c.name, item.index))
 		}
 	}
-
 	for name, want := range rule.required {
 		if got, _ := c.value(name); got != want {
-			return rejection(
-				"tofurun.flag_missing",
-				fmt.Sprintf("OpenTofu %s requires -%s=%s", c.name, name, want),
-			)
+			return rejection("tofurun.flag_missing", fmt.Sprintf("OpenTofu %s requires -%s=%s", c.name, name, want))
 		}
 	}
-
 	if err := c.checkBackendLock(scoped); err != nil {
 		return err
 	}
-
 	switch c.name {
 	case workspaceCommand:
 		if len(c.positionals) != 1 || c.positionals[0] != request.Workspace {
-			return rejection(
-				"tofurun.workspace_refused",
-				fmt.Sprintf(
-					"workspace select requires exactly the workspace %q",
-					request.Workspace,
-				),
-			)
+			return rejection("tofurun.workspace_refused", fmt.Sprintf("workspace select requires exactly the workspace %q", request.Workspace))
 		}
 	case planCommand:
 		if err := c.checkPlan(); err != nil {
@@ -270,37 +180,23 @@ func (c command) check(request Request, scoped bool) error {
 		return c.checkShow(request.OutputMode)
 	case applyCommand:
 		if len(c.positionals) != 1 {
-			return rejection(
-				"tofurun.saved_plan_missing",
-				"OpenTofu apply requires exactly one saved plan",
-			)
+			return rejection("tofurun.saved_plan_missing", "OpenTofu apply requires exactly one saved plan")
 		}
-
 		if err := c.checkParallelism(); err != nil {
 			return err
 		}
 	default:
 		if len(c.positionals) != 0 {
-			return rejection(
-				"tofurun.positional_refused",
-				fmt.Sprintf("OpenTofu %s does not accept a positional argument", c.name),
-			)
+			return rejection("tofurun.positional_refused", fmt.Sprintf("OpenTofu %s does not accept a positional argument", c.name))
 		}
 	}
-
 	switch request.OutputMode {
 	case RedactedProgress:
 		return nil
 	case PrivateJSON:
-		return rejection(
-			"tofurun.output_refused",
-			"private_json output requires show -json <saved-plan>",
-		)
+		return rejection("tofurun.output_refused", "private_json output requires show -json <saved-plan>")
 	default:
-		return rejection(
-			"tofurun.output_refused",
-			fmt.Sprintf("the output mode %q is not supported", request.OutputMode),
-		)
+		return rejection("tofurun.output_refused", fmt.Sprintf("the output mode %q is not supported", request.OutputMode))
 	}
 }
 
@@ -311,28 +207,19 @@ func (c command) check(request Request, scoped bool) error {
 func (c command) checkBackendLock(scoped bool) error {
 	if lock, found := c.value(lockFlag); scoped && found {
 		if enabled, err := strconv.ParseBool(lock); err != nil || !enabled {
-			return rejection(
-				"tofurun.lock_refused",
-				"a command with a host lock scope requires backend locking",
-			)
+			return rejection("tofurun.lock_refused", "a command with a host lock scope requires backend locking")
 		}
 	}
-
 	return nil
 }
 
 func (c command) checkPlan() error {
 	if len(c.positionals) != 0 {
-		return rejection(
-			"tofurun.positional_refused",
-			"OpenTofu plan does not accept a positional argument",
-		)
+		return rejection("tofurun.positional_refused", "OpenTofu plan does not accept a positional argument")
 	}
-
 	if out, _ := c.value(outFlag); out == "" || out == trueValue {
 		return rejection("tofurun.flag_missing", "OpenTofu plan requires -out=<private-plan>")
 	}
-
 	return c.checkParallelism()
 }
 
@@ -341,12 +228,8 @@ func (c command) checkParallelism() error {
 	text, _ := c.value(parallelismFlag)
 	parallelism, err := strconv.Atoi(text)
 	if err != nil || parallelism < 1 {
-		return rejection(
-			"tofurun.flag_missing",
-			fmt.Sprintf("OpenTofu %s requires -parallelism=N with a positive integer N", c.name),
-		)
+		return rejection("tofurun.flag_missing", fmt.Sprintf("OpenTofu %s requires -parallelism=N with a positive integer N", c.name))
 	}
-
 	return nil
 }
 
@@ -356,40 +239,27 @@ func (c command) savedPlanOutput() string {
 	if c.name != planCommand {
 		return ""
 	}
-
 	out, _ := c.value(outFlag)
-
 	return out
 }
 
 func (c command) checkShow(mode OutputMode) error {
 	if len(c.positionals) > 1 {
-		return rejection(
-			"tofurun.positional_refused",
-			"OpenTofu show accepts at most one saved plan",
-		)
+		return rejection("tofurun.positional_refused", "OpenTofu show accepts at most one saved plan")
 	}
-
 	jsonValue, isJSON := c.value(jsonFlag)
 	switch mode {
 	case PrivateJSON:
 		if jsonValue != trueValue || len(c.positionals) != 1 || len(c.flags) != 1 {
-			return rejection(
-				"tofurun.output_refused",
-				"private_json output requires show -json <saved-plan>",
-			)
+			return rejection("tofurun.output_refused", "private_json output requires show -json <saved-plan>")
 		}
 	case RedactedProgress:
 		if isJSON {
 			return rejection("tofurun.output_refused", "show -json requires private_json output")
 		}
 	default:
-		return rejection(
-			"tofurun.output_refused",
-			fmt.Sprintf("the output mode %q is not supported", mode),
-		)
+		return rejection("tofurun.output_refused", fmt.Sprintf("the output mode %q is not supported", mode))
 	}
-
 	return nil
 }
 
@@ -399,7 +269,6 @@ func (c command) savedPlanIndex() int {
 	if (c.name == showCommand || c.name == applyCommand) && len(c.positionalIndexes) == 1 {
 		return c.positionalIndexes[0]
 	}
-
 	return -1
 }
 
@@ -412,25 +281,16 @@ var printableArgument = regexp.MustCompile(`^[\x20-\x7E]+$`)
 func printable(binary string, args []string) (string, []string, error) {
 	safeBinary := printableArgument.FindString(binary)
 	if safeBinary != binary {
-		return "", nil, rejection(
-			"tofurun.argument_refused",
-			"Binary contains a character that is not printable ASCII",
-		)
+		return "", nil, rejection("tofurun.argument_refused", "Binary contains a character that is not printable ASCII")
 	}
-
 	safeArgs := make([]string, 0, len(args))
 	for index, argument := range args {
 		match := printableArgument.FindString(argument)
 		if match != argument {
-			return "", nil, rejection(
-				"tofurun.argument_refused",
-				fmt.Sprintf("argument %d contains a character that is not printable ASCII", index),
-			)
+			return "", nil, rejection("tofurun.argument_refused", fmt.Sprintf("argument %d contains a character that is not printable ASCII", index))
 		}
-
 		safeArgs = append(safeArgs, match)
 	}
-
 	return safeBinary, safeArgs, nil
 }
 
@@ -438,6 +298,5 @@ func printable(binary string, args []string) (string, []string, error) {
 func rejection(event, reason string) error {
 	err := fmt.Errorf("%w: %s", ErrRejected, reason)
 	slog.Error(event, "reason", reason, "err", err)
-
 	return err
 }

@@ -26,7 +26,6 @@ func TestOpenRunLogCreatesAPrivateDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-
 	if err := log.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -35,7 +34,6 @@ func TestOpenRunLogCreatesAPrivateDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat: %v", err)
 	}
-
 	if got := info.Mode().Perm(); got != fs.FileMode(runlog.DirPerm) {
 		t.Fatalf("run log dir mode = %v, want %v", got, fs.FileMode(runlog.DirPerm))
 	}
@@ -50,7 +48,6 @@ func TestOpenRunLogRefusesASymlinkedDirectory(t *testing.T) {
 	if err := os.Mkdir(victim, 0o755); err != nil {
 		t.Fatalf("Mkdir: %v", err)
 	}
-
 	if err := os.Symlink(victim, runlog.Root()); err != nil {
 		t.Fatalf("Symlink: %v", err)
 	}
@@ -60,7 +57,6 @@ func TestOpenRunLogRefusesASymlinkedDirectory(t *testing.T) {
 		_ = log.Close()
 		t.Fatal("Open accepted a symlinked run log directory")
 	}
-
 	if !strings.Contains(err.Error(), "symlink") {
 		t.Fatalf("error = %v, want it to name the symlink", err)
 	}
@@ -69,20 +65,13 @@ func TestOpenRunLogRefusesASymlinkedDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat: %v", err)
 	}
-
 	if got := info.Mode().Perm(); got != 0o755 {
-		t.Fatalf(
-			"the symlink target's mode changed to %v, want it untouched at %v",
-			got,
-			fs.FileMode(0o755),
-		)
+		t.Fatalf("the symlink target's mode changed to %v, want it untouched at %v", got, fs.FileMode(0o755))
 	}
-
 	entries, err := os.ReadDir(victim)
 	if err != nil {
 		t.Fatalf("ReadDir: %v", err)
 	}
-
 	if len(entries) != 0 {
 		t.Fatalf("the symlink target received %d entries, want none", len(entries))
 	}
@@ -97,7 +86,6 @@ func TestOpenRunLogRefusesAWorldReadableDirectory(t *testing.T) {
 	if err := os.Mkdir(root, 0o777); err != nil {
 		t.Fatalf("Mkdir: %v", err)
 	}
-
 	if err := os.Chmod(root, 0o777); err != nil {
 		t.Fatalf("Chmod: %v", err)
 	}
@@ -107,7 +95,6 @@ func TestOpenRunLogRefusesAWorldReadableDirectory(t *testing.T) {
 		_ = log.Close()
 		t.Fatal("Open accepted a world-readable run log directory")
 	}
-
 	if !strings.Contains(err.Error(), "mode") {
 		t.Fatalf("error = %v, want it to name the mode", err)
 	}
@@ -126,7 +113,6 @@ func TestOpenRunLogRefusesAFileUnderTheDirectoryName(t *testing.T) {
 		_ = log.Close()
 		t.Fatal("Open accepted a file as the run log directory")
 	}
-
 	if !strings.Contains(err.Error(), "not a directory") {
 		t.Fatalf("error = %v, want it to say the path is not a directory", err)
 	}
@@ -140,7 +126,6 @@ func TestOpenRunLogReusesItsOwnDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open first: %v", err)
 	}
-
 	if err := first.Close(); err != nil {
 		t.Fatalf("Close first: %v", err)
 	}
@@ -149,7 +134,6 @@ func TestOpenRunLogReusesItsOwnDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open second: %v", err)
 	}
-
 	if err := second.Close(); err != nil {
 		t.Fatalf("Close second: %v", err)
 	}
@@ -158,7 +142,6 @@ func TestOpenRunLogReusesItsOwnDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir: %v", err)
 	}
-
 	if len(entries) != 2 {
 		t.Fatalf("run log dir contains %d files after two runs, want 2", len(entries))
 	}
@@ -172,7 +155,6 @@ func TestCreateRunLogFileStaysInsideTheDirectory(t *testing.T) {
 	if err := os.Mkdir(root, runlog.DirPerm); err != nil {
 		t.Fatalf("Mkdir: %v", err)
 	}
-
 	outside := filepath.Join(t.TempDir(), "outside.txt")
 	if err := os.WriteFile(outside, []byte("original\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
@@ -188,18 +170,15 @@ func TestCreateRunLogFileStaysInsideTheDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenRoot: %v", err)
 	}
-
 	t.Cleanup(func() { _ = dir.Close() })
 
 	file, err := runlog.Create(dir, "deploy-mwan", stamp)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-
 	if _, err := file.WriteString("run output\n"); err != nil {
 		t.Fatalf("WriteString: %v", err)
 	}
-
 	if err := file.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -208,11 +187,9 @@ func TestCreateRunLogFileStaysInsideTheDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
-
 	if string(body) != "original\n" {
 		t.Fatalf("the file outside the directory was written through the symlink: %q", body)
 	}
-
 	if filepath.Base(file.Name()) == planted {
 		t.Fatalf("Create reused the planted name %q", planted)
 	}
@@ -226,16 +203,13 @@ func TestOpenRunLogPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-
 	if err := log.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-
 	info, err := os.Stat(log.Path())
 	if err != nil {
 		t.Fatalf("Stat: %v", err)
 	}
-
 	if got := info.Mode().Perm(); got != fs.FileMode(runlog.Perm) {
 		t.Fatalf("log mode = %v, want %v", got, fs.FileMode(runlog.Perm))
 	}
@@ -249,35 +223,28 @@ func TestCreateRunLogFileNeverOverwrites(t *testing.T) {
 	if err := os.Mkdir(runlog.Root(), runlog.DirPerm); err != nil {
 		t.Fatalf("Mkdir: %v", err)
 	}
-
 	dir, err := os.OpenRoot(runlog.Root())
 	if err != nil {
 		t.Fatalf("OpenRoot: %v", err)
 	}
-
 	t.Cleanup(func() { _ = dir.Close() })
 
 	const stamp = "20260819T151126Z"
 	names := map[string]bool{}
-
 	for run := 1; run <= 3; run++ {
 		file, err := runlog.Create(dir, "deploy-mwan", stamp)
 		if err != nil {
 			t.Fatalf("Create run %d: %v", run, err)
 		}
-
 		if _, err := file.WriteString("run\n"); err != nil {
 			t.Fatalf("write run %d: %v", run, err)
 		}
-
 		if err := file.Close(); err != nil {
 			t.Fatalf("close run %d: %v", run, err)
 		}
-
 		if names[file.Name()] {
 			t.Fatalf("run %d reused the name %s", run, file.Name())
 		}
-
 		names[file.Name()] = true
 	}
 
@@ -285,7 +252,6 @@ func TestCreateRunLogFileNeverOverwrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir: %v", err)
 	}
-
 	if len(entries) != 3 {
 		t.Fatalf("run log dir contains %d files after 3 runs, want 3", len(entries))
 	}
@@ -307,13 +273,10 @@ func TestRunLogName(t *testing.T) {
 		{arg: "/", want: "run"},
 	}
 	for _, tc := range tests {
-		t.Run(
-			tc.arg,
-			func(t *testing.T) {
-				if got := runlog.Name(tc.arg); got != tc.want {
-					t.Fatalf("Name(%q) = %q, want %q", tc.arg, got, tc.want)
-				}
-			},
-		)
+		t.Run(tc.arg, func(t *testing.T) {
+			if got := runlog.Name(tc.arg); got != tc.want {
+				t.Fatalf("Name(%q) = %q, want %q", tc.arg, got, tc.want)
+			}
+		})
 	}
 }

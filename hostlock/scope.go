@@ -33,23 +33,13 @@ func (s *Set) Scope() (*Scope, error) {
 	if err := s.usable(); err != nil {
 		return nil, err
 	}
-
 	s.mu.Lock()
-
 	hosts := make([]string, 0, len(s.held))
 	for _, host := range s.held {
 		hosts = append(hosts, host.Name)
 	}
-
 	s.mu.Unlock()
-
-	return &Scope{
-		process:    os.Getpid(),
-		run:        s.run,
-		controller: s.controller,
-		set:        s,
-		hosts:      hosts,
-	}, nil
+	return &Scope{process: os.Getpid(), run: s.run, controller: s.controller, set: s, hosts: hosts}, nil
 }
 
 // Check returns nil when scope permits mutation on every host in
@@ -60,31 +50,20 @@ func (s *Scope) Check(requiredHosts []string) error {
 	if s == nil {
 		return scopeRefusal("", "the request does not supply a host lock scope")
 	}
-
 	if s.set == nil {
 		return scopeRefusal("", "Set.Scope did not create the scope")
 	}
-
 	if process := os.Getpid(); s.process != process {
-		return scopeRefusal(
-			s.run,
-			fmt.Sprintf("process %d created the scope, not process %d", s.process, process),
-		)
+		return scopeRefusal(s.run, fmt.Sprintf("process %d created the scope, not process %d", s.process, process))
 	}
-
 	if err := s.set.usable(); err != nil {
 		return err
 	}
-
 	for _, name := range requiredHosts {
 		if !slices.Contains(s.hosts, name) {
-			return scopeRefusal(
-				s.run,
-				fmt.Sprintf("controller %s did not lock host %s", s.controller, name),
-			)
+			return scopeRefusal(s.run, fmt.Sprintf("controller %s did not lock host %s", s.controller, name))
 		}
 	}
-
 	return nil
 }
 
@@ -104,16 +83,10 @@ func (s *Set) usable() error {
 	case renewalEnded(renewalDone):
 		return scopeRefusal(s.run, "the lock renewal ended")
 	}
-
 	if name, deadline, expired := s.overdue(clock.NowUTC()); expired {
-		reason := fmt.Sprintf(
-			"the lock on host %s passed its loss deadline %s",
-			name,
-			deadline.Format(time.RFC3339),
-		)
+		reason := fmt.Sprintf("the lock on host %s passed its loss deadline %s", name, deadline.Format(time.RFC3339))
 		return scopeRefusal(s.run, reason)
 	}
-
 	return nil
 }
 
@@ -122,7 +95,6 @@ func renewalEnded(done <-chan struct{}) bool {
 	if done == nil {
 		return false
 	}
-
 	select {
 	case <-done:
 		return true
@@ -134,6 +106,5 @@ func renewalEnded(done <-chan struct{}) bool {
 func scopeRefusal(run, reason string) error {
 	err := fmt.Errorf("%w: %s", ErrScope, reason)
 	slog.Error("hostlock.scope_refused", "run", run, "reason", reason, "err", err)
-
 	return err
 }

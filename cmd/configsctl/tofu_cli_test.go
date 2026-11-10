@@ -24,11 +24,9 @@ func TestMain(m *testing.M) {
 	if os.Getenv(planStreamsVariable) != "" {
 		os.Exit(writePlanStreams())
 	}
-
 	if secret := os.Getenv(splitSecretVariable); secret != "" {
 		os.Exit(writeSplitSecret(secret, os.Getenv(splitBetweenVariable), os.Args[1:]))
 	}
-
 	os.Exit(runWithBuiltBinary(m))
 }
 
@@ -38,7 +36,6 @@ func runWithBuiltBinary(m *testing.M) int {
 		fmt.Fprintf(os.Stderr, "create build directory: %v\n", err)
 		return 1
 	}
-
 	defer func() { _ = os.RemoveAll(buildDir) }()
 
 	configsctlBinary = filepath.Join(buildDir, "configsctl")
@@ -46,7 +43,6 @@ func runWithBuiltBinary(m *testing.M) int {
 	if raceEnabled() {
 		buildArgs = append(buildArgs, "-race")
 	}
-
 	buildArgs = append(buildArgs, "-o", configsctlBinary, ".")
 	build := exec.CommandContext(context.Background(), "go", buildArgs...)
 	output, err := build.CombinedOutput()
@@ -54,7 +50,6 @@ func runWithBuiltBinary(m *testing.M) int {
 		fmt.Fprintf(os.Stderr, "build configsctl: %v\n%s", err, output)
 		return 1
 	}
-
 	return m.Run()
 }
 
@@ -63,13 +58,11 @@ func raceEnabled() bool {
 	if !found {
 		return false
 	}
-
 	for _, setting := range info.Settings {
 		if setting.Key == raceBuildSetting && setting.Value == "true" {
 			return true
 		}
 	}
-
 	return false
 }
 
@@ -163,7 +156,6 @@ func writeFixtureFile(t *testing.T, path, content string) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatalf("create directory for %s: %v", path, err)
 	}
-
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
@@ -182,23 +174,11 @@ func newConfigsTreeAt(t *testing.T, base string) configsTree {
 		home:       filepath.Join(base, "home"),
 		workspaces: filepath.Join(base, "configs", "workspaces"),
 	}
-	writeFixtureFile(
-		t,
-		filepath.Join(tree.root, "configsctl.yml"),
-		workspaceFixture(t, "native-defaults.yml"),
-	)
+	writeFixtureFile(t, filepath.Join(tree.root, "configsctl.yml"), workspaceFixture(t, "native-defaults.yml"))
 
-	writeFixtureFile(
-		t,
-		filepath.Join(tree.workspaces, "backend.tf"),
-		fmt.Sprintf(localBackend, "root.tfstate"),
-	)
+	writeFixtureFile(t, filepath.Join(tree.workspaces, "backend.tf"), fmt.Sprintf(localBackend, "root.tfstate"))
 	writeFixtureFile(t, filepath.Join(tree.workspaces, "main.tf"), rootWorkspace)
-	writeFixtureFile(
-		t,
-		filepath.Join(tree.workspaces, "alpha", "backend.tf"),
-		fmt.Sprintf(localBackend, "alpha.tfstate"),
-	)
+	writeFixtureFile(t, filepath.Join(tree.workspaces, "alpha", "backend.tf"), fmt.Sprintf(localBackend, "alpha.tfstate"))
 	writeFixtureFile(t, filepath.Join(tree.workspaces, "alpha", "main.tf"), alphaWorkspace)
 	writeFixtureFile(t, filepath.Join(tree.workspaces, "beta", "main.tf.json"), betaWorkspaceJSON)
 	writeFixtureFile(t, filepath.Join(tree.workspaces, "shared", "main.tf"), sharedModule)
@@ -215,15 +195,12 @@ func newConfigsTreeAt(t *testing.T, base string) configsTree {
 	if err := os.MkdirAll(filepath.Dir(vaultFile), 0o700); err != nil {
 		t.Fatalf("create vault directory: %v", err)
 	}
-
 	if err := ansiblevault.EncryptFile(vaultFile, vaultContent, vaultUnlockText); err != nil {
 		t.Fatalf("encrypt vault: %v", err)
 	}
-
 	writeFixtureFile(t, filepath.Join(tree.root, ".gitignore"), sourceFixtureIgnore)
 	sourceGit(t, tree, "init", "--initial-branch=main")
 	publishConfigsTree(t, tree)
-
 	return tree
 }
 
@@ -232,23 +209,12 @@ func runConfigsctl(t *testing.T, tree configsTree, args ...string) commandResult
 	return runConfigsctlWithPath(t, tree, os.Getenv("PATH"), args...)
 }
 
-func runConfigsctlWithPath(
-	t *testing.T,
-	tree configsTree,
-	path string,
-	args ...string,
-) commandResult {
+func runConfigsctlWithPath(t *testing.T, tree configsTree, path string, args ...string) commandResult {
 	t.Helper()
 	return runConfigsctlWithEnv(t, tree, path, nil, args...)
 }
 
-func runConfigsctlWithEnv(
-	t *testing.T,
-	tree configsTree,
-	path string,
-	extraEnv []string,
-	args ...string,
-) commandResult {
+func runConfigsctlWithEnv(t *testing.T, tree configsTree, path string, extraEnv []string, args ...string) commandResult {
 	t.Helper()
 	tempDir := filepath.Join(tree.root, "tmp")
 	if len(args) != 0 && args[0] == "deploy" {
@@ -257,22 +223,17 @@ func runConfigsctlWithEnv(
 		if err != nil {
 			t.Fatalf("create a short deploy TMPDIR: %v", err)
 		}
-
 		t.Cleanup(func() { _ = os.RemoveAll(tempDir) })
 	} else if err := os.MkdirAll(tempDir, 0o700); err != nil {
 		t.Fatalf("create TMPDIR: %v", err)
 	}
-
 	command := exec.CommandContext(context.Background(), configsctlBinary, args...)
 	command.Dir = tree.root
-	command.Env = append(
-		[]string{
-			"PATH=" + path,
-			"HOME=" + tree.home,
-			"TMPDIR=" + tempDir,
-		},
-		extraEnv...,
-	)
+	command.Env = append([]string{
+		"PATH=" + path,
+		"HOME=" + tree.home,
+		"TMPDIR=" + tempDir,
+	}, extraEnv...)
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
 	command.Stderr = &stderr
@@ -287,9 +248,7 @@ func runConfigsctlWithEnv(
 	default:
 		t.Fatalf("run configsctl %v: %v", args, runErr)
 	}
-
 	appendFailedRunLogs(t, &result, tempDir)
-
 	return result
 }
 
@@ -298,18 +257,15 @@ func appendFailedRunLogs(t *testing.T, result *commandResult, directory string) 
 	if result.exitCode == 0 {
 		return
 	}
-
 	paths, err := filepath.Glob(filepath.Join(directory, "configs-runs", "*.log"))
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	for _, path := range paths {
 		log, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
 		}
-
 		result.stderr += "\n" + string(log)
 	}
 }
@@ -324,13 +280,8 @@ func requireTofu(t *testing.T) {
 func requireSuccess(t *testing.T, result commandResult, args ...string) {
 	t.Helper()
 	if result.exitCode != 0 {
-		t.Fatalf(
-			"configsctl %v exited %d\nstdout: %s\nstderr: %s",
-			args,
-			result.exitCode,
-			result.stdout,
-			result.stderr,
-		)
+		t.Fatalf("configsctl %v exited %d\nstdout: %s\nstderr: %s",
+			args, result.exitCode, result.stdout, result.stderr)
 	}
 }
 
@@ -340,7 +291,6 @@ func tofuArgs(workspace string, tofuCommand ...string) []string {
 	if workspace != "" {
 		args = append(args, workspace)
 	}
-
 	return append(args, tofuCommand...)
 }
 
@@ -358,7 +308,6 @@ func readOutput(t *testing.T, tree configsTree, workspace, name string) string {
 	args := tofuArgs(workspace, "output", "-raw", name)
 	result := runConfigsctl(t, tree, args...)
 	requireSuccess(t, result, args...)
-
 	return result.stdout
 }
 
@@ -405,10 +354,7 @@ func TestTofuPassesAModuleDirectoryNameToTofu(t *testing.T) {
 
 	result := runConfigsctl(t, tree, "tofu", "shared", "plan")
 	if result.exitCode == 0 {
-		t.Fatalf(
-			"configsctl tofu shared plan succeeded, want tofu to reject the argument\nstdout: %s",
-			result.stdout,
-		)
+		t.Fatalf("configsctl tofu shared plan succeeded, want tofu to reject the argument\nstdout: %s", result.stdout)
 	}
 }
 
@@ -445,11 +391,9 @@ func TestTofuWithoutRootBackendListsChildWorkspaces(t *testing.T) {
 	if result.exitCode == 0 {
 		t.Fatal("configsctl tofu plan succeeded without a root backend or a workspace name")
 	}
-
 	if !strings.Contains(result.stderr, "alpha, beta") {
 		t.Fatalf("stderr = %q, want it to list the workspaces alpha, beta", result.stderr)
 	}
-
 	if strings.Contains(result.stderr, "shared") {
 		t.Fatalf("stderr = %q, want it to omit the module directory", result.stderr)
 	}
@@ -489,11 +433,7 @@ const lockTargetsSettingsForm = `  lock_targets:
 func TestTofuAcceptsLockTargets(t *testing.T) {
 	requireTofu(t)
 	tree := newConfigsTree(t)
-	writeFixtureFile(
-		t,
-		filepath.Join(tree.root, "configsctl.yml"),
-		settingsContent+lockTargetsSettingsForm,
-	)
+	writeFixtureFile(t, filepath.Join(tree.root, "configsctl.yml"), settingsContent+lockTargetsSettingsForm)
 
 	args := tofuArgs("alpha", "version")
 	requireSuccess(t, runConfigsctl(t, tree, args...), args...)
@@ -582,21 +522,17 @@ func TestTofuRejectsInvalidSettingsFile(t *testing.T) {
 		},
 	}
 	for _, testCase := range cases {
-		t.Run(
-			testCase.name,
-			func(t *testing.T) {
-				tree := newConfigsTree(t)
-				writeFixtureFile(t, filepath.Join(tree.root, "configsctl.yml"), testCase.content)
+		t.Run(testCase.name, func(t *testing.T) {
+			tree := newConfigsTree(t)
+			writeFixtureFile(t, filepath.Join(tree.root, "configsctl.yml"), testCase.content)
 
-				result := runConfigsctl(t, tree, "tofu", "plan")
-				if result.exitCode == 0 {
-					t.Fatalf("configsctl tofu plan accepted %q", testCase.content)
-				}
-
-				if !strings.Contains(result.stderr, testCase.fragment) {
-					t.Fatalf("stderr = %q, want it to mention %q", result.stderr, testCase.fragment)
-				}
-			},
-		)
+			result := runConfigsctl(t, tree, "tofu", "plan")
+			if result.exitCode == 0 {
+				t.Fatalf("configsctl tofu plan accepted %q", testCase.content)
+			}
+			if !strings.Contains(result.stderr, testCase.fragment) {
+				t.Fatalf("stderr = %q, want it to mention %q", result.stderr, testCase.fragment)
+			}
+		})
 	}
 }

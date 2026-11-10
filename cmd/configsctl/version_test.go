@@ -38,7 +38,6 @@ func runVersionCommand(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("os.Pipe: %v", err)
 	}
-
 	originalStdout := os.Stdout
 	os.Stdout = writer
 	runErr := run([]string{"version"})
@@ -46,16 +45,13 @@ func runVersionCommand(t *testing.T) string {
 	if closeErr := writer.Close(); closeErr != nil {
 		t.Fatalf("close stdout pipe: %v", closeErr)
 	}
-
 	output, readErr := io.ReadAll(reader)
 	if readErr != nil {
 		t.Fatalf("read stdout pipe: %v", readErr)
 	}
-
 	if runErr != nil {
 		t.Fatalf("run(version) = %v, want nil", runErr)
 	}
-
 	return string(output)
 }
 
@@ -72,19 +68,14 @@ func TestRunVersionPrintsStampedBuild(t *testing.T) {
 		{name: "dirty local stamp", dirty: "true", wantDirty: "dirty"},
 	}
 	for _, testCase := range cases {
-		t.Run(
-			testCase.name,
-			func(t *testing.T) {
-				setVersionStamp(t, "427cc32", testCase.dirty)
-				output := runVersionCommand(t)
-				pattern := regexp.MustCompile(
-					fmt.Sprintf(versionLineFormat, "427cc32", testCase.wantDirty),
-				)
-				if !pattern.MatchString(output) {
-					t.Fatalf("version output = %q, want match for %s", output, pattern)
-				}
-			},
-		)
+		t.Run(testCase.name, func(t *testing.T) {
+			setVersionStamp(t, "427cc32", testCase.dirty)
+			output := runVersionCommand(t)
+			pattern := regexp.MustCompile(fmt.Sprintf(versionLineFormat, "427cc32", testCase.wantDirty))
+			if !pattern.MatchString(output) {
+				t.Fatalf("version output = %q, want match for %s", output, pattern)
+			}
+		})
 	}
 }
 

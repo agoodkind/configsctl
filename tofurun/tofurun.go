@@ -99,7 +99,6 @@ func Run(ctx context.Context, request Request, scope *hostlock.Scope) (Result, e
 		return Result{ExitCode: 0, LogPath: ""}, err
 	}
 	defer prepared.cleanup()
-
 	return prepared.execute(ctx)
 }
 
@@ -120,57 +119,41 @@ func prepare(request Request, scope *hostlock.Scope) (*prepared, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	parsed, err := parseCommand(args)
 	if err != nil {
 		return nil, err
 	}
-
 	if err := parsed.check(request, scope != nil); err != nil {
 		return nil, err
 	}
-
 	if err := checkScope(parsed, scope, request.RequiredHosts); err != nil {
 		return nil, err
 	}
-
 	if err := checkLocations(request); err != nil {
 		return nil, err
 	}
-
 	built, err := buildEnvironment(request)
 	if err != nil {
 		return nil, err
 	}
-
 	if err := checkSecretArguments(request.Args, built.patterns); err != nil {
 		return nil, err
 	}
-
 	if err := checkFiles(request, parsed, built); err != nil {
 		return nil, err
 	}
-
 	result := &prepared{
-		request:     request,
-		command:     parsed,
-		binary:      binary,
-		args:        args,
-		environment: built,
-		removals:    nil,
-		scope:       scope,
-		diagnostic:  nil,
+		request: request, command: parsed, binary: binary, args: args,
+		environment: built, removals: nil, scope: scope, diagnostic: nil,
 	}
 	if err := result.copySavedPlan(); err != nil {
 		result.cleanup()
 		return nil, err
 	}
-
 	if err := result.prepareJSONDiagnostic(); err != nil {
 		result.cleanup()
 		return nil, err
 	}
-
 	return result, nil
 }
 
@@ -180,12 +163,10 @@ func checkScope(parsed command, scope *hostlock.Scope, requiredHosts []string) e
 	if !parsed.mutates() {
 		return nil
 	}
-
 	if err := scope.Check(requiredHosts); err != nil {
 		slog.Error("tofurun.mutation_refused", "subcommand", parsed.name, "err", err)
 		return fmt.Errorf("start OpenTofu %s: %w", parsed.name, err)
 	}
-
 	return nil
 }
 
@@ -194,21 +175,17 @@ func checkFiles(request Request, parsed command, built environment) error {
 	if err := checkOutput(request, parsed, built); err != nil {
 		return err
 	}
-
 	if out := parsed.savedPlanOutput(); out != "" {
 		if _, err := privateOutputPath("the plan -out path", built.tmpdir, out); err != nil {
 			return err
 		}
 	}
-
 	if parsed.usesWorkspace() {
 		if request.DataDirectory != "" {
 			return checkSelectedWorkspaceData(request.DataDirectory, request.Workspace)
 		}
-
 		return checkSelectedWorkspace(request.Root, request.Workspace)
 	}
-
 	return nil
 }
 
@@ -217,7 +194,6 @@ func (p *prepared) cleanup() {
 	if p.diagnostic != nil {
 		p.diagnostic.cleanup()
 	}
-
 	for _, path := range p.removals {
 		if err := os.RemoveAll(path); err != nil {
 			slog.Warn("tofurun.cleanup_failed", "path", path, "err", err)
@@ -230,16 +206,13 @@ func (p *prepared) execute(ctx context.Context) (Result, error) {
 	if err != nil {
 		return Result{ExitCode: 0, LogPath: ""}, err
 	}
-
 	sink, err := openOutput(p.request, p.command, p.environment)
 	if err != nil {
 		return Result{ExitCode: 0, LogPath: ""}, err
 	}
-
 	if err := checkScope(p.command, p.scope, p.request.RequiredHosts); err != nil {
 		return Result{ExitCode: 0, LogPath: sink.logPath}, errors.Join(err, sink.close(false))
 	}
-
 	binary, args := p.binary, p.args
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Dir = p.request.Root
@@ -247,45 +220,24 @@ func (p *prepared) execute(ctx context.Context) (Result, error) {
 	cmd.Stdin = nil
 	cmd.Stdout = sink.stdout
 	cmd.Stderr = sink.stderr
-	slog.Info(
-		"tofurun.command_started",
-		"root",
-		p.request.Root,
-		"workspace",
-		p.request.Workspace,
-		"subcommand",
-		p.command.name,
-		"mutation",
-		p.command.mutates(),
-	)
+	slog.Info("tofurun.command_started", "root", p.request.Root, "workspace", p.request.Workspace,
+		"subcommand", p.command.name, "mutation", p.command.mutates())
 	exitCode, runErr := localrun.Execute(ctx, cmd)
 	diagnosticErr := p.publishJSONDiagnostic()
 	closeErr := errors.Join(sink.close(runErr == nil && exitCode == 0), diagnosticErr)
 	result := Result{ExitCode: exitCode, LogPath: sink.logPath}
 	if runErr == nil && exitCode < 0 {
 		runErr = fmt.Errorf("%w: OpenTofu %s ended on a signal", ErrIncomplete, p.command.name)
-		slog.Error(
-			"tofurun.command_incomplete",
-			"root",
-			p.request.Root,
-			"subcommand",
-			p.command.name,
-			"err",
-			runErr,
-		)
+		slog.Error("tofurun.command_incomplete", "root", p.request.Root, "subcommand", p.command.name, "err", runErr)
 	}
-
 	if runErr != nil {
 		return result, errors.Join(runErr, closeErr)
 	}
-
 	if closeErr != nil {
 		return result, closeErr
 	}
-
 	if exitCode == 0 {
 		return result, p.checkProviderLock(lockBefore)
 	}
-
 	return result, nil
 }

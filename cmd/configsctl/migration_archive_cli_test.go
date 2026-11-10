@@ -28,11 +28,7 @@ const (
 func padMigrationCLIArchives(t *testing.T, migration *cliMigration) {
 	t.Helper()
 	original := originalMigrationTree(*migration)
-	migration.manifest.RestoreCommit = padMigrationCLIArchive(
-		t,
-		original,
-		migration.manifest.RestoreCommit,
-	)
+	migration.manifest.RestoreCommit = padMigrationCLIArchive(t, original, migration.manifest.RestoreCommit)
 	migration.manifest.Commit = padMigrationCLIArchive(t, migration.tree, migration.manifest.Commit)
 	migration.writeManifest(t)
 }
@@ -45,22 +41,12 @@ func padMigrationCLIArchive(t *testing.T, tree configsTree, commit string) strin
 	if padding < 0 {
 		padding += archiveBlockSize
 	}
-
-	writeFixtureFile(
-		t,
-		filepath.Join(tree.root, "archive-padding.txt"),
-		strings.Repeat("p", padding),
-	)
+	writeFixtureFile(t, filepath.Join(tree.root, "archive-padding.txt"), strings.Repeat("p", padding))
 	commit = commitMigrationFixture(t, tree, "archive-padding.txt")
 	remaining, _ = migrationArchiveTrailer(t, tree, commit)
 	if remaining != archiveMaxTrailer {
-		t.Fatalf(
-			"the real Git archive retained %d padding bytes; require %d",
-			remaining,
-			archiveMaxTrailer,
-		)
+		t.Fatalf("the real Git archive retained %d padding bytes; require %d", remaining, archiveMaxTrailer)
 	}
-
 	return commit
 }
 
@@ -72,29 +58,21 @@ func migrationArchiveTrailer(t *testing.T, tree configsTree, commit string) (int
 	if err != nil {
 		t.Fatalf("read the real Git archive for padding setup: %v", err)
 	}
-
 	remaining := bytes.NewReader(contents)
 	archive := tar.NewReader(remaining)
-
 	for {
 		_, err := archive.Next()
 		if errors.Is(err, io.EOF) {
 			break
 		}
-
 		if err != nil {
 			t.Fatalf("read the real Git archive entry for padding setup: %v", err)
 		}
 	}
-
 	return remaining.Len(), len(contents)
 }
 
-func runBoundedMigrationTransfer(
-	t *testing.T,
-	migration cliMigration,
-	args ...string,
-) commandResult {
+func runBoundedMigrationTransfer(t *testing.T, migration cliMigration, args ...string) commandResult {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), transferDeadline)
 	defer cancel()
@@ -114,15 +92,12 @@ func runBoundedMigrationTransfer(
 	if ctx.Err() != nil {
 		t.Fatalf("the public transfer did not complete within %v: %v", transferDeadline, err)
 	}
-
 	if err != nil {
 		var exited *exec.ExitError
 		if !errors.As(err, &exited) {
 			t.Fatalf("run the public transfer: %v", err)
 		}
-
 		result.exitCode = exited.ExitCode()
 	}
-
 	return result
 }

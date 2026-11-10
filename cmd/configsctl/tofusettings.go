@@ -58,15 +58,12 @@ func (t tofuSettings) guestHosts() map[string]string {
 	if t.GuestModules == nil {
 		return t.LockTargets[tofuWorkspaceKey(t.guestWorkspaceDir())].GuestHosts
 	}
-
 	hosts := make(map[string]string)
-
 	for _, target := range t.LockTargets {
 		for _, host := range target.GuestHosts {
 			hosts[host] = host
 		}
 	}
-
 	return hosts
 }
 
@@ -82,17 +79,12 @@ func loadNativeSettings(path string) (settings, error) {
 	return loadSettingsWithProviderMirror(path, nil, false)
 }
 
-func loadSettingsWithProviderMirror(
-	path string,
-	mirror *string,
-	resolveMirror bool,
-) (settings, error) {
+func loadSettingsWithProviderMirror(path string, mirror *string, resolveMirror bool) (settings, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		slog.Error("settings file read failed", "path", path, "err", err)
 		return settings{}, fmt.Errorf("read %s: %w", path, err)
 	}
-
 	return parseSettings(data, path, mirror, resolveMirror)
 }
 
@@ -104,64 +96,48 @@ func parseSettings(data []byte, path string, mirror *string, resolveMirror bool)
 		slog.Error("settings file parse failed", "path", path, "err", err)
 		return loaded, fmt.Errorf("parse %s: %w", path, err)
 	}
-
 	if loaded.Tofu.WorkspacesDir == "" {
 		return loaded, errors.New(path + ": tofu.workspaces_dir is empty")
 	}
-
 	if loaded.Tofu.EnvKeyPrefix == "" {
 		return loaded, errors.New(path + ": tofu.env_key_prefix is empty")
 	}
-
 	if err := validateInstalledSourceSettings(loaded.Tofu); err != nil {
 		return loaded, err
 	}
-
 	if mirror != nil {
 		loaded.Tofu.ProviderMirror = mirror
 	}
-
 	if loaded.Tofu.ProviderMirror != nil && resolveMirror {
 		mirror, err := resolveProviderMirror(path, *loaded.Tofu.ProviderMirror)
 		if err != nil {
 			return loaded, err
 		}
-
 		loaded.Tofu.ProviderMirror = &mirror
 	}
-
 	if err := validateLockTargets(path, loaded.Tofu.LockTargets); err != nil {
 		return loaded, err
 	}
-
 	if loaded.Tofu.ConfigurationRoot != "" && loaded.Tofu.LockTargets != nil {
-		return loaded, errors.New(
-			"tofu.configuration_root and tofu.lock_targets cannot both be set",
-		)
+		return loaded, errors.New("tofu.configuration_root and tofu.lock_targets cannot both be set")
 	}
-
 	if err := validateTofuCredentials(loaded.Tofu.Credentials); err != nil {
 		return loaded, err
 	}
-
 	if err := validateEndpointCredentials(loaded.Tofu); err != nil {
 		return loaded, err
 	}
-
 	if loaded.Tofu.GuestModule != "" && loaded.Tofu.guestHosts() == nil {
 		return loaded, fmt.Errorf(
 			"%s: tofu.guest_module requires tofu.lock_targets.%s.guest_hosts",
-			path,
-			tofuWorkspaceKey(loaded.Tofu.guestWorkspaceDir()),
+			path, tofuWorkspaceKey(loaded.Tofu.guestWorkspaceDir()),
 		)
 	}
-
 	if loaded.Tofu.ConfigurationRoot == "" {
 		if err := validateGuestPlans(loaded.Tofu); err != nil {
 			return loaded, err
 		}
 	}
-
 	return loaded, validateDeploySettings(path, loaded.Deploy)
 }
 
@@ -169,20 +145,15 @@ func validateInstalledSourceSettings(tofu tofuSettings) error {
 	if tofu.InstalledSource == nil {
 		return nil
 	}
-
 	if err := tofu.InstalledSource.Validate(); err != nil {
 		slog.Error("tofu.source.settings_invalid", "err", err)
 		return fmt.Errorf("validate the installed source setting: %w", err)
 	}
-
 	for _, targets := range tofu.LockTargets {
 		if strictExplicitSettings(tofu, targets) {
-			return errors.New(
-				"tofu.installed_source requires native configuration or local lock endpoints; use Git source for static remote lock endpoints",
-			)
+			return errors.New("tofu.installed_source requires native configuration or local lock endpoints; use Git source for static remote lock endpoints")
 		}
 	}
-
 	return nil
 }
 
@@ -190,34 +161,18 @@ func validateLockTargets(path string, lockTargets map[string]tofulock.Targets) e
 	if lockTargets != nil && len(lockTargets) == 0 {
 		return errors.New(path + ": tofu.lock_targets is empty")
 	}
-
 	for _, workspace := range slices.Sorted(maps.Keys(lockTargets)) {
 		if workspace == "" {
 			return errors.New(path + ": tofu.lock_targets has an empty workspace path")
 		}
-
 		if tofuWorkspaceKey(workspace) != workspace {
-			return fmt.Errorf(
-				"%s: tofu.lock_targets.%s is not a clean slash-separated path",
-				path,
-				workspace,
-			)
+			return fmt.Errorf("%s: tofu.lock_targets.%s is not a clean slash-separated path", path, workspace)
 		}
-
 		if err := lockTargets[workspace].Validate(); err != nil {
-			slog.Error(
-				"settings lock targets invalid",
-				"path",
-				path,
-				"workspace",
-				workspace,
-				"err",
-				err,
-			)
+			slog.Error("settings lock targets invalid", "path", path, "workspace", workspace, "err", err)
 			return fmt.Errorf("%s: tofu.lock_targets.%s: %w", path, workspace, err)
 		}
 	}
-
 	return nil
 }
 
@@ -227,34 +182,21 @@ func validateDeploySettings(path string, deploy deploySettings) error {
 		if playbook == "" {
 			return errors.New(path + ": deploy.lock_host_variables has an empty playbook name")
 		}
-
 		if len(variables) == 0 {
 			return fmt.Errorf("%s: deploy.lock_host_variables.%s is empty", path, playbook)
 		}
-
 		if slices.Contains(variables, "") {
-			return fmt.Errorf(
-				"%s: deploy.lock_host_variables.%s has an empty variable name",
-				path,
-				playbook,
-			)
+			return fmt.Errorf("%s: deploy.lock_host_variables.%s has an empty variable name", path, playbook)
 		}
 	}
-
 	for _, label := range slices.Sorted(maps.Keys(deploy.AbsentGuestNodes)) {
 		if label == "" {
 			return errors.New(path + ": deploy.absent_guest_nodes has an empty host name label")
 		}
-
 		if deploy.AbsentGuestNodes[label] == "" {
-			return fmt.Errorf(
-				"%s: deploy.absent_guest_nodes.%s has an empty node name",
-				path,
-				label,
-			)
+			return fmt.Errorf("%s: deploy.absent_guest_nodes.%s has an empty node name", path, label)
 		}
 	}
-
 	return nil
 }
 

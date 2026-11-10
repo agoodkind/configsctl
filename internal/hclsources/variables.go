@@ -14,20 +14,14 @@ func freeVariables(body *hclsyntax.Body) []hcl.Traversal {
 
 func visitVariables(body *hclsyntax.Body, node dynblock.WalkVariablesNode) []hcl.Traversal {
 	schema := &hcl.BodySchema{}
-
 	for name := range body.Attributes {
 		schema.Attributes = append(schema.Attributes, hcl.AttributeSchema{Name: name})
 	}
-
 	for _, block := range body.Blocks {
 		if block.Type != "dynamic" {
-			schema.Blocks = append(
-				schema.Blocks,
-				hcl.BlockHeaderSchema{Type: block.Type, LabelNames: block.Labels},
-			)
+			schema.Blocks = append(schema.Blocks, hcl.BlockHeaderSchema{Type: block.Type, LabelNames: block.Labels})
 		}
 	}
-
 	variables, children := node.Visit(schema)
 	for _, child := range children {
 		// Every child comes from the same native syntax tree as the root body.
@@ -35,6 +29,5 @@ func visitVariables(body *hclsyntax.Body, node dynblock.WalkVariablesNode) []hcl
 			variables = append(variables, visitVariables(nested, child.Node)...)
 		}
 	}
-
 	return variables
 }

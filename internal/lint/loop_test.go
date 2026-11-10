@@ -24,13 +24,10 @@ func TestRunSparesLoopTargetsInTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-
 	if len(findings) != 1 {
 		t.Fatalf("findings = %v, want exactly the listen_port presence check", findings)
 	}
-
-	if findings[0].Root != "listen_port" || findings[0].Kind != "presence" ||
-		findings[0].Line != 4 {
+	if findings[0].Root != "listen_port" || findings[0].Kind != "presence" || findings[0].Line != 4 {
 		t.Fatalf("finding = %+v, want presence on listen_port at line 4", findings[0])
 	}
 }

@@ -62,18 +62,12 @@ func newLockedFixture(t *testing.T) explicitFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	writeFixtureFile(t, filepath.Join(fixture.tree.root, "native/locked/main.tf"), string(body))
 	locked := filepath.Join(fixture.tree.workspaces, "locked")
-	writeFixtureFile(
-		t,
-		filepath.Join(locked, "backend.tf"),
-		fmt.Sprintf(localBackend, "locked.tfstate"),
-	)
+	writeFixtureFile(t, filepath.Join(locked, "backend.tf"), fmt.Sprintf(localBackend, "locked.tfstate"))
 	writeFixtureFile(t, filepath.Join(locked, "main.tf"), lockedWorkspace)
 	writeFixtureFile(t, filepath.Join(locked, "item/main.tf"), lockedItemModule)
 	requireSuccess(t, fixture.mutateWorkspace(t, "locked", "init", "-input=false"))
-
 	return fixture
 }
 
@@ -90,7 +84,6 @@ func requireNoPlanCopies(t *testing.T, tree configsTree) {
 	if err != nil {
 		t.Fatalf("list plan copies in TMPDIR: %v", err)
 	}
-
 	if len(leftovers) != 0 {
 		t.Fatalf("TMPDIR has plan copies after configsctl exited: %v", leftovers)
 	}
@@ -98,23 +91,19 @@ func requireNoPlanCopies(t *testing.T, tree configsTree) {
 
 func TestTofuApplyOfSavedPlanLocksTheDeclaredHost(t *testing.T) {
 	for _, flags := range [][]string{{"-input=false"}, {"-auto-approve"}} {
-		t.Run(
-			flags[0],
-			func(t *testing.T) {
-				fixture := newLockedFixture(t)
-				planTarget(t, fixture.tree, "module.alpha", "alpha.tfplan")
-				arguments := append([]string{"apply"}, flags...)
-				arguments = append(arguments, "alpha.tfplan")
-				result := fixture.mutateWorkspace(t, "locked", arguments...)
-				requireSuccess(t, result)
-				if !strings.Contains(result.stderr, "hosts=[hv_alpha]") {
-					t.Fatalf("the saved plan did not select its native owner: %s", result.stderr)
-				}
-
-				requireNoFile(t, filepath.Join(fixture.lockDir, "deploy.lock"))
-				requireFile(t, filepath.Join(fixture.tree.workspaces, "locked/locked.tfstate"))
-			},
-		)
+		t.Run(flags[0], func(t *testing.T) {
+			fixture := newLockedFixture(t)
+			planTarget(t, fixture.tree, "module.alpha", "alpha.tfplan")
+			arguments := append([]string{"apply"}, flags...)
+			arguments = append(arguments, "alpha.tfplan")
+			result := fixture.mutateWorkspace(t, "locked", arguments...)
+			requireSuccess(t, result)
+			if !strings.Contains(result.stderr, "hosts=[hv_alpha]") {
+				t.Fatalf("the saved plan did not select its native owner: %s", result.stderr)
+			}
+			requireNoFile(t, filepath.Join(fixture.lockDir, "deploy.lock"))
+			requireFile(t, filepath.Join(fixture.tree.workspaces, "locked/locked.tfstate"))
+		})
 	}
 }
 
@@ -125,11 +114,9 @@ func TestTofuApplyOfUnmatchedPlanRefusesUndeclaredOwnership(t *testing.T) {
 	if result.exitCode == 0 || !strings.Contains(result.stderr, "unknown lock ownership") {
 		t.Fatalf("the saved plan accepted undeclared ownership: %s", result.stderr)
 	}
-
 	if strings.Contains(result.stderr, "hostlock.acquired") {
 		t.Fatal("the unmatched saved plan acquired locks")
 	}
-
 	requireNoFile(t, filepath.Join(fixture.tree.workspaces, "locked/locked.tfstate"))
 }
 
@@ -139,7 +126,6 @@ func TestTofuApplyOfMissingSavedPlanIsRefusedBeforeLocking(t *testing.T) {
 	if result.exitCode == 0 || !strings.Contains(result.stderr, "read the saved plan") {
 		t.Fatalf("the CLI did not refuse the missing saved plan: %s", result.stderr)
 	}
-
 	if strings.Contains(result.stderr, "hostlock.acquired") {
 		t.Fatal("the missing saved plan acquired locks")
 	}
@@ -147,25 +133,11 @@ func TestTofuApplyOfMissingSavedPlanIsRefusedBeforeLocking(t *testing.T) {
 
 func TestTofuApplyWithVarFilePreservesTheNativePlanAndDeclaredLocks(t *testing.T) {
 	fixture := newLockedFixture(t)
-	writeFixtureFile(
-		t,
-		filepath.Join(fixture.tree.workspaces, "locked/extra.tfvars"),
-		"# The fixture does not declare variables.\n",
-	)
-	result := fixture.mutateWorkspace(
-		t,
-		"locked",
-		"apply",
-		"-auto-approve",
-		"-input=false",
-		"-var-file",
-		"extra.tfvars",
-		"-target=module.alpha",
-	)
+	writeFixtureFile(t, filepath.Join(fixture.tree.workspaces, "locked/extra.tfvars"), "# The fixture does not declare variables.\n")
+	result := fixture.mutateWorkspace(t, "locked", "apply", "-auto-approve", "-input=false", "-var-file", "extra.tfvars", "-target=module.alpha")
 	requireSuccess(t, result)
 	if !strings.Contains(result.stderr, "hosts=[hv_alpha]") {
 		t.Fatalf("the variable-file apply did not select its declared owner: %s", result.stderr)
 	}
-
 	requireFile(t, filepath.Join(fixture.tree.workspaces, "locked/locked.tfstate"))
 }

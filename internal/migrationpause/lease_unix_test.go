@@ -30,17 +30,14 @@ func TestLeaseProcess(t *testing.T) {
 	if mode == "" {
 		t.Skip("the parent test selects a lease subprocess mode")
 	}
-
 	pause := os.Getenv(leasePathVariable)
 	if pause == "" {
 		t.Fatal("the lease subprocess requires its private pause path")
 	}
-
 	acquire := migrationpause.AcquireWriter
 	if mode == "exclusive" || mode == "paused-exit" {
 		acquire = migrationpause.AcquireExclusive
 	}
-
 	release, err := acquire(pause)
 	if err != nil {
 		fmt.Fprintln(os.Stdout, "refused: "+err.Error())
@@ -51,12 +48,9 @@ func TestLeaseProcess(t *testing.T) {
 		if err := os.WriteFile(pause, []byte("synthetic-retained-pause"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-
 		fmt.Fprintln(os.Stdout, "paused")
-
 		return
 	}
-
 	fmt.Fprintln(os.Stdout, "ready")
 	if _, err := bufio.NewReader(os.Stdin).ReadString('\n'); err != nil {
 		t.Fatalf("the lease subprocess did not receive its completion signal: %v", err)
@@ -69,11 +63,9 @@ func leaseCommand(t *testing.T, mode, pause string) (*exec.Cmd, context.CancelFu
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), leaseProcessWait)
 	command := exec.CommandContext(ctx, executable, "-test.run=^TestLeaseProcess$")
 	command.Env = append(os.Environ(), leaseModeVariable+"="+mode, leasePathVariable+"="+pause)
-
 	return command, cancel
 }
 
@@ -85,20 +77,17 @@ func holdLeaseProcess(t *testing.T, mode, pause string) func() {
 		cancel()
 		t.Fatal(err)
 	}
-
 	output, err := command.StdoutPipe()
 	if err != nil {
 		cancel()
 		t.Fatal(err)
 	}
-
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	if err := command.Start(); err != nil {
 		cancel()
 		t.Fatal(err)
 	}
-
 	var once sync.Once
 	stop := func() {
 		once.Do(func() {
@@ -107,12 +96,7 @@ func holdLeaseProcess(t *testing.T, mode, pause string) func() {
 			waitErr := command.Wait()
 			cancel()
 			if writeErr != nil || waitErr != nil {
-				t.Errorf(
-					"the real lease subprocess failed: write=%v wait=%v stderr=%s",
-					writeErr,
-					waitErr,
-					stderr.String(),
-				)
+				t.Errorf("the real lease subprocess failed: write=%v wait=%v stderr=%s", writeErr, waitErr, stderr.String())
 			}
 		})
 	}
@@ -121,7 +105,6 @@ func holdLeaseProcess(t *testing.T, mode, pause string) func() {
 	if err != nil || line != "ready\n" {
 		t.Fatalf("the real lease subprocess did not acquire its lease: %q, %v", line, err)
 	}
-
 	return stop
 }
 
@@ -134,7 +117,6 @@ func requireLeaseRefusal(t *testing.T, mode, pause, reason string) {
 	if err != nil {
 		t.Fatalf("the lease probe failed instead of reporting a refusal: %v, %s", err, output)
 	}
-
 	if !strings.Contains(string(output), "refused: "+reason) {
 		t.Fatalf("the real lease probe did not report %q: %s", reason, output)
 	}
@@ -144,19 +126,9 @@ func TestOrdinaryWritersCoexistAndExcludeMigration(t *testing.T) {
 	pause := filepath.Join(t.TempDir(), "controller", "pause.json")
 	first := holdLeaseProcess(t, "writer", pause)
 	second := holdLeaseProcess(t, "writer", pause)
-	requireLeaseRefusal(
-		t,
-		"exclusive",
-		pause,
-		"active infrastructure writers or another migration prevent",
-	)
+	requireLeaseRefusal(t, "exclusive", pause, "active infrastructure writers or another migration prevent")
 	first()
-	requireLeaseRefusal(
-		t,
-		"exclusive",
-		pause,
-		"active infrastructure writers or another migration prevent",
-	)
+	requireLeaseRefusal(t, "exclusive", pause, "active infrastructure writers or another migration prevent")
 	second()
 	exclusive := holdLeaseProcess(t, "exclusive", pause)
 	exclusive()
@@ -179,10 +151,8 @@ func TestPauseSurvivesExecutorExitAndRejectsWriter(t *testing.T) {
 	if err != nil || !strings.Contains(string(output), "paused\n") {
 		t.Fatalf("the executor did not publish its retained pause: %v, %s", err, output)
 	}
-
 	if err := migrationpause.Guard(pause); err == nil {
 		t.Fatal("executor exit removed the infrastructure write pause")
 	}
-
 	requireLeaseRefusal(t, "writer", pause, "infrastructure writes remain paused")
 }

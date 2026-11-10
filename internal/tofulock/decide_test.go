@@ -23,20 +23,15 @@ var rootTargets = tofulock.Targets{
 var guestTargets = tofulock.Targets{
 	ModuleHosts:    nil,
 	ModuleKeyHosts: nil,
-	NodeHosts: map[string]string{
-		"suburban":  "suburban",
-		"poweredge": "poweredge",
-		"vault":     "vault",
-	},
-	GuestHosts:    map[string]string{"suburban/224": "clyde_suburban"},
-	LockFreeTypes: nil,
-	LockEndpoints: nil,
+	NodeHosts:      map[string]string{"suburban": "suburban", "poweredge": "poweredge", "vault": "vault"},
+	GuestHosts:     map[string]string{"suburban/224": "clyde_suburban"},
+	LockFreeTypes:  nil,
+	LockEndpoints:  nil,
 }
 
 func guestTargetsWithLockFreeTypes() tofulock.Targets {
 	targets := guestTargets
 	targets.LockFreeTypes = []string{"mwan_network_config"}
-
 	return targets
 }
 
@@ -46,7 +41,6 @@ func decideFixture(t *testing.T, name string, targets tofulock.Targets) tofulock
 	if err != nil {
 		t.Fatalf("read %s: %v", name, err)
 	}
-
 	return tofulock.Decide(plan, targets)
 }
 
@@ -55,7 +49,6 @@ func requireHosts(t *testing.T, decision tofulock.Decision, want []string) {
 	if decision.AllHosts {
 		t.Fatalf("decision selects every hypervisor (%s), want %v", decision.Reason, want)
 	}
-
 	if !slices.Equal(decision.Hosts, want) {
 		t.Fatalf("hosts = %v, want %v", decision.Hosts, want)
 	}
@@ -66,7 +59,6 @@ func requireAllHosts(t *testing.T, decision tofulock.Decision) {
 	if !decision.AllHosts {
 		t.Fatalf("hosts = %v, want every hypervisor", decision.Hosts)
 	}
-
 	if decision.Reason == "" {
 		t.Fatal("decision selects every hypervisor without a reason")
 	}
@@ -109,10 +101,7 @@ func TestUndeclaredLockFreeTypeLocksEveryHypervisor(t *testing.T) {
 
 func TestLockFreeChangeWithPoweredgeGuestFileLocksItsNodeAndGuest(t *testing.T) {
 	targets := guestTargetsWithLockFreeTypes()
-	targets.GuestHosts = map[string]string{
-		"suburban/224":  "clyde_suburban",
-		"poweredge/301": "mwan_poweredge",
-	}
+	targets.GuestHosts = map[string]string{"suburban/224": "clyde_suburban", "poweredge/301": "mwan_poweredge"}
 	decision := decideFixture(t, "guest_mwan_poweredge_file.json", targets)
 	requireHosts(t, decision, []string{"mwan_poweredge", "poweredge"})
 }

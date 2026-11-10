@@ -11,16 +11,12 @@ func TestAutomatonFindsAllOccurrences(t *testing.T) {
 	got, _ := ac.scan([]byte("xabcabVALUEx"))
 	// spans are [start,end): "ab"@1, "bc"@2, "ab"@4, "abVALUE"@4
 	want := []span{{1, 3}, {2, 4}, {4, 6}, {4, 11}}
-	sort.Slice(
-		got,
-		func(i, j int) bool {
-			if got[i].start != got[j].start {
-				return got[i].start < got[j].start
-			}
-
-			return got[i].end < got[j].end
-		},
-	)
+	sort.Slice(got, func(i, j int) bool {
+		if got[i].start != got[j].start {
+			return got[i].start < got[j].start
+		}
+		return got[i].end < got[j].end
+	})
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("scan spans = %v, want %v", got, want)
 	}
@@ -32,7 +28,6 @@ func TestAutomatonEmptyPatterns(t *testing.T) {
 	if len(got) != 0 {
 		t.Fatalf("scan on empty automaton = %v, want none", got)
 	}
-
 	if partial != 0 {
 		t.Fatalf("partial = %d, want 0", partial)
 	}
@@ -43,7 +38,6 @@ func TestAutomatonEmptyPatterns(t *testing.T) {
 // of the input, so the writer withholds those bytes and nothing else.
 func TestAutomatonPartialLength(t *testing.T) {
 	ac := newAutomaton([][]byte{[]byte("abcdef"), []byte("xyz")})
-
 	tests := []struct {
 		name string
 		data string
@@ -56,13 +50,10 @@ func TestAutomatonPartialLength(t *testing.T) {
 		{name: "empty input", data: "", want: 0},
 	}
 	for _, tc := range tests {
-		t.Run(
-			tc.name,
-			func(t *testing.T) {
-				if _, got := ac.scan([]byte(tc.data)); got != tc.want {
-					t.Fatalf("scan(%q) partial = %d, want %d", tc.data, got, tc.want)
-				}
-			},
-		)
+		t.Run(tc.name, func(t *testing.T) {
+			if _, got := ac.scan([]byte(tc.data)); got != tc.want {
+				t.Fatalf("scan(%q) partial = %d, want %d", tc.data, got, tc.want)
+			}
+		})
 	}
 }

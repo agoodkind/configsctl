@@ -40,21 +40,17 @@ func pipeOutput(cmd *exec.Cmd) (*outputCopier, error) {
 		copier.abort()
 		return nil, err
 	}
-
 	cmd.Stdout = stdout
 	if sharedStderr {
 		cmd.Stderr = stdout
 		return copier, nil
 	}
-
 	stderr, err := copier.attach(cmd.Stderr)
 	if err != nil {
 		copier.abort()
 		return nil, err
 	}
-
 	cmd.Stderr = stderr
-
 	return copier, nil
 }
 
@@ -62,17 +58,14 @@ func sameWriter(first io.Writer, second io.Writer) bool {
 	if first == nil || second == nil {
 		return first == nil && second == nil
 	}
-
 	firstType := reflect.TypeOf(first)
 	if firstType != reflect.TypeOf(second) {
 		return false
 	}
-
 	kind := firstType.Kind()
 	if kind != reflect.Pointer && kind != reflect.Chan && kind != reflect.UnsafePointer {
 		return false
 	}
-
 	return first == second
 }
 
@@ -80,18 +73,15 @@ func (c *outputCopier) attach(destination io.Writer) (io.Writer, error) {
 	if _, isFile := destination.(*os.File); isFile || destination == nil {
 		return destination, nil
 	}
-
 	readEnd, writeEnd, err := os.Pipe()
 	if err != nil {
 		slog.Error("procgroup.output_pipe_failed", "err", err)
 		return nil, fmt.Errorf("create output pipe: %w", err)
 	}
-
 	c.readEnds = append(c.readEnds, readEnd)
 	c.writeEnds = append(c.writeEnds, writeEnd)
 	c.copies.Add(1)
 	goRecovering("procgroup.output_copy_panicked", func() { c.copy(destination, readEnd) })
-
 	return writeEnd, nil
 }
 
@@ -116,7 +106,6 @@ func (c *outputCopier) copy(destination io.Writer, source *os.File) {
 			err = fmt.Errorf("the output writer panicked: %v", recovered)
 			readEndClosed = false
 		}
-
 		c.fail(err, readEndClosed, source)
 	}()
 	_, err = io.Copy(recorder, source)
@@ -132,11 +121,9 @@ func (r *writeRecorder) Write(chunk []byte) (int, error) {
 	if err == nil {
 		return written, nil
 	}
-
 	if r.writeErr == nil {
 		r.writeErr = err
 	}
-
 	return written, fmt.Errorf("write command output: %w", err)
 }
 
@@ -144,12 +131,10 @@ func (c *outputCopier) fail(err error, readEndClosed bool, source *os.File) {
 	if err == nil {
 		return
 	}
-
 	_ = source.Close()
 	if readEndClosed {
 		return
 	}
-
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.copyErr == nil {
@@ -177,13 +162,10 @@ func (c *outputCopier) closeReadEnds() {
 
 func (c *outputCopier) wait() error {
 	done := make(chan struct{})
-	goRecovering(
-		"procgroup.output_wait_panicked",
-		func() {
-			c.copies.Wait()
-			close(done)
-		},
-	)
+	goRecovering("procgroup.output_wait_panicked", func() {
+		c.copies.Wait()
+		close(done)
+	})
 	grace := time.NewTimer(StopGrace)
 	defer grace.Stop()
 	select {
@@ -199,7 +181,6 @@ func (c *outputCopier) wait() error {
 			return fmt.Errorf("copy command output: %w", errOutputOpen)
 		}
 	}
-
 	c.closeReadEnds()
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -207,6 +188,5 @@ func (c *outputCopier) wait() error {
 		slog.Error("procgroup.output_copy_failed", "err", c.copyErr)
 		return fmt.Errorf("copy command output: %w", c.copyErr)
 	}
-
 	return nil
 }

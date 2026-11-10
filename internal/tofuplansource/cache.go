@@ -32,29 +32,20 @@ func Path(path string) (string, error) {
 		slog.Error("tofu.source.plan_stat_failed", "err", err)
 		return "", fmt.Errorf("read the saved plan %s: %w", path, err)
 	}
-
 	if !info.Mode().IsRegular() {
 		return "", fmt.Errorf("the saved plan %s is not a regular file", path)
 	}
-
 	data, err := os.ReadFile(path)
 	if err != nil {
 		slog.Error("tofu.source.plan_read_failed", "err", err)
 		return "", fmt.Errorf("read the recorded plan %s: %w", path, err)
 	}
-
 	cache, err := os.UserCacheDir()
 	if err != nil {
 		slog.Error("tofu.source.cache_unavailable", "err", err)
 		return "", fmt.Errorf("find the saved plan source cache: %w", err)
 	}
-
-	return filepath.Join(
-		cache,
-		"configsctl",
-		"plan-source",
-		fmt.Sprintf("%x.json", sha256.Sum256(data)),
-	), nil
+	return filepath.Join(cache, "configsctl", "plan-source", fmt.Sprintf("%x.json", sha256.Sum256(data))), nil
 }
 
 // Record stores the source of a plan without writing into the configuration tree.
@@ -64,23 +55,19 @@ func Record(path string, source Source) error {
 	if err != nil {
 		return err
 	}
-
 	encoded, err := json.Marshal(source)
 	if err != nil {
 		slog.Error("tofu.source.plan_encode_failed", "err", err)
 		return fmt.Errorf("encode the saved plan source: %w", err)
 	}
-
 	if err := os.MkdirAll(filepath.Dir(metadata), 0o700); err != nil {
 		slog.Error("tofu.source.cache_create_failed", "err", err)
 		return fmt.Errorf("create the saved plan source cache: %w", err)
 	}
-
 	if err := os.WriteFile(metadata, encoded, 0o600); err != nil {
 		slog.Error("tofu.source.plan_record_failed", "err", err)
 		return fmt.Errorf("record the saved plan source: %w", err)
 	}
-
 	return nil
 }
 
@@ -90,13 +77,11 @@ func Remove(path string) error {
 	if err != nil {
 		return err
 	}
-
 	// A new saved plan may not have a cached source record yet.
 	if err := os.Remove(metadata); err != nil && !errors.Is(err, os.ErrNotExist) {
 		slog.Error("tofu.source.plan_record_remove_failed", "err", err)
 		return fmt.Errorf("remove the stale saved plan source record: %w", err)
 	}
-
 	return nil
 }
 
@@ -106,33 +91,21 @@ func Require(path string, current Source) error {
 	if err != nil {
 		return err
 	}
-
 	encoded, err := os.ReadFile(metadata)
 	if err != nil {
 		slog.Error("tofu.source.plan_record_unavailable", "err", err)
-		return fmt.Errorf(
-			"regenerate the saved plan with configsctl tofu plan; its source record is unavailable: %w",
-			err,
-		)
+		return fmt.Errorf("regenerate the saved plan with configsctl tofu plan; its source record is unavailable: %w", err)
 	}
-
 	var source Source
 	if err := json.Unmarshal(encoded, &source); err != nil {
 		slog.Error("tofu.source.plan_record_invalid", "err", err)
 		return fmt.Errorf("read the saved plan source record: %w", err)
 	}
-
 	if source.Status != "committed" || current.Status != "committed" || source != current {
 		if current.Kind == "installed" {
-			return errors.New(
-				"regenerate the saved plan from the current installed artifact; its recorded source does not match",
-			)
+			return errors.New("regenerate the saved plan from the current installed artifact; its recorded source does not match")
 		}
-
-		return errors.New(
-			"regenerate the saved plan from this clean merged configuration commit; its recorded source does not match",
-		)
+		return errors.New("regenerate the saved plan from this clean merged configuration commit; its recorded source does not match")
 	}
-
 	return nil
 }

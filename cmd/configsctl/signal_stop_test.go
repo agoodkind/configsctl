@@ -49,32 +49,22 @@ type signalRun struct {
 // first on PATH and waits until the stand-in child writes its process IDs.
 // A new session has no controlling terminal, as under systemd, so configsctl
 // starts the child in its own process group.
-func startSignalRun(
-	t *testing.T,
-	tree configsTree,
-	standIns []string,
-	extraEnv []string,
-	args ...string,
-) signalRun {
+func startSignalRun(t *testing.T, tree configsTree, standIns []string, extraEnv []string, args ...string) signalRun {
 	t.Helper()
 	binDir := t.TempDir()
-
 	for _, name := range standIns {
 		script, err := os.ReadFile(filepath.Join("testdata", "signalstop", name))
 		if err != nil {
 			t.Fatalf("read the %s stand-in: %v", name, err)
 		}
-
 		if err := os.WriteFile(filepath.Join(binDir, name), script, 0o700); err != nil {
 			t.Fatalf("install the %s stand-in: %v", name, err)
 		}
 	}
-
 	tempDir, err := os.MkdirTemp(shortTempRoot, "cfgsig")
 	if err != nil {
 		t.Fatalf("create a short TMPDIR: %v", err)
 	}
-
 	t.Cleanup(func() { _ = os.RemoveAll(tempDir) })
 	pidFile := filepath.Join(t.TempDir(), "child.pids")
 	writeFixtureFile(t, filepath.Join(binDir, "pids-path"), pidFile+"\n")
@@ -83,47 +73,33 @@ func startSignalRun(
 		if err != nil {
 			t.Fatal(err)
 		}
-
 		if err := os.Symlink(realTofu, filepath.Join(binDir, "real-tofu")); err != nil {
 			t.Fatal(err)
 		}
 	}
-
 	ctx, cancel := context.WithTimeout(t.Context(), signalStartWait+signalExitWait)
 	t.Cleanup(cancel)
 	command := exec.CommandContext(ctx, configsctlBinary, args...)
 	command.Dir = tree.root
-	command.Env = append(
-		[]string{
-			"PATH=" + binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
-			"HOME=" + tree.home,
-			"TMPDIR=" + tempDir,
-			"FIXTURE_PIDS=" + pidFile,
-		},
-		extraEnv...,
-	)
+	command.Env = append([]string{
+		"PATH=" + binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"HOME=" + tree.home,
+		"TMPDIR=" + tempDir,
+		"FIXTURE_PIDS=" + pidFile,
+	}, extraEnv...)
 	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	run := signalRun{
-		command: command,
-		exited:  make(chan error, 1),
-		stderr:  &bytes.Buffer{},
-		standIn: 0,
-		worker:  0,
-		tempDir: tempDir,
-	}
+	run := signalRun{command: command, exited: make(chan error, 1), stderr: &bytes.Buffer{}, standIn: 0, worker: 0, tempDir: tempDir}
 	command.Stdout = &bytes.Buffer{}
 	command.Stderr = run.stderr
 	if err := command.Start(); err != nil {
 		t.Fatalf("start configsctl %v: %v", args, err)
 	}
-
 	go func() { run.exited <- command.Wait() }()
 	run.standIn, run.worker = waitForStandIn(t, pidFile, run)
 	t.Cleanup(func() { _ = syscall.Kill(-run.standIn, syscall.SIGKILL) })
 	if err := syscall.Kill(-run.standIn, 0); err != nil {
 		t.Fatalf("the stand-in %d does not lead its own process group: %v", run.standIn, err)
 	}
-
 	return run
 }
 
@@ -133,34 +109,22 @@ func waitForStandIn(t *testing.T, path string, run signalRun) (int, int) {
 	defer deadline.Stop()
 	ticker := time.NewTicker(signalPollInterval)
 	defer ticker.Stop()
-
 	for {
 		if body, err := os.ReadFile(path); err == nil {
 			fields := strings.Fields(string(body))
 			if len(fields) != 2 {
 				t.Fatalf("the stand-in wrote %q, want two process IDs", body)
 			}
-
 			standIn, standInErr := strconv.Atoi(fields[0])
 			worker, workerErr := strconv.Atoi(fields[1])
 			if standInErr != nil || workerErr != nil {
-				t.Fatalf(
-					"parse the stand-in process IDs %q: %v",
-					body,
-					errors.Join(standInErr, workerErr),
-				)
+				t.Fatalf("parse the stand-in process IDs %q: %v", body, errors.Join(standInErr, workerErr))
 			}
-
 			return standIn, worker
 		}
-
 		select {
 		case err := <-run.exited:
-			t.Fatalf(
-				"configsctl exited before the stand-in started: %v\nstderr: %s",
-				err,
-				run.stderr.String(),
-			)
+			t.Fatalf("configsctl exited before the stand-in started: %v\nstderr: %s", err, run.stderr.String())
 		case <-deadline.C:
 			t.Fatalf("the stand-in did not start within %s", signalStartWait)
 		case <-ticker.C:
@@ -175,27 +139,19 @@ func stopSignalRun(t *testing.T, run signalRun, wantError string) {
 	if err := run.command.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatalf("send SIGTERM to configsctl: %v", err)
 	}
-
 	var waitErr error
 	select {
 	case waitErr = <-run.exited:
 	case <-time.After(signalExitWait):
 		t.Fatalf("configsctl did not exit within %s of SIGTERM", signalExitWait)
 	}
-
 	var exitErr *exec.ExitError
 	if !errors.As(waitErr, &exitErr) || exitErr.ExitCode() != 1 {
-		t.Fatalf(
-			"configsctl returned %v after SIGTERM, want exit status 1\nstderr: %s",
-			waitErr,
-			run.stderr.String(),
-		)
+		t.Fatalf("configsctl returned %v after SIGTERM, want exit status 1\nstderr: %s", waitErr, run.stderr.String())
 	}
-
 	if !strings.Contains(run.stderr.String(), wantError) {
 		t.Fatalf("stderr = %q, want %q", run.stderr.String(), wantError)
 	}
-
 	requireProcessGone(t, run.standIn)
 	requireProcessGone(t, run.worker)
 }
@@ -209,48 +165,27 @@ func TestTofuStopsItsProcessGroupOnSIGTERM(t *testing.T) {
 
 func TestNativeConfigurationStopsItsProcessGroupOnSIGTERM(t *testing.T) {
 	for _, command := range []string{"tofu", "lint"} {
-		t.Run(
-			command,
-			func(t *testing.T) {
-				tree := newConfigsTree(t)
-				installNativeConfiguration(t, tree)
-				root := filepath.Join(tree.workspaces, "suburban", "tack")
-				writeFixtureFile(
-					t,
-					filepath.Join(root, "backend.tf"),
-					readCredentialFixture(t, "backend.tf"),
-				)
-				writeFixtureFile(t, filepath.Join(root, "main.tf"), workspaceFixture(t, "gate.tf"))
-				writeFixtureFile(t, filepath.Join(root, "item/main.tf"), gatedItemModule)
-				format := exec.CommandContext(
-					t.Context(),
-					"tofu",
-					"-chdir="+tree.workspaces,
-					"fmt",
-					"-recursive",
-				)
-				if output, err := format.CombinedOutput(); err != nil {
-					t.Fatalf("format the native cancellation fixture: %v\n%s", err, output)
-				}
-
-				arguments := []string{command}
-				if command == "tofu" {
-					arguments = append(arguments, "suburban/tack", "plan")
-				}
-
-				run := startSignalRun(t, tree, []string{"tofu"}, nil, arguments...)
-				stopSignalRun(t, run, "evaluate native configuration")
-				leftovers, err := filepath.Glob(
-					filepath.Join(run.tempDir, "configsctl-configuration-*"),
-				)
-				if err != nil || len(leftovers) > 0 {
-					t.Fatalf(
-						"native evaluation retained its private directory: %v, %v",
-						leftovers,
-						err,
-					)
-				}
-			},
-		)
+		t.Run(command, func(t *testing.T) {
+			tree := newConfigsTree(t)
+			installNativeConfiguration(t, tree)
+			root := filepath.Join(tree.workspaces, "suburban", "tack")
+			writeFixtureFile(t, filepath.Join(root, "backend.tf"), readCredentialFixture(t, "backend.tf"))
+			writeFixtureFile(t, filepath.Join(root, "main.tf"), workspaceFixture(t, "gate.tf"))
+			writeFixtureFile(t, filepath.Join(root, "item/main.tf"), gatedItemModule)
+			format := exec.CommandContext(t.Context(), "tofu", "-chdir="+tree.workspaces, "fmt", "-recursive")
+			if output, err := format.CombinedOutput(); err != nil {
+				t.Fatalf("format the native cancellation fixture: %v\n%s", err, output)
+			}
+			arguments := []string{command}
+			if command == "tofu" {
+				arguments = append(arguments, "suburban/tack", "plan")
+			}
+			run := startSignalRun(t, tree, []string{"tofu"}, nil, arguments...)
+			stopSignalRun(t, run, "evaluate native configuration")
+			leftovers, err := filepath.Glob(filepath.Join(run.tempDir, "configsctl-configuration-*"))
+			if err != nil || len(leftovers) > 0 {
+				t.Fatalf("native evaluation retained its private directory: %v, %v", leftovers, err)
+			}
+		})
 	}
 }

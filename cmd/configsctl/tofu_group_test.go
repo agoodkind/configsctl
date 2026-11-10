@@ -36,7 +36,6 @@ func installFakeTofu(t *testing.T, exitCode int, childOutput string) (string, st
 	if err := os.WriteFile(filepath.Join(binDir, "tofu"), []byte(script), 0o700); err != nil {
 		t.Fatalf("write fake tofu: %v", err)
 	}
-
 	return binDir + string(os.PathListSeparator) + os.Getenv("PATH"), pidFile
 }
 
@@ -46,35 +45,29 @@ func readChildPID(t *testing.T, pidFile string) int {
 	if err != nil {
 		t.Fatalf("read the fake tofu child pid: %v", err)
 	}
-
 	pid, err := strconv.Atoi(strings.TrimSpace(string(body)))
 	if err != nil {
 		t.Fatalf("parse the fake tofu child pid %q: %v", body, err)
 	}
-
 	t.Cleanup(func() {
 		if t.Failed() {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 		}
 	})
-
 	return pid
 }
 
 func requireProcessGone(t *testing.T, pid int) {
 	t.Helper()
 	deadline := time.Now().Add(lingeringChildWait)
-
 	for {
 		stopped, err := processStopped(pid)
 		if stopped {
 			return
 		}
-
 		if time.Now().After(deadline) {
 			t.Fatalf("the child process %d survived configsctl: state check error = %v", pid, err)
 		}
-
 		time.Sleep(10 * time.Millisecond)
 	}
 }
@@ -87,21 +80,15 @@ func TestTofuCrashStopsLingeringChildAndReportsTheCrash(t *testing.T) {
 	child := readChildPID(t, pidFile)
 
 	if result.exitCode == 0 {
-		t.Fatalf(
-			"configsctl tofu alpha plan succeeded after tofu exited 11\nstderr: %s",
-			result.stderr,
-		)
+		t.Fatalf("configsctl tofu alpha plan succeeded after tofu exited 11\nstderr: %s", result.stderr)
 	}
-
 	if !strings.Contains(result.stderr, "OpenTofu crashed") {
 		t.Fatalf("stderr = %q, want it to report that OpenTofu crashed", result.stderr)
 	}
-
 	logDir := filepath.Join(tree.root, "tmp", "configs-runs")
 	if !strings.Contains(result.stderr, logDir) {
 		t.Fatalf("stderr = %q, want it to name the run log under %s", result.stderr, logDir)
 	}
-
 	requireProcessGone(t, child)
 }
 
@@ -131,6 +118,5 @@ func TestTofuSuccessReturnsPromptlyWhenChildKeepsTheRunLogOpen(t *testing.T) {
 	if elapsed > inheritedOutputExitLimit {
 		t.Fatalf("configsctl took %v to return, want under %v", elapsed, inheritedOutputExitLimit)
 	}
-
 	requireProcessGone(t, child)
 }
