@@ -42,6 +42,7 @@ func Validate(patterns []Pattern) (badKey string, ok bool) {
 			return p.Label, false
 		}
 	}
+
 	return "", true
 }
 
@@ -57,16 +58,23 @@ func mergeSpans(in []labeledSpan) []labeledSpan {
 	if len(in) == 0 {
 		return nil
 	}
+
 	s := append([]labeledSpan(nil), in...)
-	sort.Slice(s, func(i, j int) bool {
-		if s[i].span.start != s[j].span.start {
-			return s[i].span.start < s[j].span.start
-		}
-		if s[i].span.end != s[j].span.end {
-			return s[i].span.end < s[j].span.end
-		}
-		return s[i].label < s[j].label
-	})
+	sort.Slice(
+		s,
+		func(i, j int) bool {
+			if s[i].span.start != s[j].span.start {
+				return s[i].span.start < s[j].span.start
+			}
+
+			if s[i].span.end != s[j].span.end {
+				return s[i].span.end < s[j].span.end
+			}
+
+			return s[i].label < s[j].label
+		},
+	)
+
 	out := []labeledSpan{s[0]}
 	for _, cur := range s[1:] {
 		last := &out[len(out)-1]
@@ -74,10 +82,13 @@ func mergeSpans(in []labeledSpan) []labeledSpan {
 			if cur.span.end > last.span.end {
 				last.span.end = cur.span.end
 			}
+
 			continue
 		}
+
 		out = append(out, cur)
 	}
+
 	return out
 }
 
@@ -99,12 +110,14 @@ type Writer struct {
 func New(dst io.Writer, patterns []Pattern) *Writer {
 	values := make([][]byte, 0, len(patterns))
 	maxLen := 0
+
 	for _, p := range patterns {
 		values = append(values, p.Value)
 		if len(p.Value) > maxLen {
 			maxLen = len(p.Value)
 		}
 	}
+
 	return &Writer{
 		dst:      dst,
 		ac:       newAutomaton(values),
@@ -130,27 +143,35 @@ func (w *Writer) Write(p []byte) (int, error) {
 		if _, err := w.dst.Write(p); err != nil {
 			return 0, fmt.Errorf("redact passthrough write: %w", err)
 		}
+
 		return len(p), nil
 	}
+
 	w.buf = append(w.buf, p...)
 	merged, hold := w.mergedSpans(w.buf)
 	if len(w.buf) <= hold {
 		return len(p), nil
 	}
+
 	emitEnd := len(w.buf) - hold
+
 	for _, ls := range merged {
 		if ls.span.start < emitEnd && ls.span.end > emitEnd {
 			emitEnd = ls.span.start
 		}
 	}
+
 	if emitEnd <= 0 {
 		return len(p), nil
 	}
+
 	out := render(w.buf[:emitEnd], spansBefore(merged, emitEnd))
 	if _, err := w.dst.Write(out); err != nil {
 		return 0, fmt.Errorf("redact write: %w", err)
 	}
+
 	w.buf = append(w.buf[:0], w.buf[emitEnd:]...)
+
 	return len(p), nil
 }
 
@@ -159,6 +180,7 @@ func (w *Writer) Close() error {
 	if len(w.buf) == 0 {
 		return nil
 	}
+
 	merged, _ := w.mergedSpans(w.buf)
 	out := render(w.buf, merged)
 	w.buf = nil
@@ -166,6 +188,7 @@ func (w *Writer) Close() error {
 		slog.Error("redact close write failed", "err", err)
 		return fmt.Errorf("redact close write: %w", err)
 	}
+
 	return nil
 }
 
@@ -178,10 +201,12 @@ func (w *Writer) mergedSpans(data []byte) (merged []labeledSpan, hold int) {
 	if len(rawSpans) == 0 {
 		return nil, hold
 	}
+
 	labeled := make([]labeledSpan, 0, len(rawSpans))
 	for _, s := range rawSpans {
 		labeled = append(labeled, labeledSpan{span: s, label: w.labelFor(data, s)})
 	}
+
 	return mergeSpans(labeled), hold
 }
 
@@ -194,6 +219,7 @@ func spansBefore(merged []labeledSpan, bound int) []labeledSpan {
 			out = append(out, ls)
 		}
 	}
+
 	return out
 }
 
@@ -203,14 +229,18 @@ func render(data []byte, spans []labeledSpan) []byte {
 	if len(spans) == 0 {
 		return data
 	}
+
 	var out bytes.Buffer
 	prev := 0
+
 	for _, ls := range spans {
 		out.Write(data[prev:ls.span.start])
 		out.WriteString(placeholderPrefix + ls.label + placeholderSuffix)
 		prev = ls.span.end
 	}
+
 	out.Write(data[prev:])
+
 	return out.Bytes()
 }
 
@@ -221,6 +251,7 @@ func render(data []byte, spans []labeledSpan) []byte {
 func (w *Writer) labelFor(data []byte, s span) string {
 	value := data[s.start:s.end]
 	best := ""
+
 	for _, p := range w.patterns {
 		if len(p.Value) == len(value) && bytes.Equal(p.Value, value) {
 			if best == "" || p.Label < best {
@@ -228,5 +259,6 @@ func (w *Writer) labelFor(data []byte, s span) string {
 			}
 		}
 	}
+
 	return best
 }

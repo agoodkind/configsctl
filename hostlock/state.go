@@ -65,6 +65,7 @@ func newStateDir() (string, error) {
 		slog.Error("hostlock.state_dir_failed", "err", err)
 		return "", fmt.Errorf("create the lock state directory: %w", err)
 	}
+
 	return dir, nil
 }
 
@@ -75,7 +76,12 @@ func removeStateDir(dir string) {
 }
 
 func (s *Set) writeState(hosts []Host) error {
-	state := runState{Run: s.run, Controller: s.controller, Hosts: make([]lockedHost, 0, len(hosts)), RequestTimeout: s.options.RequestTimeout}
+	state := runState{
+		Run:            s.run,
+		Controller:     s.controller,
+		Hosts:          make([]lockedHost, 0, len(hosts)),
+		RequestTimeout: s.options.RequestTimeout,
+	}
 	switch s.options.Transport.(type) {
 	case nil:
 		state.Transport = legacyScript
@@ -84,9 +90,11 @@ func (s *Set) writeState(hosts []Host) error {
 	default:
 		state.Transport = customTransport
 	}
+
 	for _, host := range hosts {
 		state.Hosts = append(state.Hosts, lockedHost(host))
 	}
+
 	return writeJSONFile(filepath.Join(s.stateDir, stateFile), state)
 }
 
@@ -96,15 +104,18 @@ func writeJSONFile[T runState | declaration](path string, value T) error {
 		slog.Error("hostlock.state_encode_failed", "path", path, "err", err)
 		return fmt.Errorf("encode %s: %w", path, err)
 	}
+
 	temporary := path + ".tmp"
 	if err := os.WriteFile(temporary, body, stateFileMode); err != nil {
 		slog.Error("hostlock.state_write_failed", "path", path, "err", err)
 		return fmt.Errorf("write %s: %w", path, err)
 	}
+
 	if err := os.Rename(temporary, path); err != nil {
 		slog.Error("hostlock.state_write_failed", "path", path, "err", err)
 		return fmt.Errorf("write %s: %w", path, err)
 	}
+
 	return nil
 }
 
@@ -120,10 +131,12 @@ func readState(dir string) (runState, error) {
 		slog.Error("hostlock.state_unreadable", "path", path, "err", err)
 		return state, fmt.Errorf("read the locks of the running deploy: %w", err)
 	}
+
 	if err := json.Unmarshal(body, &state); err != nil {
 		slog.Error("hostlock.state_unreadable", "path", path, "err", err)
 		return state, fmt.Errorf("decode the locks of the running deploy in %s: %w", path, err)
 	}
+
 	return state, nil
 }
 
@@ -132,17 +145,36 @@ func readState(dir string) (runState, error) {
 // The host lock script returns the held error to other runs until the
 // declared expiry.
 // Set reads the declaration before reporting a lost lock.
-func Extend(ctx context.Context, stateDir, hostName string, duration time.Duration) (time.Time, error) {
+func Extend(
+	ctx context.Context,
+	stateDir string,
+	hostName string,
+	duration time.Duration,
+) (time.Time, error) {
 	state, err := readState(stateDir)
 	if err != nil {
 		return time.Time{}, err
 	}
-	index := slices.IndexFunc(state.Hosts, func(locked lockedHost) bool { return locked.Name == hostName })
+
+	index := slices.IndexFunc(
+		state.Hosts,
+		func(locked lockedHost) bool { return locked.Name == hostName },
+	)
 	if index < 0 {
 		err = fmt.Errorf("run %s has no lock on host %s", state.Run, hostName)
-		slog.Error("hostlock.extend.host_not_locked", "host", hostName, "run", state.Run, "err", err)
+		slog.Error(
+			"hostlock.extend.host_not_locked",
+			"host",
+			hostName,
+			"run",
+			state.Run,
+			"err",
+			err,
+		)
+
 		return time.Time{}, err
 	}
+
 	asked := clock.NowUTC()
 	request := command{op: extend, run: state.Run, controller: state.Controller, lease: duration}
 	host := Host(state.Hosts[index])
@@ -150,7 +182,9 @@ func Extend(ctx context.Context, stateDir, hostName string, duration time.Durati
 	switch state.Transport {
 	case "":
 		if host.ConnectAddress != "" || host.PrivateKeyFile != "" || host.KnownHostsFile != "" {
-			return time.Time{}, errors.New("the saved lock state lacks a transport for this SSH endpoint")
+			return time.Time{}, errors.New(
+				"the saved lock state lacks a transport for this SSH endpoint",
+			)
 		}
 	case legacyScript:
 	case restrictedSSH:
@@ -160,17 +194,30 @@ func Extend(ctx context.Context, stateDir, hostName string, duration time.Durati
 	default:
 		return time.Time{}, errors.New("the saved lock state specifies an unknown transport")
 	}
+
 	extended, err := options.operation(ctx, host, request)
 	if err != nil {
 		slog.Error("hostlock.extend.failed", "host", hostName, "run", state.Run, "err", err)
 		return time.Time{}, err
 	}
+
 	written := declaration{Asked: asked, RemainingSeconds: int64(extended.remaining / time.Second)}
 	if err := writeJSONFile(declarationPath(stateDir, index), written); err != nil {
 		return time.Time{}, err
 	}
-	slog.Info("hostlock.extended", "host", hostName, "run", state.Run,
-		"expiry", extended.expiry.UTC().Format(time.RFC3339), "seconds", written.RemainingSeconds)
+
+	slog.Info(
+		"hostlock.extended",
+		"host",
+		hostName,
+		"run",
+		state.Run,
+		"expiry",
+		extended.expiry.UTC().Format(time.RFC3339),
+		"seconds",
+		written.RemainingSeconds,
+	)
+
 	return extended.expiry, nil
 }
 
@@ -180,20 +227,32 @@ func (s *Set) readDeclarations() {
 	s.mu.Lock()
 	hosts := append([]Host{}, s.held...)
 	s.mu.Unlock()
+
 	for index, host := range hosts {
 		path := declarationPath(s.stateDir, index)
 		body, err := os.ReadFile(path)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
+
 		var declared declaration
 		if err == nil {
 			err = json.Unmarshal(body, &declared)
 		}
+
 		if err != nil {
-			slog.Warn("hostlock.declaration_unreadable", "path", path, "host", host.Name, "err", err)
+			slog.Warn(
+				"hostlock.declaration_unreadable",
+				"path",
+				path,
+				"host",
+				host.Name,
+				"err",
+				err,
+			)
 			continue
 		}
+
 		s.advance(host.Name, declared.Asked, time.Duration(declared.RemainingSeconds)*time.Second)
 	}
 }

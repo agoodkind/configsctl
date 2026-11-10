@@ -15,7 +15,9 @@ func openOutput(request Request, display []string) (*runlog.Log, error) {
 		slog.Error("tofu.log_open_failed", "workspace", request.Root, "err", err)
 		return nil, fmt.Errorf("open the OpenTofu run log: %w", err)
 	}
+
 	log.Announce("Tofu")
+
 	return log, nil
 }
 
@@ -25,5 +27,6 @@ func closeOutput(log *runlog.Log) error {
 		slog.Error("tofu.log_close_failed", "log", log.Path(), "err", err)
 		return fmt.Errorf("close the OpenTofu run log: %w", err)
 	}
+
 	return nil
 }

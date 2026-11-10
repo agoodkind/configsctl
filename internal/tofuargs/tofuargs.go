@@ -49,6 +49,7 @@ func Subcommand(args []string) Command {
 			return Command(arg)
 		}
 	}
+
 	return ""
 }
 
@@ -80,27 +81,33 @@ func AutoApprove(args []string) bool {
 // and skips values of other flags that consume an argument.
 func BooleanArgument(args []string, name string, defaultValue bool) bool {
 	value := defaultValue
+
 	for index := 0; index < len(args); index++ {
 		argument := args[index]
 		if !strings.HasPrefix(argument, "-") {
 			continue
 		}
+
 		flag, text, found := strings.Cut(strings.TrimLeft(argument, "-"), "=")
 		if flag != name {
 			if ConsumesValue(argument) {
 				index++
 			}
+
 			continue
 		}
+
 		if !found {
 			value = true
 			continue
 		}
+
 		parsed, err := strconv.ParseBool(text)
 		if err == nil {
 			value = parsed
 		}
 	}
+
 	return value
 }
 
@@ -110,5 +117,6 @@ func ConsumesValue(arg string) bool {
 	if !strings.HasPrefix(arg, "-") || strings.Contains(arg, "=") {
 		return false
 	}
+
 	return !booleanFlags[strings.TrimLeft(arg, "-")]
 }

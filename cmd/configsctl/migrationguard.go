@@ -15,6 +15,7 @@ func migrationPausePath() (string, error) {
 		slog.Error("migration.pause.path_failed", "err", err)
 		return "", fmt.Errorf("select the infrastructure write pause: %w", err)
 	}
+
 	return path, nil
 }
 
@@ -23,11 +24,13 @@ func acquireMigrationWriter() (func(), error) {
 	if err != nil {
 		return nil, err
 	}
+
 	release, err := migrationpause.AcquireWriter(path)
 	if err != nil {
 		slog.Error("migration.pause.lease_failed", "err", err)
 		return nil, fmt.Errorf("acquire the infrastructure writer lease: %w", err)
 	}
+
 	return release, nil
 }
 
@@ -35,26 +38,50 @@ func leaseTofuMigration(args []string, usesCredential bool) (func(), error) {
 	if !tofuWritesState(args) && !usesCredential {
 		return func() {}, nil
 	}
+
 	return acquireMigrationWriter()
 }
 
 func tofuWritesState(args []string) bool {
 	command, _ := tofuEnvironmentCommand(args)
-	if slices.Contains([]string{"apply", "destroy", "refresh", "import", "test", "taint", "untaint", "force-unlock"}, command) {
+	if slices.Contains(
+		[]string{
+			"apply",
+			"destroy",
+			"refresh",
+			"import",
+			"test",
+			"taint",
+			"untaint",
+			"force-unlock",
+		},
+		command,
+	) {
 		return true
 	}
+
 	if command == "init" {
 		for _, argument := range args {
-			if slices.Contains([]string{"migrate-state", "force-copy"}, strings.TrimLeft(strings.SplitN(argument, "=", 2)[0], "-")) {
+			if slices.Contains(
+				[]string{"migrate-state", "force-copy"},
+				strings.TrimLeft(strings.SplitN(argument, "=", 2)[0], "-"),
+			) {
 				return true
 			}
 		}
 	}
-	if (command == "state" || strings.HasPrefix(command, "state ")) && !slices.Contains([]string{"state list", "state ls", "state pull", "state show"}, command) {
+
+	if (command == "state" || strings.HasPrefix(command, "state ")) &&
+		!slices.Contains([]string{"state list", "state ls", "state pull", "state show"}, command) {
 		return true
 	}
-	if slices.Contains([]string{"workspace new", "workspace delete", "env new", "env delete"}, command) {
+
+	if slices.Contains(
+		[]string{"workspace new", "workspace delete", "env new", "env delete"},
+		command,
+	) {
 		return true
 	}
+
 	return false
 }

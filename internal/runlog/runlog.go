@@ -68,6 +68,7 @@ func (s *serialFile) Write(p []byte) (int, error) {
 	if err != nil {
 		return n, fmt.Errorf("write run log file: %w", err)
 	}
+
 	return n, nil
 }
 
@@ -79,20 +80,29 @@ func Open(label string, secrets []redact.Pattern) (*Log, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	file, err := Create(dir, Name(label), clock.FileStamp())
 	if err != nil {
 		_ = dir.Close()
 		return nil, err
 	}
+
 	// A file opened through a directory handle already reports the full path,
 	// built from the directory this run opened.
 	path, err := filepath.Abs(file.Name())
 	if err != nil {
 		path = file.Name()
 	}
+
 	sink := &serialFile{mu: sync.Mutex{}, file: file}
+
 	return &Log{
-		path: path, dir: dir, file: file, sink: sink, secrets: secrets, redactor: redact.New(sink, secrets),
+		path:     path,
+		dir:      dir,
+		file:     file,
+		sink:     sink,
+		secrets:  secrets,
+		redactor: redact.New(sink, secrets),
 	}, nil
 }
 
@@ -106,16 +116,19 @@ func openRunLogDir() (*os.Root, error) {
 		slog.Error("create run log dir failed", "dir", path, "err", err)
 		return nil, fmt.Errorf("create run log dir: %w", err)
 	}
+
 	if err != nil {
 		if checkErr := checkRunLogDir(path); checkErr != nil {
 			return nil, checkErr
 		}
 	}
+
 	dir, err := os.OpenRoot(path)
 	if err != nil {
 		slog.Error("open run log dir failed", "dir", path, "err", err)
 		return nil, fmt.Errorf("open run log dir: %w", err)
 	}
+
 	return dir, nil
 }
 
@@ -128,22 +141,29 @@ func checkRunLogDir(path string) error {
 		slog.Error("stat run log dir failed", "dir", path, "err", err)
 		return fmt.Errorf("stat run log dir: %w", err)
 	}
+
 	switch {
 	case info.Mode()&fs.ModeSymlink != 0:
 		return runLogDirRefusal(path, "it is a symlink")
 	case !info.IsDir():
 		return runLogDirRefusal(path, "it is not a directory")
 	case info.Mode().Perm() != fs.FileMode(DirPerm):
-		return runLogDirRefusal(path, fmt.Sprintf("its mode is %v, not %v", info.Mode().Perm(), fs.FileMode(DirPerm)))
+		return runLogDirRefusal(
+			path,
+			fmt.Sprintf("its mode is %v, not %v", info.Mode().Perm(), fs.FileMode(DirPerm)),
+		)
 	}
+
 	owned, err := fileowner.CurrentUser(info)
 	if err != nil {
 		slog.Error("run log dir owner unavailable", "dir", path, "err", err)
 		return fmt.Errorf("check run log dir owner: %w", err)
 	}
+
 	if !owned {
 		return runLogDirRefusal(path, "another user owns it")
 	}
+
 	return nil
 }
 
@@ -151,8 +171,13 @@ func checkRunLogDir(path string) error {
 // it. The operator has to clear the path themselves, because removing something
 // another user planted is not this tool's decision to make.
 func runLogDirRefusal(path, reason string) error {
-	err := fmt.Errorf("refusing to use run log dir %s because %s; remove it and run again", path, reason)
+	err := fmt.Errorf(
+		"refusing to use run log dir %s because %s; remove it and run again",
+		path,
+		reason,
+	)
 	slog.Error("run log dir refused", "dir", path, "reason", reason, "err", err)
+
 	return err
 }
 
@@ -164,17 +189,26 @@ func Create(dir *os.Root, stem, stamp string) (*os.File, error) {
 		if attempt > 1 {
 			name = fmt.Sprintf("%s-%s-%d.log", stem, stamp, attempt)
 		}
+
 		file, err := dir.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_EXCL, Perm)
 		if err == nil {
 			return file, nil
 		}
+
 		if !errors.Is(err, fs.ErrExist) {
 			slog.Error("create run log failed", "name", name, "err", err)
 			return nil, fmt.Errorf("create run log: %w", err)
 		}
 	}
-	err := fmt.Errorf("create run log: %d names already taken for %s-%s", runLogAttempts, stem, stamp)
+
+	err := fmt.Errorf(
+		"create run log: %d names already taken for %s-%s",
+		runLogAttempts,
+		stem,
+		stamp,
+	)
 	slog.Error("run log names exhausted", "stem", stem, "stamp", stamp, "err", err)
+
 	return nil, err
 }
 
@@ -198,6 +232,7 @@ func (l *Log) Write(p []byte) (int, error) {
 	if err != nil {
 		return n, fmt.Errorf("write run log: %w", err)
 	}
+
 	return n, nil
 }
 
@@ -230,6 +265,7 @@ func (p StreamPair) Close() error {
 		slog.Error("run log stream flush failed", "err", err)
 		return fmt.Errorf("flush run log streams: %w", err)
 	}
+
 	return nil
 }
 
@@ -241,19 +277,24 @@ func (l *Log) Close() error {
 	if flushErr != nil {
 		slog.Error("flush run log failed", "path", l.path, "err", flushErr)
 	}
+
 	fileErr := l.file.Close()
 	if fileErr != nil {
 		slog.Error("close run log failed", "path", l.path, "err", fileErr)
 	}
+
 	if dirErr := l.dir.Close(); dirErr != nil {
 		slog.Error("close run log dir failed", "path", l.path, "err", dirErr)
 	}
+
 	if flushErr != nil {
 		return fmt.Errorf("flush run log: %w", flushErr)
 	}
+
 	if fileErr != nil {
 		return fmt.Errorf("close run log: %w", fileErr)
 	}
+
 	return nil
 }
 
@@ -270,5 +311,6 @@ func Name(label string) string {
 	if stem == "" {
 		return "run"
 	}
+
 	return stem
 }

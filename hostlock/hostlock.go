@@ -33,10 +33,14 @@ const RenewInterval = time.Minute
 // when the server leaves 3 keepalive requests, sent 5 seconds apart, without
 // an answer.
 var sshOptions = []string{
-	"-o", "BatchMode=yes",
-	"-o", "ConnectTimeout=10",
-	"-o", "ServerAliveInterval=5",
-	"-o", "ServerAliveCountMax=3",
+	"-o",
+	"BatchMode=yes",
+	"-o",
+	"ConnectTimeout=10",
+	"-o",
+	"ServerAliveInterval=5",
+	"-o",
+	"ServerAliveCountMax=3",
 }
 
 // exitWait is the time that a stopped lock command has to close its output
@@ -89,8 +93,13 @@ type HeldError struct {
 
 // Error states the host and the run, controller, and expiry of the lock.
 func (e *HeldError) Error() string {
-	return fmt.Sprintf("host %s is locked by run %s on %s until %s",
-		e.Host, e.Run, e.Controller, e.Expiry.UTC().Format(time.RFC3339))
+	return fmt.Sprintf(
+		"host %s is locked by run %s on %s until %s",
+		e.Host,
+		e.Run,
+		e.Controller,
+		e.Expiry.UTC().Format(time.RFC3339),
+	)
 }
 
 // ErrNotHeld reports that the lock file on a host names another run.
@@ -130,16 +139,24 @@ func runScript(ctx context.Context, host Host, request command) (answer, error) 
 	if dir == "" {
 		dir = DefaultDir
 	}
+
 	operation := string(request.op)
 	if (request.restricted || request.server) && request.op == Release {
 		operation = "release-checked"
 	}
+
 	if request.server {
 		operation = "server-" + operation
 	}
+
 	script := []string{
-		"-s", "--", operation, request.run, request.controller,
-		strconv.FormatInt(int64(request.lease/time.Second), 10), dir,
+		"-s",
+		"--",
+		operation,
+		request.run,
+		request.controller,
+		strconv.FormatInt(int64(request.lease/time.Second), 10),
+		dir,
 		strconv.FormatInt(int64(MaxExtend/time.Second), 10),
 	}
 	var cmd *exec.Cmd
@@ -148,15 +165,22 @@ func runScript(ctx context.Context, host Host, request command) (answer, error) 
 		if err != nil {
 			return noLease(), err
 		}
+
 		cmd = exec.CommandContext(ctx, "bash", args...)
 	} else {
-		remote := slices.Concat(sshOptions, []string{host.User + "@" + host.Address, "bash"}, script)
+		remote := slices.Concat(
+			sshOptions,
+			[]string{host.User + "@" + host.Address, "bash"},
+			script,
+		)
 		args, err := checkedArgs(remote)
 		if err != nil {
 			return noLease(), err
 		}
+
 		cmd = exec.CommandContext(ctx, "ssh", args...)
 	}
+
 	cmd.WaitDelay = exitWait
 	cmd.Stdin = bytes.NewReader(lockScript)
 	var stdout, stderr bytes.Buffer
@@ -166,16 +190,41 @@ func runScript(ctx context.Context, host Host, request command) (answer, error) 
 	if err == nil {
 		return leaseAnswer(stdout.String()), nil
 	}
-	if refusal := scriptRefusal(host.Name, request.op, err, stdout.String(), stderr.String()); refusal != nil {
+
+	if refusal := scriptRefusal(
+		host.Name,
+		request.op,
+		err,
+		stdout.String(),
+		stderr.String(),
+	); refusal != nil {
 		return noLease(), refusal
 	}
+
 	// The caller logs a command that its context stopped.
 	if ctx.Err() != nil {
 		return noLease(), fmt.Errorf("%s lock on %s: %w", request.op, host.Name, context.Cause(ctx))
 	}
-	slog.Error("hostlock.operation_failed", "host", host.Name, "operation", string(request.op),
-		"stderr", strings.TrimSpace(stderr.String()), "err", err)
-	return noLease(), fmt.Errorf("%s lock on %s: %w: %s", request.op, host.Name, err, strings.TrimSpace(stderr.String()))
+
+	slog.Error(
+		"hostlock.operation_failed",
+		"host",
+		host.Name,
+		"operation",
+		string(request.op),
+		"stderr",
+		strings.TrimSpace(stderr.String()),
+		"err",
+		err,
+	)
+
+	return noLease(), fmt.Errorf(
+		"%s lock on %s: %w: %s",
+		request.op,
+		host.Name,
+		err,
+		strings.TrimSpace(stderr.String()),
+	)
 }
 
 // scriptRefusal returns the error for an exit status of the lock script that
@@ -185,13 +234,23 @@ func scriptRefusal(host string, op Operation, err error, stdout, stderr string) 
 	if !errors.As(err, &exitErr) {
 		return nil
 	}
+
 	switch exitErr.ExitCode() {
 	case exitHeld:
 		return heldError(host, stdout)
 	case exitNotHeld:
 		return fmt.Errorf("%s on %s: %w (%s)", op, host, ErrNotHeld, strings.TrimSpace(stdout))
 	case exitExtendRefused:
-		slog.Warn("hostlock.extend_refused", "host", host, "stderr", strings.TrimSpace(stderr), "err", err)
+		slog.Warn(
+			"hostlock.extend_refused",
+			"host",
+			host,
+			"stderr",
+			strings.TrimSpace(stderr),
+			"err",
+			err,
+		)
+
 		return fmt.Errorf("%s on %s: %w: %s", op, host, ErrExtendRefused, strings.TrimSpace(stderr))
 	default:
 		return nil
@@ -205,12 +264,17 @@ func leaseAnswer(line string) answer {
 	if len(fields) != 2 {
 		return noLease()
 	}
+
 	expiry, expiryErr := strconv.ParseInt(fields[0], 10, 64)
 	hostTime, hostTimeErr := strconv.ParseInt(fields[1], 10, 64)
 	if expiryErr != nil || hostTimeErr != nil {
 		return noLease()
 	}
-	return answer{expiry: time.Unix(expiry, 0), remaining: time.Duration(expiry-hostTime) * time.Second}
+
+	return answer{
+		expiry:    time.Unix(expiry, 0),
+		remaining: time.Duration(expiry-hostTime) * time.Second,
+	}
 }
 
 func heldError(host, line string) error {
@@ -223,6 +287,7 @@ func heldError(host, line string) error {
 			held.Expiry = time.Unix(seconds, 0)
 		}
 	}
+
 	return held
 }
 
@@ -237,7 +302,9 @@ func checkedArgs(args []string) ([]string, error) {
 		if match != arg {
 			return nil, fmt.Errorf("lock argument %q contains a non-printable character", arg)
 		}
+
 		safe = append(safe, match)
 	}
+
 	return safe, nil
 }

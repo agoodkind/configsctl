@@ -16,9 +16,12 @@ func processRunning(pid int) (bool, error) {
 	if err == nil || errors.Is(err, syscall.EPERM) {
 		return true, nil
 	}
+
 	if errors.Is(err, syscall.ESRCH) {
 		return false, nil
 	}
+
 	slog.Error("providers.process_check_failed", "pid", pid, "err", err)
+
 	return false, fmt.Errorf("check process %d: %w", pid, err)
 }

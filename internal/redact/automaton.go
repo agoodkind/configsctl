@@ -28,21 +28,26 @@ func newAutomaton(patterns [][]byte) *automaton {
 		depth:  []int{0},
 		maxLen: 0,
 	}
+
 	for _, p := range patterns {
 		if len(p) == 0 {
 			continue
 		}
+
 		ac.add(p)
 		if len(p) > ac.maxLen {
 			ac.maxLen = len(p)
 		}
 	}
+
 	ac.buildFailureLinks()
+
 	return ac
 }
 
 func (ac *automaton) add(p []byte) {
 	state := 0
+
 	for _, b := range p {
 		nxt, ok := ac.next[state][b]
 		if !ok {
@@ -53,8 +58,10 @@ func (ac *automaton) add(p []byte) {
 			ac.depth = append(ac.depth, ac.depth[state]+1)
 			ac.next[state][b] = nxt
 		}
+
 		state = nxt
 	}
+
 	ac.out[state] = append(ac.out[state], len(p))
 }
 
@@ -64,23 +71,29 @@ func (ac *automaton) buildFailureLinks() {
 		ac.fail[s] = 0
 		queue = append(queue, s)
 	}
+
 	for len(queue) > 0 {
 		state := queue[0]
 		queue = queue[1:]
+
 		for b, nxt := range ac.next[state] {
 			queue = append(queue, nxt)
+
 			f := ac.fail[state]
 			for f != 0 {
 				if _, ok := ac.next[f][b]; ok {
 					break
 				}
+
 				f = ac.fail[f]
 			}
+
 			if t, ok := ac.next[f][b]; ok && t != nxt {
 				ac.fail[nxt] = t
 			} else {
 				ac.fail[nxt] = 0
 			}
+
 			ac.out[nxt] = append(ac.out[nxt], ac.out[ac.fail[nxt]]...)
 		}
 	}
@@ -92,9 +105,11 @@ func (ac *automaton) step(state int, b byte) int {
 		if nxt, ok := ac.next[state][b]; ok {
 			return nxt
 		}
+
 		if state == 0 {
 			return 0
 		}
+
 		state = ac.fail[state]
 	}
 }
@@ -106,11 +121,13 @@ func (ac *automaton) step(state int, b byte) int {
 // continues past the end of data must begin inside that suffix.
 func (ac *automaton) scan(data []byte) (spans []span, partial int) {
 	state := 0
+
 	for i := range data {
 		state = ac.step(state, data[i])
 		for _, length := range ac.out[state] {
 			spans = append(spans, span{start: i - length + 1, end: i + 1})
 		}
 	}
+
 	return spans, ac.depth[state]
 }

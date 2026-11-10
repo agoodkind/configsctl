@@ -13,5 +13,6 @@ func bootID(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("read the boot id: %v", err)
 	}
+
 	return strings.TrimSpace(string(body))
 }

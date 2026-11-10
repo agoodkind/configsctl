@@ -75,9 +75,11 @@ func DecodeRequest(r io.Reader) (Request, error) {
 		slog.Error("gate.request.read_failed", "err", err)
 		return Request{}, fmt.Errorf("read request: %w", err)
 	}
+
 	if len(body) > maxRequestBytes {
 		return Request{}, fmt.Errorf("request is larger than %d bytes", maxRequestBytes)
 	}
+
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	var req Request
@@ -85,9 +87,11 @@ func DecodeRequest(r io.Reader) (Request, error) {
 		slog.Error("gate.request.decode_failed", "err", err)
 		return Request{}, fmt.Errorf("decode request: %w", err)
 	}
+
 	if decoder.More() {
 		return Request{}, errors.New("request has more than one JSON value")
 	}
+
 	return req, nil
 }
 
@@ -114,18 +118,23 @@ func (r Request) validateDeploy() error {
 	if err := r.requireOnly("playbook", "commit", "limit", "extra_vars", "session"); err != nil {
 		return err
 	}
+
 	if !playbookPattern.MatchString(r.Playbook) {
 		return fmt.Errorf("playbook %q is not a playbook name", r.Playbook)
 	}
+
 	if err := checkCommitAndSession(r.Commit, r.Session); err != nil {
 		return err
 	}
+
 	if r.Limit != "" && !limitPattern.MatchString(r.Limit) {
 		return fmt.Errorf("limit %q has a character outside the host pattern set", r.Limit)
 	}
+
 	if len(r.ExtraVars) > 0 && !isJSONObject(r.ExtraVars) {
 		return errors.New("extra_vars is not a JSON object")
 	}
+
 	return nil
 }
 
@@ -133,20 +142,25 @@ func (r Request) validateTofu() error {
 	if err := r.requireOnly("workspace", "action", "commit", "targets", "session"); err != nil {
 		return err
 	}
+
 	if !workspacePattern.MatchString(r.Workspace) {
 		return fmt.Errorf("workspace %q is not a workspace name", r.Workspace)
 	}
+
 	if r.Action != TofuPlan && r.Action != TofuApply {
 		return fmt.Errorf("action %q is not plan or apply", r.Action)
 	}
+
 	if err := checkCommitAndSession(r.Commit, r.Session); err != nil {
 		return err
 	}
+
 	for _, target := range r.Targets {
 		if !targetPattern.MatchString(target) {
 			return fmt.Errorf("target %q is not a resource address", target)
 		}
 	}
+
 	return nil
 }
 
@@ -154,12 +168,15 @@ func (r Request) validateRunLookup() error {
 	if err := r.requireOnly("run", "follow"); err != nil {
 		return err
 	}
+
 	if !runPattern.MatchString(r.Run) {
 		return fmt.Errorf("run %q is not a run id", r.Run)
 	}
+
 	if r.Kind == KindStatus && r.Follow {
 		return errors.New("a status request does not use follow")
 	}
+
 	return nil
 }
 
@@ -167,15 +184,19 @@ func (r Request) validateUnlock() error {
 	if err := r.requireOnly("host", "run", "reason"); err != nil {
 		return err
 	}
+
 	if !hostPattern.MatchString(r.Host) {
 		return fmt.Errorf("host %q is not a host name", r.Host)
 	}
+
 	if !runPattern.MatchString(r.Run) {
 		return fmt.Errorf("run %q is not a run id", r.Run)
 	}
+
 	if !reasonPattern.MatchString(r.Reason) {
 		return errors.New("reason is empty, longer than 500 characters, or not printable ASCII")
 	}
+
 	return nil
 }
 
@@ -183,9 +204,11 @@ func checkCommitAndSession(commit, session string) error {
 	if !commitPattern.MatchString(commit) {
 		return fmt.Errorf("commit %q is not a 40-character commit", commit)
 	}
+
 	if !sessionPattern.MatchString(session) {
 		return fmt.Errorf("session %q is empty or has a character outside the session set", session)
 	}
+
 	return nil
 }
 
@@ -205,14 +228,17 @@ func (r Request) requireOnly(allowed ...string) error {
 		"host":       r.Host != "",
 		"reason":     r.Reason != "",
 	}
+
 	for _, name := range allowed {
 		delete(set, name)
 	}
+
 	for name, present := range set {
 		if present {
 			return fmt.Errorf("a %s request does not use the field %s", r.Kind, name)
 		}
 	}
+
 	return nil
 }
 

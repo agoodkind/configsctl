@@ -53,6 +53,7 @@ func GitCommit() string {
 	if Commit == "" {
 		return unknown
 	}
+
 	return Commit
 }
 
@@ -76,6 +77,7 @@ func BinaryHash() string {
 		slog.Warn("version executable path failed", "err", err)
 		return unknown
 	}
+
 	return binaryHashFrom(path)
 }
 
@@ -86,11 +88,13 @@ func binaryHashFrom(path string) string {
 		slog.Warn("version binary open failed", "err", err)
 		return unknown
 	}
+
 	defer func() { _ = file.Close() }()
 	digest := sha256.New()
 	if _, err := io.Copy(digest, file); err != nil {
 		slog.Warn("version binary hash failed", "err", err)
 		return unknown
 	}
+
 	return hex.EncodeToString(digest.Sum(nil))[:binaryHashLength]
 }

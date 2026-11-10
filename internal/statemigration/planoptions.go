@@ -12,5 +12,6 @@ func (options PlanOptions) validate() error {
 	if options.Parallelism < 0 {
 		return errors.New("migration plan parallelism must be positive when specified")
 	}
+
 	return nil
 }

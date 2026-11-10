@@ -17,17 +17,20 @@ func Discover(directory string) (native, jsonFiles []string, err error) {
 		slog.Error("tofu.source.discovery_failed", "directory", directory, "err", err)
 		return nil, nil, fmt.Errorf("read OpenTofu source directory %s: %w", directory, err)
 	}
+
 	names := make(map[string]bool, len(entries))
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			names[entry.Name()] = true
 		}
 	}
+
 	for _, entry := range entries {
 		name := entry.Name()
 		if entry.IsDir() || !Active(name, names) {
 			continue
 		}
+
 		path := filepath.Join(directory, name)
 		if strings.HasSuffix(name, ".json") {
 			jsonFiles = append(jsonFiles, path)
@@ -35,6 +38,7 @@ func Discover(directory string) (native, jsonFiles []string, err error) {
 			native = append(native, path)
 		}
 	}
+
 	return native, jsonFiles, nil
 }
 
@@ -57,8 +61,10 @@ func replaced(name string, names map[string]bool) bool {
 	if stem, matched := strings.CutSuffix(name, ".tf"); matched {
 		return names[stem+".tofu"]
 	}
+
 	if stem, matched := strings.CutSuffix(name, ".tf.json"); matched {
 		return names[stem+".tofu.json"]
 	}
+
 	return false
 }

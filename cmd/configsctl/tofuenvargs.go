@@ -16,23 +16,46 @@ var tofuNestedCommands = map[string][]string{
 	"env":       {"list", "select", "new", "delete"},
 	"metadata":  {"functions"},
 	"providers": {"lock", "mirror", "schema"},
-	"state":     {"list", "ls", "rm", "remove", "mv", "move", "pull", "push", "show", "replace-provider"},
+	"state": {
+		"list",
+		"ls",
+		"rm",
+		"remove",
+		"mv",
+		"move",
+		"pull",
+		"push",
+		"show",
+		"replace-provider",
+	},
 	"workspace": {"list", "select", "show", "new", "delete"},
 }
 
-func tofuInvocation(settings tofuSettings, workspace, passwordFile string, args []string) ([]string, []string, error) {
+func tofuInvocation(
+	settings tofuSettings,
+	workspace string,
+	passwordFile string,
+	args []string,
+) ([]string, []string, error) {
 	secrets, err := tofuSecretEnv(settings, workspace, defaultVaultFile, passwordFile)
 	if err != nil {
 		return nil, nil, err
 	}
+
 	return expandTofuEnvironment(args, append(os.Environ(), secrets...))
 }
 
-func prepareTofuInvocation(settings tofuSettings, workspace, passwordFile string, args []string) (safeArgs, childEnv []string, err error) {
+func prepareTofuInvocation(
+	settings tofuSettings,
+	workspace string,
+	passwordFile string,
+	args []string,
+) (safeArgs, childEnv []string, err error) {
 	expanded, childEnv, err := tofuInvocation(settings, workspace, passwordFile, args)
 	if err != nil {
 		return nil, nil, err
 	}
+
 	if settings.source != nil {
 		if settings.ProviderMirror == nil {
 			childEnv, err = settings.source.environment(childEnv)
@@ -40,23 +63,31 @@ func prepareTofuInvocation(settings tofuSettings, workspace, passwordFile string
 				return nil, nil, err
 			}
 		}
+
 		expanded, err = settings.source.arguments(workspace, expanded)
 		if err != nil {
 			return nil, nil, err
 		}
 	}
+
 	directory, err := prepareNativeDataDirectory(settings, workspace, childEnv, expanded)
 	if err != nil {
 		return nil, nil, err
 	}
+
 	if directory != "" {
-		childEnv = slices.DeleteFunc(childEnv, func(assignment string) bool { return strings.HasPrefix(assignment, "TF_DATA_DIR=") })
+		childEnv = slices.DeleteFunc(
+			childEnv,
+			func(assignment string) bool { return strings.HasPrefix(assignment, "TF_DATA_DIR=") },
+		)
 		childEnv = append(childEnv, "TF_DATA_DIR="+directory)
 	}
+
 	safeArgs, err = sanitizeTofuArgs(expanded)
 	if err != nil {
 		return nil, nil, err
 	}
+
 	return safeArgs, childEnv, nil
 }
 
@@ -67,12 +98,15 @@ func expandTofuEnvironment(args, environment []string) ([]string, []string, erro
 	if err != nil {
 		return nil, nil, err
 	}
+
 	suffix := strings.NewReplacer("-", "_", " ", "_").Replace(command)
 	specific, err := parseTofuEnvironment(tofuCLIArgs+"_"+suffix, environment)
 	if err != nil {
 		return nil, nil, err
 	}
+
 	merged := slices.Concat(args[:insertion], specific, global, args[insertion:])
+
 	clean := make([]string, 0, len(environment))
 	for _, assignment := range environment {
 		variable, _, _ := strings.Cut(assignment, "=")
@@ -80,11 +114,14 @@ func expandTofuEnvironment(args, environment []string) ([]string, []string, erro
 		case tofuCLIArgs:
 			continue
 		}
+
 		if strings.HasPrefix(variable, tofuCLIArgs+"_") {
 			continue
 		}
+
 		clean = append(clean, assignment)
 	}
+
 	return merged, clean, nil
 }
 
@@ -96,10 +133,12 @@ func parseTofuEnvironment(name string, environment []string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse OpenTofu arguments from %s; check quoting and escaping", name)
 	}
+
 	safe, err := sanitizeTofuArgs(args)
 	if err != nil {
 		return nil, fmt.Errorf("OpenTofu arguments from %s contain non-printable characters", name)
 	}
+
 	return safe, nil
 }
 
@@ -108,10 +147,13 @@ func tofuEnvironmentCommand(args []string) (string, int) {
 		if strings.HasPrefix(argument, "-") {
 			continue
 		}
+
 		if index+1 < len(args) && slices.Contains(tofuNestedCommands[argument], args[index+1]) {
 			return argument + " " + args[index+1], index + 2
 		}
+
 		return argument, index + 1
 	}
+
 	return "", 0
 }
