@@ -1,7 +1,7 @@
-# deadcode: generated_at=2026-11-10T04:45:22Z
-hostlock/set.go:470:15: unreachable func: Set.ReleaseAllChecked	# deadcode:first_added=2026-11-10T04:43:38Z last_seen=2026-11-10T04:45:22Z
-hostlock/set.go:520:15: unreachable func: Set.Abandon	# deadcode:first_added=2026-11-10T04:43:38Z last_seen=2026-11-10T04:45:22Z
-internal/runlog/runlog.go:230:15: unreachable func: Log.Write	# deadcode:first_added=2026-11-10T04:43:38Z last_seen=2026-11-10T04:45:22Z
-internal/tofulock/decide.go:119:6: unreachable func: PendingAddresses	# deadcode:first_added=2026-11-10T04:43:38Z last_seen=2026-11-10T04:45:22Z
-internal/tofulock/decide.go:54:6: unreachable func: Decide	# deadcode:first_added=2026-11-10T04:43:38Z last_seen=2026-11-10T04:45:22Z
-internal/tofulock/plan.go:73:23: unreachable func: changeValues.importing	# deadcode:first_added=2026-11-10T04:43:38Z last_seen=2026-11-10T04:45:22Z
+# deadcode: generated_at=2026-11-10T05:01:11Z
+hostlock/set.go:470:15: unreachable func: Set.ReleaseAllChecked	# deadcode:first_added=2026-11-10T04:43:38Z last_seen=2026-11-10T05:01:11Z
+hostlock/set.go:520:15: unreachable func: Set.Abandon	# deadcode:first_added=2026-11-10T04:43:38Z last_seen=2026-11-10T05:01:11Z
+internal/runlog/runlog.go:230:15: unreachable func: Log.Write	# deadcode:first_added=2026-11-10T04:43:38Z last_seen=2026-11-10T05:01:11Z
+internal/tofulock/decide.go:119:6: unreachable func: PendingAddresses	# deadcode:first_added=2026-11-10T04:43:38Z last_seen=2026-11-10T05:01:11Z
+internal/tofulock/decide.go:54:6: unreachable func: Decide	# deadcode:first_added=2026-11-10T04:43:38Z last_seen=2026-11-10T05:01:11Z
+internal/tofulock/plan.go:73:23: unreachable func: changeValues.importing	# deadcode:first_added=2026-11-10T04:43:38Z last_seen=2026-11-10T05:01:11Z
