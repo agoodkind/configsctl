@@ -33,6 +33,7 @@ func (r Repo) RequireOnMain(ctx context.Context, commit string) error {
 	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
 		return fmt.Errorf("commit %s is not on %s", commit, mainRef)
 	}
+
 	return err
 }
 
@@ -42,9 +43,11 @@ func (r Repo) CleanRevision(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	if checkout.Dirty {
 		return "", ErrDirty
 	}
+
 	return checkout.Commit, nil
 }
 
@@ -60,11 +63,16 @@ func (r Repo) Snapshot(ctx context.Context) (CheckoutRevision, error) {
 	if err != nil {
 		return CheckoutRevision{}, err
 	}
+
 	revision, err := r.output(ctx, "rev-parse", "HEAD")
 	if err != nil {
 		return CheckoutRevision{}, err
 	}
-	return CheckoutRevision{Commit: strings.TrimSpace(string(revision)), Dirty: len(status) != 0}, nil
+
+	return CheckoutRevision{
+		Commit: strings.TrimSpace(string(revision)),
+		Dirty:  len(status) != 0,
+	}, nil
 }
 
 // Root returns the configuration repository root.
@@ -73,6 +81,7 @@ func (r Repo) Root(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	return strings.TrimSpace(string(root)), nil
 }
 
@@ -96,6 +105,7 @@ func (r Repo) output(ctx context.Context, args ...string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	cmd := exec.CommandContext(ctx, "git", safe...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -105,8 +115,19 @@ func (r Repo) output(ctx context.Context, args ...string) ([]byte, error) {
 		if args[0] == "merge-base" && errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
 			return nil, fmt.Errorf("git merge-base: %w", err)
 		}
-		slog.Error("gate.checkout.git_failed", "args", strings.Join(args, " "), "stderr", strings.TrimSpace(stderr.String()), "err", err)
+
+		slog.Error(
+			"gate.checkout.git_failed",
+			"args",
+			strings.Join(args, " "),
+			"stderr",
+			strings.TrimSpace(stderr.String()),
+			"err",
+			err,
+		)
+
 		return nil, fmt.Errorf("git %s: %w: %s", args[0], err, strings.TrimSpace(stderr.String()))
 	}
+
 	return output, nil
 }

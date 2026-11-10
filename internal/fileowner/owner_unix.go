@@ -18,6 +18,7 @@ func CurrentUser(info fs.FileInfo) (bool, error) {
 	if !ok {
 		return false, errors.New("this filesystem does not report a file owner")
 	}
+
 	return int(stat.Uid) == os.Getuid(), nil
 }
 
@@ -27,5 +28,6 @@ func EffectiveUser(info fs.FileInfo) (bool, error) {
 	if !ok {
 		return false, errors.New("this filesystem does not report a file owner")
 	}
+
 	return int(stat.Uid) == os.Geteuid(), nil
 }

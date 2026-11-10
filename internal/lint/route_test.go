@@ -31,12 +31,15 @@ func TestRunRoutesMembershipThroughOracle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+
 	found := false
+
 	for _, finding := range findings {
 		if finding.Kind == "membership" && finding.Root == "target_group" {
 			found = true
 		}
 	}
+
 	if !found {
 		t.Fatalf("expected membership violation on target_group via oracle, got %v", findings)
 	}
@@ -67,6 +70,7 @@ func TestRunSparesRuntimeRootInRoutedForm(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+
 	for _, finding := range findings {
 		if finding.Root == "probe" {
 			t.Fatalf("registered result probe should be spared, got %v", finding)

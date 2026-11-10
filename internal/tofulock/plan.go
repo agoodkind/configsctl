@@ -36,6 +36,7 @@ func (r resourceChange) addresses() []string {
 	if r.PreviousAddress == "" || r.PreviousAddress == r.Address {
 		return []string{r.Address}
 	}
+
 	return []string{r.PreviousAddress, r.Address}
 }
 
@@ -62,11 +63,13 @@ func (c changeValues) inert() bool {
 	if len(c.Actions) == 0 {
 		return false
 	}
+
 	for _, action := range c.Actions {
 		if !inertActions[action] {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -84,19 +87,23 @@ func (c changeValues) states() changeStates {
 	if c.Before != nil {
 		states.before = &resourceState{attributes: c.Before, unknown: nil, allUnknown: false}
 	}
+
 	if c.After != nil || allUnknown {
 		states.after = &resourceState{attributes: c.After, unknown: unknown, allUnknown: allUnknown}
 	}
+
 	return states
 }
 
 func (s changeStates) present() []*resourceState {
 	var present []*resourceState
+
 	for _, state := range []*resourceState{s.before, s.after} {
 		if state != nil {
 			present = append(present, state)
 		}
 	}
+
 	return present
 }
 
@@ -109,14 +116,18 @@ func unknownAttributes(raw json.RawMessage) (map[string]bool, bool) {
 	if len(trimmed) == 0 || bytes.Equal(trimmed, jsonFalse) || bytes.Equal(trimmed, jsonNull) {
 		return nil, false
 	}
+
 	var object map[string]json.RawMessage
 	if err := json.Unmarshal(trimmed, &object); err != nil {
 		return nil, true
 	}
+
 	unknown := map[string]bool{}
+
 	for name, value := range object {
 		unknown[name] = bytes.Equal(bytes.TrimSpace(value), jsonTrue)
 	}
+
 	return unknown, false
 }
 
@@ -134,13 +145,16 @@ func (s *resourceState) text(name string) (string, bool) {
 	if !ok || s.isUnknown(name) {
 		return "", false
 	}
+
 	var value string
 	if err := json.Unmarshal(raw, &value); err == nil {
 		return value, value != ""
 	}
+
 	var number json.Number
 	if err := json.Unmarshal(raw, &number); err == nil {
 		return number.String(), true
 	}
+
 	return "", false
 }

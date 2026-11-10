@@ -45,6 +45,7 @@ func TestRouteClassifiesForms(t *testing.T) {
 		},
 		{expr: "x | default(", parsed: false},
 	}
+
 	forms := make([]Form, len(cases))
 	for i, testCase := range cases {
 		// The lint engine always sends a list of runtime names, never null.
@@ -56,18 +57,22 @@ func TestRouteClassifiesForms(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Route: %v", err)
 	}
+
 	if len(results) != len(cases) {
 		t.Fatalf("Route returned %d results for %d forms", len(results), len(cases))
 	}
+
 	for i, testCase := range cases {
 		result := results[i]
 		if result.Parsed != testCase.parsed {
 			t.Errorf("%q: parsed = %v, want %v", testCase.expr, result.Parsed, testCase.parsed)
 		}
+
 		kinds := make([]string, 0, len(result.Violations))
 		for _, violation := range result.Violations {
 			kinds = append(kinds, violation.Kind)
 		}
+
 		slices.Sort(kinds)
 		want := slices.Clone(testCase.kinds)
 		slices.Sort(want)
@@ -86,10 +91,12 @@ func TestRouteIgnoresModulesPlantedInTheTempDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read hostile module: %v", err)
 	}
+
 	planted := t.TempDir()
 	if err := os.WriteFile(filepath.Join(planted, "json.py"), hostile, 0o600); err != nil {
 		t.Fatalf("plant hostile module: %v", err)
 	}
+
 	marker := filepath.Join(t.TempDir(), "hijacked")
 	t.Setenv("CONFIGSCTL_HIJACK_MARKER", marker)
 	t.Setenv("TMPDIR", planted)
@@ -99,9 +106,11 @@ func TestRouteIgnoresModulesPlantedInTheTempDirectory(t *testing.T) {
 	if _, statErr := os.Stat(marker); statErr == nil {
 		t.Fatalf("Route imported the json.py planted in %s", planted)
 	}
+
 	if routeErr != nil {
 		t.Fatalf("Route: %v", routeErr)
 	}
+
 	if len(results) != 1 || !results[0].Parsed || len(results[0].Violations) != 1 {
 		t.Fatalf("Route results = %+v, want one parsed form with one violation", results)
 	}

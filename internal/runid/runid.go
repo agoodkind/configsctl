@@ -24,6 +24,7 @@ func New() (string, error) {
 		slog.Error("runid.random_failed", "err", err)
 		return "", fmt.Errorf("read random run id suffix: %w", err)
 	}
+
 	return clock.FileStamp() + "-" + hex.EncodeToString(suffix), nil
 }
 
@@ -33,5 +34,6 @@ func Current() (string, error) {
 	if id := os.Getenv(EnvVar); id != "" {
 		return id, nil
 	}
+
 	return New()
 }

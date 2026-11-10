@@ -13,5 +13,6 @@ func checkOwnerIDs(path string, info fs.FileInfo, uid, gid int64) error {
 	if !present || int64(stat.Uid) != uid || int64(stat.Gid) != gid {
 		return fmt.Errorf("installed input %s does not match its observed owner and group", path)
 	}
+
 	return nil
 }

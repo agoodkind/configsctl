@@ -14,5 +14,6 @@ func bootID(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("read kern.boottime: %v", err)
 	}
+
 	return strconv.FormatInt(booted.Sec, 10)
 }

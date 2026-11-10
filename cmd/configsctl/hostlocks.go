@@ -24,17 +24,28 @@ type tofuLockRequest struct {
 
 // Run locked work with the returned context and call release after it returns.
 // Lock loss cancels that context with hostlock.ErrLost.
-func takeLocks(ctx context.Context, hosts []hostlock.Host) (locked context.Context, release func(), err error) {
+func takeLocks(
+	ctx context.Context,
+	hosts []hostlock.Host,
+) (locked context.Context, release func(), err error) {
 	set, run, err := acquireLockSet(ctx, hosts)
 	if err != nil {
 		return nil, nil, err
 	}
+
 	if err := os.Setenv(hostlock.StateEnvVar, set.StateDir()); err != nil {
 		set.ReleaseAll(context.WithoutCancel(ctx))
 		slog.Error("lock.state_export_failed", "run", run, "err", err)
-		return nil, nil, fmt.Errorf("export %s to the child processes: %w", hostlock.StateEnvVar, err)
+
+		return nil, nil, fmt.Errorf(
+			"export %s to the child processes: %w",
+			hostlock.StateEnvVar,
+			err,
+		)
 	}
+
 	lockedCtx, release := keepLocksRenewed(ctx, set)
+
 	return lockedCtx, release, nil
 }
 
@@ -46,15 +57,18 @@ func acquireLockSet(ctx context.Context, hosts []hostlock.Host) (*hostlock.Set, 
 		slog.Error("lock.run_id_failed", "err", err)
 		return nil, "", fmt.Errorf("create the run id for host locks: %w", err)
 	}
+
 	controller, err := controllerName()
 	if err != nil {
 		return nil, "", err
 	}
+
 	set, err := hostlock.AcquireAll(ctx, hosts, run, controller, hostlock.DefaultLease())
 	if err != nil {
 		slog.Error("lock.acquire_failed", "run", run, "err", err)
 		return nil, "", fmt.Errorf("lock the target hosts: %w", err)
 	}
+
 	return set, run, nil
 }
 
@@ -63,6 +77,7 @@ func acquireLockSet(ctx context.Context, hosts []hostlock.Host) (*hostlock.Set, 
 func keepLocksRenewed(ctx context.Context, set *hostlock.Set) (context.Context, func()) {
 	lockedCtx, cancel := context.WithCancelCause(ctx)
 	stop := set.KeepRenewed(ctx, cancel)
+
 	return lockedCtx, func() {
 		stop()
 		cancel(nil)
@@ -76,10 +91,12 @@ func controllerName() (string, error) {
 	if name := os.Getenv(gate.ControllerEnvVar); name != "" {
 		return name, nil
 	}
+
 	name, err := os.Hostname()
 	if err != nil {
 		slog.Error("lock.hostname_unavailable", "err", err)
 		return "", fmt.Errorf("read the host name for the lock owner: %w", err)
 	}
+
 	return name, nil
 }

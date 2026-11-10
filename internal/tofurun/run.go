@@ -56,11 +56,19 @@ func Run(ctx context.Context, request Request) (Result, error) {
 	if err != nil {
 		return Result{ExitCode: 0, LogPath: ""}, err
 	}
+
 	display := request.DisplayArgs
 	if len(display) == 0 {
 		display = request.Args
 	}
-	slog.Info("tofu.command_started", "workspace", request.Root, "subcommand", tofuargs.Subcommand(display))
+
+	slog.Info(
+		"tofu.command_started",
+		"workspace",
+		request.Root,
+		"subcommand",
+		tofuargs.Subcommand(display),
+	)
 	args := request.Args
 	cmd := exec.CommandContext(ctx, "tofu", args...)
 	cmd.Dir = request.Root
@@ -76,6 +84,7 @@ func Run(ctx context.Context, request Request) (Result, error) {
 		if err != nil {
 			return Result{ExitCode: 0, LogPath: ""}, err
 		}
+
 		logStreams = log.Streams()
 		cmd.Stdout = logStreams.Stdout
 		cmd.Stderr = logStreams.Stderr
@@ -88,13 +97,17 @@ func Run(ctx context.Context, request Request) (Result, error) {
 		result.LogPath = log.Path()
 		closeErr = errors.Join(logStreams.Close(), closeOutput(log))
 	}
+
 	if runErr == nil {
 		return result, closeErr
 	}
+
 	if closeErr == nil {
 		return result, runErr
 	}
+
 	slog.Error("tofu.command_incomplete", "workspace", request.Root, "err", closeErr)
+
 	return result, errors.Join(runErr, closeErr)
 }
 
@@ -107,10 +120,13 @@ func Execute(ctx context.Context, cmd *exec.Cmd) (int, error) {
 	if runErr == nil {
 		return 0, nil
 	}
+
 	var exited *exec.ExitError
 	if context.Cause(ctx) == nil && errors.As(runErr, &exited) {
 		return exited.ExitCode(), nil
 	}
+
 	slog.Error("tofu.command_incomplete", "workspace", cmd.Dir, "err", runErr)
+
 	return 0, fmt.Errorf("%w: %w", ErrIncomplete, runErr)
 }

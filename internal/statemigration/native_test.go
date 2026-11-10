@@ -24,20 +24,26 @@ func workspaceFixture(t *testing.T, name string) statemigration.Workspace {
 	if err := os.Chmod(path, 0o700); err != nil {
 		t.Fatal(err)
 	}
+
 	data, err := os.ReadFile(filepath.Join("testdata", name+".tf"))
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if err := os.WriteFile(filepath.Join(path, "main.tf"), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
+
 	workspace := statemigration.Workspace{
 		Directory: path,
-		Environment: append(os.Environ(),
+		Environment: append(
+			os.Environ(),
 			fmt.Sprintf("TF_VAR_vault_tofu_state_passphrase=%s", nativeEncryptionKey),
-			"TF_VAR_fixture_value="+syntheticMarker),
+			"TF_VAR_fixture_value="+syntheticMarker,
+		),
 	}
 	nativeCommand(t, workspace, "init", "-input=false", "-no-color")
+
 	return workspace
 }
 
@@ -60,6 +66,7 @@ func privateFixtureDir(t *testing.T) string {
 	if err := os.Chmod(path, 0o700); err != nil {
 		t.Fatal(err)
 	}
+
 	return path
 }
 
@@ -74,39 +81,65 @@ func TestNativeEncryptedTransferPreservesInstanceAndRefusesStalePush(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	snapshotPath := filepath.Join(private, "before")
 	snapshot, err := statemigration.Snapshot(ctx, source, sourceExport, snapshotPath)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	requireNativeSnapshotPermissions(t, snapshotPath)
 	restored, err := statemigration.Pull(ctx, snapshot, filepath.Join(private, "restored.tfstate"))
 	if err != nil || restored.Digest != before.Digest {
 		t.Fatalf("the encrypted snapshot changed resource verification metadata: %v", err)
 	}
+
 	destinationExport := filepath.Join(private, "destination.tfstate")
-	if err := statemigration.Move(ctx, source, sourceExport, destinationExport, "terraform_data.original", "terraform_data.renamed"); err != nil {
+	if err := statemigration.Move(
+		ctx,
+		source,
+		sourceExport,
+		destinationExport,
+		"terraform_data.original",
+		"terraform_data.renamed",
+	); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := statemigration.Push(ctx, destination, destinationExport); err != nil {
 		t.Fatal(err)
 	}
+
 	after, err := statemigration.Pull(ctx, destination, filepath.Join(private, "after.tfstate"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(after.Records) != 1 || before.Records["terraform_data.original"] != after.Records["terraform_data.renamed"] {
+
+	if len(after.Records) != 1 ||
+		before.Records["terraform_data.original"] != after.Records["terraform_data.renamed"] {
 		t.Fatal("native transfer changed the resource identity or provider state")
 	}
+
 	nativeCommand(t, destination, "plan", "-input=false", "-detailed-exitcode", "-no-color")
-	requirePrivateNativeFiles(t, private, "source.tfstate", "destination.tfstate", "restored.tfstate", "after.tfstate")
+	requirePrivateNativeFiles(
+		t,
+		private,
+		"source.tfstate",
+		"destination.tfstate",
+		"restored.tfstate",
+		"after.tfstate",
+	)
 	// A second real update advances the destination serial before the stale push.
-	destination.Environment = append(destination.Environment, "TF_VAR_fixture_value=synthetic-later-update")
+	destination.Environment = append(
+		destination.Environment,
+		"TF_VAR_fixture_value=synthetic-later-update",
+	)
 	nativeCommand(t, destination, "apply", "-auto-approve", "-input=false", "-no-color")
 	err = statemigration.Push(ctx, destination, destinationExport)
 	if err == nil {
 		t.Fatal("native push overwrote a later destination state")
 	}
+
 	if strings.Contains(err.Error(), syntheticMarker) {
 		t.Fatal("native failure exposed the synthetic state value")
 	}
@@ -118,10 +151,18 @@ func requireNativeSnapshotPermissions(t *testing.T, directory string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if bytes.Contains(encrypted, []byte(syntheticMarker)) {
 		t.Fatal("the retained snapshot contains the synthetic plaintext marker")
 	}
-	requirePrivateNativeFiles(t, directory, "snapshot.tfstate", "main.tf", filepath.Join(".terraform", "terraform.tfstate"))
+
+	requirePrivateNativeFiles(
+		t,
+		directory,
+		"snapshot.tfstate",
+		"main.tf",
+		filepath.Join(".terraform", "terraform.tfstate"),
+	)
 	metadata, err := os.Stat(filepath.Join(directory, ".terraform"))
 	if err != nil || metadata.Mode().Perm() != 0o700 {
 		t.Fatal("retained snapshot backend metadata requires a private directory")
@@ -130,6 +171,7 @@ func requireNativeSnapshotPermissions(t *testing.T, directory string) {
 
 func requirePrivateNativeFiles(t *testing.T, directory string, names ...string) {
 	t.Helper()
+
 	for _, name := range names {
 		info, err := os.Stat(filepath.Join(directory, name))
 		if err != nil || info.Mode().Perm() != 0o600 {
@@ -147,20 +189,29 @@ func TestPrivateCaptureRefusesSymlinkAndExistingOutput(t *testing.T) {
 	if _, err := statemigration.Pull(ctx, workspace, path); err != nil {
 		t.Fatal(err)
 	}
+
 	before, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := statemigration.Pull(ctx, workspace, path); err == nil {
 		t.Fatal("native capture overwrote an existing private export")
 	}
+
 	link := filepath.Join(t.TempDir(), "linked")
 	if err := os.Symlink(private, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := statemigration.Pull(ctx, workspace, filepath.Join(link, "escape.tfstate")); err == nil {
+
+	if _, err := statemigration.Pull(
+		ctx,
+		workspace,
+		filepath.Join(link, "escape.tfstate"),
+	); err == nil {
 		t.Fatal("native capture accepted a symlink as its private directory")
 	}
+
 	after, err := os.ReadFile(path)
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatal("a refused private capture changed the existing export")

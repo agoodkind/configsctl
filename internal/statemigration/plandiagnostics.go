@@ -55,6 +55,7 @@ func readPlanDiagnostics(path, workspace string) ([]planDiagnostic, error) {
 	defer file.Close()
 	decoder := json.NewDecoder(file)
 	diagnostics := []planDiagnostic{}
+
 	for {
 		var event struct {
 			Type       string `json:"type"`
@@ -74,28 +75,48 @@ func readPlanDiagnostics(path, workspace string) ([]planDiagnostic, error) {
 		if err := decoder.Decode(&event); errors.Is(err, io.EOF) {
 			return diagnostics, nil
 		} else if err != nil {
-			return diagnostics, errors.New("decode private native JSON diagnostics; event text remains private")
+			return diagnostics, errors.New(
+				"decode private native JSON diagnostics; event text remains private",
+			)
 		}
+
 		if event.Type != "diagnostic" {
 			continue
 		}
+
 		native := event.Diagnostic
 		category, known := planDiagnosticCategories[native.Summary]
 		if !known {
 			category = "unclassified_native_diagnostic"
 		}
+
 		severity := "unknown"
 		if native.Severity == "error" || native.Severity == "warning" {
 			severity = native.Severity
 		}
-		diagnostic := planDiagnostic{Severity: severity, Category: category, Digest: digest([]byte(native.Summary)), Filename: "", Line: 0, HTTPStatus: 0, Transport: "", APIErrorCodes: nil, Address: diagnosticAddress(native.Address)}
-		if category == "provider_http_request_failed" {
-			diagnostic.HTTPStatus, diagnostic.Transport, diagnostic.APIErrorCodes = providerHTTPDiagnostic(native.Detail)
+
+		diagnostic := planDiagnostic{
+			Severity:      severity,
+			Category:      category,
+			Digest:        digest([]byte(native.Summary)),
+			Filename:      "",
+			Line:          0,
+			HTTPStatus:    0,
+			Transport:     "",
+			APIErrorCodes: nil,
+			Address:       diagnosticAddress(native.Address),
 		}
+		if category == "provider_http_request_failed" {
+			diagnostic.HTTPStatus, diagnostic.Transport, diagnostic.APIErrorCodes = providerHTTPDiagnostic(
+				native.Detail,
+			)
+		}
+
 		diagnostic.Filename = diagnosticFilename(native.Range.Filename, workspace)
 		if diagnostic.Filename != "" && native.Range.Start.Line > 0 {
 			diagnostic.Line = native.Range.Start.Line
 		}
+
 		diagnostics = append(diagnostics, diagnostic)
 	}
 }
@@ -104,9 +125,15 @@ func diagnosticAddress(address string) string {
 	if address == "" {
 		return ""
 	}
-	if _, diagnostics := hclsyntax.ParseTraversalAbs([]byte(address), "", hcl.InitialPos); diagnostics.HasErrors() {
+
+	if _, diagnostics := hclsyntax.ParseTraversalAbs(
+		[]byte(address),
+		"",
+		hcl.InitialPos,
+	); diagnostics.HasErrors() {
 		return ""
 	}
+
 	return address
 }
 
@@ -116,10 +143,14 @@ func diagnosticFilename(filename, workspace string) string {
 		if err != nil {
 			return ""
 		}
+
 		filename = relative
 	}
-	if !filepath.IsLocal(filename) || (!strings.HasSuffix(filename, ".tf") && !strings.HasSuffix(filename, ".tf.json")) {
+
+	if !filepath.IsLocal(filename) ||
+		(!strings.HasSuffix(filename, ".tf") && !strings.HasSuffix(filename, ".tf.json")) {
 		return ""
 	}
+
 	return filepath.ToSlash(filepath.Clean(filename))
 }

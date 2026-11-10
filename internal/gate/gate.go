@@ -53,11 +53,22 @@ func (s Server) Serve(ctx context.Context, sshCommand string, in io.Reader) erro
 	if err != nil {
 		return err
 	}
+
 	result := s.handle(ctx, sshCommand, in)
 	if err := requests.record(s.journalEntry(result)); err != nil {
-		slog.Error("gate.request.journal_failed", "requester", s.Requester, "run", result.run, "err", err)
+		slog.Error(
+			"gate.request.journal_failed",
+			"requester",
+			s.Requester,
+			"run",
+			result.run,
+			"err",
+			err,
+		)
+
 		return fmt.Errorf("journal the request: %w", errors.Join(result.err, err))
 	}
+
 	return result.err
 }
 
@@ -70,25 +81,42 @@ func (s Server) handle(ctx context.Context, sshCommand string, in io.Reader) out
 	if !requesterPattern.MatchString(s.Requester) {
 		return refused(fmt.Errorf("requester %q is not a requester name", s.Requester))
 	}
+
 	if strings.TrimSpace(sshCommand) != requestCommand {
-		return refused(fmt.Errorf("this key runs only %q with a JSON request on stdin", requestCommand))
+		return refused(
+			fmt.Errorf("this key runs only %q with a JSON request on stdin", requestCommand),
+		)
 	}
+
 	req, err := DecodeRequest(in)
 	if err != nil {
 		return refused(err)
 	}
+
 	secrets, err := s.secretPatterns()
 	if err != nil {
 		return s.withheld(req, err)
 	}
+
 	stored, err := maskedRequest(req, secrets)
 	if err != nil {
 		return refused(err)
 	}
+
 	if err := req.Validate(); err != nil {
 		return outcome{stored: stored, run: "", err: err}
 	}
-	slog.Info("gate.request.accepted", "requester", s.Requester, "kind", string(req.Kind), "session", req.Session)
+
+	slog.Info(
+		"gate.request.accepted",
+		"requester",
+		s.Requester,
+		"kind",
+		string(req.Kind),
+		"session",
+		req.Session,
+	)
+
 	return s.answer(ctx, req, stored, secrets)
 }
 
@@ -113,24 +141,36 @@ func (s Server) start(ctx context.Context, req, stored Request) (string, error) 
 	if err := s.Repo.Fetch(ctx); err != nil {
 		return "", err
 	}
+
 	if err := s.Repo.RequireOnMain(ctx, req.Commit); err != nil {
 		return "", err
 	}
+
 	run, err := runid.New()
 	if err != nil {
 		slog.Error("gate.run.id_failed", "err", err)
 		return "", fmt.Errorf("create run id: %w", err)
 	}
+
 	if err := s.Runs.Create(run); err != nil {
 		return run, err
 	}
+
 	rec := Record{
-		Run: run, Controller: s.Controller, Requester: s.Requester, Request: stored, Started: clock.Stamp(),
-		Ended: "", ExitStatus: nil, ServiceResult: "", Error: "",
+		Run:           run,
+		Controller:    s.Controller,
+		Requester:     s.Requester,
+		Request:       stored,
+		Started:       clock.Stamp(),
+		Ended:         "",
+		ExitStatus:    nil,
+		ServiceResult: "",
+		Error:         "",
 	}
 	if err := s.Runs.Write(rec); err != nil {
 		return run, err
 	}
+
 	return run, s.launch(ctx, rec, req)
 }
 
@@ -139,15 +179,21 @@ func (s Server) launch(ctx context.Context, rec Record, req Request) error {
 	if err := s.Repo.AddWorktree(ctx, worktree, req.Commit); err != nil {
 		return s.fail(rec, err)
 	}
+
 	if req.Kind == KindDeploy {
 		playbook := filepath.Join(worktree, "ansible", "playbooks", req.Playbook+".yml")
 		if _, err := os.Stat(playbook); err != nil {
-			return s.fail(rec, fmt.Errorf("playbook %s does not exist at commit %s", req.Playbook, req.Commit))
+			return s.fail(
+				rec,
+				fmt.Errorf("playbook %s does not exist at commit %s", req.Playbook, req.Commit),
+			)
 		}
 	}
+
 	if err := s.startUnit(ctx, rec.Run, worktree, runCommand(worktree, req)); err != nil {
 		return s.fail(rec, err)
 	}
+
 	return writeJSON(s.Out, startAnswer{Run: rec.Run, Controller: s.Controller})
 }
 
@@ -173,18 +219,23 @@ func runCommand(worktree string, req Request) []string {
 		if req.Limit != "" {
 			args = append(args, "--limit", req.Limit)
 		}
+
 		if len(req.ExtraVars) > 0 {
 			args = append(args, "--extra-var", string(req.ExtraVars))
 		}
+
 		return args
 	}
+
 	args := []string{wrapper, "tofu", req.Workspace, string(req.Action), "-input=false"}
 	if req.Action == TofuApply {
 		args = append(args, "-auto-approve")
 	}
+
 	for _, target := range req.Targets {
 		args = append(args, "-target="+target)
 	}
+
 	return args
 }
 
@@ -205,13 +256,25 @@ func (s Server) startUnit(ctx context.Context, run, worktree string, command []s
 	if err != nil {
 		return err
 	}
+
 	cmd := exec.CommandContext(ctx, "systemd-run", safe...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		slog.Error("gate.run.start_failed", "run", run, "output", strings.TrimSpace(string(output)), "err", err)
+		slog.Error(
+			"gate.run.start_failed",
+			"run",
+			run,
+			"output",
+			strings.TrimSpace(string(output)),
+			"err",
+			err,
+		)
+
 		return fmt.Errorf("start run unit %s: %w: %s", run, err, strings.TrimSpace(string(output)))
 	}
+
 	slog.Info("gate.run.started", "run", run, "requester", s.Requester)
+
 	return nil
 }
 
@@ -222,6 +285,7 @@ func (s Server) fail(rec Record, cause error) error {
 		slog.Error("gate.run.failure_record_failed", "run", rec.Run, "err", err)
 		return errors.Join(cause, err)
 	}
+
 	return cause
 }
 
@@ -230,23 +294,32 @@ func (s Server) status(ctx context.Context, run string) error {
 	if err != nil {
 		return err
 	}
+
 	state := "finished"
 	if rec.Ended == "" {
 		state = unitState(ctx, run)
 	}
+
 	return writeJSON(s.Out, statusAnswer{Record: rec, State: state})
 }
 
 func unitState(ctx context.Context, run string) string {
-	safe, err := checkedArgs([]string{"show", unitPrefix + run, "--property=ActiveState", "--value"})
+	safe, err := checkedArgs([]string{
+		"show",
+		unitPrefix + run,
+		"--property=ActiveState",
+		"--value",
+	})
 	if err != nil {
 		return "unknown"
 	}
+
 	out, err := exec.CommandContext(ctx, "systemctl", safe...).Output()
 	if err != nil {
 		slog.Warn("gate.run.state_unavailable", "run", run, "err", err)
 		return "unknown"
 	}
+
 	return strings.TrimSpace(string(out))
 }
 
@@ -254,19 +327,34 @@ func (s Server) unlock(ctx context.Context, req Request) error {
 	if s.ResolveLockTarget == nil {
 		return errors.New("unlock requires a native lock endpoint resolver")
 	}
+
 	record, err := s.Runs.Read(req.Run)
 	if err != nil {
 		return err
 	}
+
 	target, err := s.ResolveLockTarget(ctx, s.Repo.Dir, record.Request.Workspace, req.Host)
 	if err != nil {
 		return err
 	}
+
 	if err := hostlock.Do(ctx, target, hostlock.Unlock, req.Run, s.Controller); err != nil {
 		slog.Error("gate.unlock.failed", "host", req.Host, "run", req.Run, "err", err)
 		return fmt.Errorf("unlock %s: %w", req.Host, err)
 	}
-	slog.Info("gate.unlock.done", "host", req.Host, "run", req.Run, "requester", s.Requester, "reason", req.Reason)
+
+	slog.Info(
+		"gate.unlock.done",
+		"host",
+		req.Host,
+		"run",
+		req.Run,
+		"requester",
+		s.Requester,
+		"reason",
+		req.Reason,
+	)
+
 	return writeJSON(s.Out, unlockAnswer{Unlocked: req.Host, Run: req.Run})
 }
 
@@ -279,6 +367,7 @@ func (s Server) list() error {
 	if err != nil {
 		return err
 	}
+
 	return writeJSON(s.Out, records)
 }
 
@@ -289,5 +378,6 @@ func writeJSON[T answer](w io.Writer, value T) error {
 		slog.Error("gate.answer.write_failed", "err", err)
 		return fmt.Errorf("write answer: %w", err)
 	}
+
 	return nil
 }

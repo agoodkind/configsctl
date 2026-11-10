@@ -32,17 +32,21 @@ type ciCheckout struct {
 
 func newCICheckout(t *testing.T) ciCheckout {
 	t.Helper()
+
 	checkout := ciCheckout{dir: t.TempDir(), home: t.TempDir(), tmpdir: t.TempDir()}
 	for _, directory := range []string{checkout.home, checkout.tmpdir} {
 		if err := os.Chmod(directory, 0o700); err != nil {
 			t.Fatalf("restrict %s: %v", directory, err)
 		}
 	}
+
 	module, err := os.ReadFile(ciEncryptedModule)
 	if err != nil {
 		t.Fatalf("the test cannot read %s: %v", ciEncryptedModule, err)
 	}
+
 	writeFixtureFile(t, filepath.Join(checkout.dir, ciRootName, "main.tf"), string(module))
+
 	return checkout
 }
 
@@ -61,6 +65,7 @@ func (c ciCheckout) writeConfig(t *testing.T, name, content string) string {
 	t.Helper()
 	path := filepath.Join(c.dir, name)
 	writeFixtureFile(t, path, content)
+
 	return path
 }
 
@@ -83,19 +88,41 @@ func (c ciCheckout) run(t *testing.T, args ...string) commandResult {
 	default:
 		t.Fatalf("run configsctl %v: %v", args, runErr)
 	}
+
 	return result
 }
 
 func (c ciCheckout) tofu(t *testing.T, config string, args ...string) commandResult {
 	t.Helper()
-	full := append([]string{"ci", "tofu", "--config", config, "--root", ciRootName, "--workspace", ciWorkspace, "--"}, args...)
+	full := append(
+		[]string{
+			"ci",
+			"tofu",
+			"--config",
+			config,
+			"--root",
+			ciRootName,
+			"--workspace",
+			ciWorkspace,
+			"--",
+		},
+		args...,
+	)
+
 	return c.run(t, full...)
 }
 
 func requireCIExit(t *testing.T, result commandResult, want int, what string) {
 	t.Helper()
 	if result.exitCode != want {
-		t.Fatalf("%s exited with %d, want %d\nstdout:\n%s\nstderr:\n%s", what, result.exitCode, want, result.stdout, result.stderr)
+		t.Fatalf(
+			"%s exited with %d, want %d\nstdout:\n%s\nstderr:\n%s",
+			what,
+			result.exitCode,
+			want,
+			result.stdout,
+			result.stderr,
+		)
 	}
 }
 
@@ -103,25 +130,55 @@ func requireCIExit(t *testing.T, result commandResult, want int, what string) {
 // through ci tofu, and writes a saved plan.
 func (c ciCheckout) prepare(t *testing.T, config string) string {
 	t.Helper()
-	requireCIExit(t, c.tofu(t, config, "init", "-input=false", "-lockfile=readonly", "-no-color"), 0, "ci tofu init")
-	create := exec.CommandContext(context.Background(), "tofu", "workspace", "new", "-no-color", ciWorkspace)
+	requireCIExit(
+		t,
+		c.tofu(t, config, "init", "-input=false", "-lockfile=readonly", "-no-color"),
+		0,
+		"ci tofu init",
+	)
+	create := exec.CommandContext(
+		context.Background(),
+		"tofu",
+		"workspace",
+		"new",
+		"-no-color",
+		ciWorkspace,
+	)
 	create.Dir = filepath.Join(c.dir, ciRootName)
 	create.Env = c.environment()
 	if output, err := create.CombinedOutput(); err != nil {
 		t.Fatalf("tofu workspace new: %v\n%s", err, output)
 	}
-	requireCIExit(t, c.tofu(t, config, "workspace", "select", "-no-color", ciWorkspace), 0, "ci tofu workspace select")
+
+	requireCIExit(
+		t,
+		c.tofu(t, config, "workspace", "select", "-no-color", ciWorkspace),
+		0,
+		"ci tofu workspace select",
+	)
 	planPath := filepath.Join(c.tmpdir, "ci.tfplan")
-	planned := c.tofu(t, config, "plan", "-input=false", "-no-color", "-detailed-exitcode", "-parallelism=1", "-out="+planPath)
+	planned := c.tofu(
+		t,
+		config,
+		"plan",
+		"-input=false",
+		"-no-color",
+		"-detailed-exitcode",
+		"-parallelism=1",
+		"-out="+planPath,
+	)
 	requireCIExit(t, planned, 2, "ci tofu plan")
-	if strings.Contains(planned.stdout, ciPassphraseValue) || !strings.Contains(planned.stdout, "<redacted:"+ciPassphraseName+">") {
+	if strings.Contains(planned.stdout, ciPassphraseValue) ||
+		!strings.Contains(planned.stdout, "<redacted:"+ciPassphraseName+">") {
 		t.Fatalf("ci tofu plan did not redact the passphrase in stdout:\n%s", planned.stdout)
 	}
+
 	return planPath
 }
 
 func TestCITofuRejectsInvalidConfigurations(t *testing.T) {
 	checkout := newCICheckout(t)
+
 	cases := map[string]string{
 		"duplicate field":           `{"version": 1, "version": 1, "required_environment": [], "secret_environment": [], "secret_files": {}, "output_mode": "redacted_progress"}`,
 		"duplicate secret file":     `{"version": 1, "required_environment": [], "secret_environment": [], "secret_files": {"TF_VAR_a": "/a", "TF_VAR_a": "/b"}, "output_mode": "redacted_progress"}`,
@@ -136,17 +193,23 @@ func TestCITofuRejectsInvalidConfigurations(t *testing.T) {
 		"trailing data":             `{"version": 1, "required_environment": [], "secret_environment": [], "secret_files": {}, "output_mode": "redacted_progress"} {}`,
 	}
 	for name, content := range cases {
-		t.Run(name, func(t *testing.T) {
-			config := checkout.writeConfig(t, "config.json", content)
-			result := checkout.tofu(t, config, "validate", "-no-color")
-			requireCIExit(t, result, 1, "ci tofu with an invalid configuration")
-			if !strings.Contains(result.stderr, "ci tofu configuration") {
-				t.Fatalf("stderr does not report the configuration error:\n%s", result.stderr)
-			}
-			if _, err := os.Stat(filepath.Join(checkout.dir, ciRootName, ".terraform")); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("OpenTofu ran with an invalid configuration: %v", err)
-			}
-		})
+		t.Run(
+			name,
+			func(t *testing.T) {
+				config := checkout.writeConfig(t, "config.json", content)
+				result := checkout.tofu(t, config, "validate", "-no-color")
+				requireCIExit(t, result, 1, "ci tofu with an invalid configuration")
+				if !strings.Contains(result.stderr, "ci tofu configuration") {
+					t.Fatalf("stderr does not report the configuration error:\n%s", result.stderr)
+				}
+
+				if _, err := os.Stat(
+					filepath.Join(checkout.dir, ciRootName, ".terraform"),
+				); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("OpenTofu ran with an invalid configuration: %v", err)
+				}
+			},
+		)
 	}
 }
 
@@ -154,6 +217,7 @@ func TestCITofuRejectsMutationCommands(t *testing.T) {
 	checkout := newCICheckout(t)
 	config := checkout.writeConfig(t, "config.json", ciProgressConfig)
 	planPath := checkout.prepare(t, config)
+
 	commands := map[string][]string{
 		"apply":            {"apply", "-input=false", "-parallelism=1", planPath},
 		"auto apply":       {"apply", "-input=false", "-auto-approve"},
@@ -166,15 +230,25 @@ func TestCITofuRejectsMutationCommands(t *testing.T) {
 		"refresh":          {"refresh"},
 	}
 	for name, args := range commands {
-		t.Run(name, func(t *testing.T) {
-			result := checkout.tofu(t, config, args...)
-			requireCIExit(t, result, 1, "ci tofu "+name)
-			if strings.Contains(result.stdout, "Tofu output streams to") {
-				t.Fatalf("ci tofu %s started OpenTofu:\n%s", name, result.stdout)
-			}
-		})
+		t.Run(
+			name,
+			func(t *testing.T) {
+				result := checkout.tofu(t, config, args...)
+				requireCIExit(t, result, 1, "ci tofu "+name)
+				if strings.Contains(result.stdout, "Tofu output streams to") {
+					t.Fatalf("ci tofu %s started OpenTofu:\n%s", name, result.stdout)
+				}
+			},
+		)
 	}
-	state := filepath.Join(checkout.dir, ciRootName, "terraform.tfstate.d", ciWorkspace, "terraform.tfstate")
+
+	state := filepath.Join(
+		checkout.dir,
+		ciRootName,
+		"terraform.tfstate.d",
+		ciWorkspace,
+		"terraform.tfstate",
+	)
 	if _, err := os.Stat(state); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("a refused command wrote the state file %s: %v", state, err)
 	}
@@ -190,20 +264,25 @@ func TestCITofuWritesPrivateJSON(t *testing.T) {
 
 	shown := checkout.tofu(t, config, "show", "-json", planPath)
 	requireCIExit(t, shown, 0, "ci tofu show -json")
-	if strings.Contains(shown.stdout, "resource_changes") || strings.Contains(shown.stdout, ciPassphraseValue) {
+	if strings.Contains(shown.stdout, "resource_changes") ||
+		strings.Contains(shown.stdout, ciPassphraseValue) {
 		t.Fatalf("ci tofu show -json wrote plan JSON to stdout:\n%s", shown.stdout)
 	}
+
 	info, err := os.Lstat(jsonPath)
 	if err != nil {
 		t.Fatalf("stat the JSON file: %v", err)
 	}
+
 	if mode := info.Mode(); !mode.IsRegular() || mode.Perm() != 0o600 {
 		t.Fatalf("the JSON file has mode %v, want a regular file with mode 0600", mode)
 	}
+
 	written, err := os.ReadFile(jsonPath)
 	if err != nil {
 		t.Fatalf("read the JSON file: %v", err)
 	}
+
 	direct := exec.CommandContext(context.Background(), "tofu", "show", "-json", planPath)
 	direct.Dir = filepath.Join(checkout.dir, ciRootName)
 	direct.Env = checkout.environment()
@@ -211,6 +290,7 @@ func TestCITofuWritesPrivateJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tofu show -json: %v", err)
 	}
+
 	if !bytes.Equal(written, want) {
 		t.Fatal("the JSON file differs from the output of tofu show -json")
 	}
@@ -218,8 +298,16 @@ func TestCITofuWritesPrivateJSON(t *testing.T) {
 
 func TestCITofuRunsBeforeTheVaultIsRead(t *testing.T) {
 	checkout := newCICheckout(t)
-	writeFixtureFile(t, filepath.Join(checkout.home, ".config", "ansible", "vault.pass"), "fixture-phrase\n")
-	writeFixtureFile(t, filepath.Join(checkout.dir, "ansible", "inventory", "group_vars", "all", "vault.yml"), "not a vault\n")
+	writeFixtureFile(
+		t,
+		filepath.Join(checkout.home, ".config", "ansible", "vault.pass"),
+		"fixture-phrase\n",
+	)
+	writeFixtureFile(
+		t,
+		filepath.Join(checkout.dir, "ansible", "inventory", "group_vars", "all", "vault.yml"),
+		"not a vault\n",
+	)
 	requireCIExit(t, checkout.run(t, "version"), 1, "configsctl version with an unreadable vault")
 
 	config := checkout.writeConfig(t, "config.json", ciProgressConfig)

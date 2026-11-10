@@ -16,7 +16,9 @@ func checkedArgs(args []string) ([]string, error) {
 		if match != arg {
 			return nil, fmt.Errorf("argument %q contains a non-printable character", arg)
 		}
+
 		safe = append(safe, match)
 	}
+
 	return safe, nil
 }

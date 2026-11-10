@@ -51,6 +51,7 @@ func (r Runs) Create(run string) error {
 		slog.Error("gate.runs.create_failed", "run", run, "err", err)
 		return fmt.Errorf("create run directory %s: %w", run, err)
 	}
+
 	return nil
 }
 
@@ -61,16 +62,19 @@ func (r Runs) Write(rec Record) error {
 		slog.Error("gate.record.encode_failed", "run", rec.Run, "err", err)
 		return fmt.Errorf("encode record %s: %w", rec.Run, err)
 	}
+
 	path := filepath.Join(r.runDir(rec.Run), recordName)
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, append(body, '\n'), recordPerm); err != nil {
 		slog.Error("gate.record.write_failed", "run", rec.Run, "err", err)
 		return fmt.Errorf("write record %s: %w", rec.Run, err)
 	}
+
 	if err := os.Rename(tmp, path); err != nil {
 		slog.Error("gate.record.rename_failed", "run", rec.Run, "err", err)
 		return fmt.Errorf("store record %s: %w", rec.Run, err)
 	}
+
 	return nil
 }
 
@@ -80,15 +84,18 @@ func (r Runs) Read(run string) (Record, error) {
 	if errors.Is(err, fs.ErrNotExist) {
 		return Record{}, fmt.Errorf("run %s does not exist on this controller", run)
 	}
+
 	if err != nil {
 		slog.Error("gate.record.read_failed", "run", run, "err", err)
 		return Record{}, fmt.Errorf("read record %s: %w", run, err)
 	}
+
 	var rec Record
 	if err := json.Unmarshal(body, &rec); err != nil {
 		slog.Error("gate.record.decode_failed", "run", run, "err", err)
 		return Record{}, fmt.Errorf("decode record %s: %w", run, err)
 	}
+
 	return rec, nil
 }
 
@@ -98,25 +105,31 @@ func (r Runs) List() ([]Record, error) {
 	if errors.Is(err, fs.ErrNotExist) {
 		return []Record{}, nil
 	}
+
 	if err != nil {
 		slog.Error("gate.runs.list_failed", "dir", r.Dir, "err", err)
 		return nil, fmt.Errorf("list runs: %w", err)
 	}
+
 	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() && runPattern.MatchString(entry.Name()) {
 			names = append(names, entry.Name())
 		}
 	}
+
 	sort.Strings(names)
+
 	records := make([]Record, 0, len(names))
 	for _, name := range names {
 		rec, err := r.Read(name)
 		if err != nil {
 			return nil, err
 		}
+
 		records = append(records, rec)
 	}
+
 	return records, nil
 }
 
@@ -127,6 +140,8 @@ func (r Runs) PlayLog(run string) string {
 	if err != nil || len(matches) == 0 {
 		return ""
 	}
+
 	sort.Strings(matches)
+
 	return matches[len(matches)-1]
 }

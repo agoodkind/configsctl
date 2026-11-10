@@ -51,11 +51,13 @@ func Route(forms []Form) ([]Result, error) {
 	if len(forms) == 0 {
 		return nil, nil
 	}
+
 	payload, err := json.Marshal(forms)
 	if err != nil {
 		slog.Error("marshal oracle forms failed", "err", err)
 		return nil, fmt.Errorf("marshal oracle forms: %w", err)
 	}
+
 	scriptDir, scriptPath, err := writeScript()
 	if err != nil {
 		return nil, err
@@ -67,19 +69,31 @@ func Route(forms []Form) ([]Result, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	cmd.Stdin = bytes.NewReader(payload)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if runErr := cmd.Run(); runErr != nil {
-		slog.Error("oracle route failed", "script", scriptPath, "stderr", stderr.String(), "err", runErr)
+		slog.Error(
+			"oracle route failed",
+			"script",
+			scriptPath,
+			"stderr",
+			stderr.String(),
+			"err",
+			runErr,
+		)
+
 		return nil, fmt.Errorf("python oracle route: %w", runErr)
 	}
+
 	var results []Result
 	if decodeErr := json.Unmarshal(stdout.Bytes(), &results); decodeErr != nil {
 		slog.Error("decode oracle response failed", "err", decodeErr)
 		return nil, fmt.Errorf("decode oracle response: %w", decodeErr)
 	}
+
 	return results, nil
 }
 
@@ -91,18 +105,48 @@ func pythonWithJinja(ctx context.Context, scriptPath string) (*exec.Cmd, error) 
 		slog.Debug("oracle Python selected", "python", "python3")
 		return exec.CommandContext(ctx, "python3", "-I", scriptPath, "--route"), nil
 	}
+
 	if runtime.GOOS == "darwin" {
-		if err := exec.CommandContext(ctx, "/opt/homebrew/bin/python3", "-I", "-c", "import jinja2").Run(); err == nil {
+		if err := exec.CommandContext(
+			ctx,
+			"/opt/homebrew/bin/python3",
+			"-I",
+			"-c",
+			"import jinja2",
+		).Run(); err == nil {
 			slog.Debug("oracle Python selected", "python", "/opt/homebrew/bin/python3")
-			return exec.CommandContext(ctx, "/opt/homebrew/bin/python3", "-I", scriptPath, "--route"), nil
+
+			return exec.CommandContext(
+				ctx,
+				"/opt/homebrew/bin/python3",
+				"-I",
+				scriptPath,
+				"--route",
+			), nil
 		}
-		if err := exec.CommandContext(ctx, "/usr/local/bin/python3", "-I", "-c", "import jinja2").Run(); err == nil {
+
+		if err := exec.CommandContext(
+			ctx,
+			"/usr/local/bin/python3",
+			"-I",
+			"-c",
+			"import jinja2",
+		).Run(); err == nil {
 			slog.Debug("oracle Python selected", "python", "/usr/local/bin/python3")
-			return exec.CommandContext(ctx, "/usr/local/bin/python3", "-I", scriptPath, "--route"), nil
+
+			return exec.CommandContext(
+				ctx,
+				"/usr/local/bin/python3",
+				"-I",
+				scriptPath,
+				"--route",
+			), nil
 		}
 	}
+
 	err := errors.New("no supported python3 can import jinja2 in isolated mode")
 	slog.Error("oracle Python unavailable", "err", err)
+
 	return nil, err
 }
 
@@ -114,12 +158,15 @@ func writeScript() (string, string, error) {
 		slog.Error("create oracle script dir failed", "err", err)
 		return "", "", fmt.Errorf("create oracle script dir: %w", err)
 	}
+
 	path := filepath.Join(dir, scriptName)
 	if err := os.WriteFile(path, script, 0o600); err != nil {
 		removeScriptDir(dir)
 		slog.Error("write oracle script failed", "path", path, "err", err)
+
 		return "", "", fmt.Errorf("write oracle script: %w", err)
 	}
+
 	return dir, path, nil
 }
 

@@ -11,6 +11,7 @@ func runtimeSet(names ...string) map[string]struct{} {
 	for _, name := range names {
 		set[name] = struct{}{}
 	}
+
 	return set
 }
 
@@ -20,12 +21,15 @@ func violatingKinds(t *testing.T, expr string, runtime map[string]struct{}) []st
 	t.Helper()
 	constructs, _ := Analyze("{{ " + expr + " }}")
 	var kinds []string
+
 	for _, construct := range constructs {
 		if IsViolation(construct, runtime) {
 			kinds = append(kinds, construct.Kind)
 		}
 	}
+
 	sort.Strings(kinds)
+
 	return kinds
 }
 
@@ -33,11 +37,13 @@ func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
 	}
+
 	for i := range a {
 		if a[i] != b[i] {
 			return false
 		}
 	}
+
 	return true
 }
 

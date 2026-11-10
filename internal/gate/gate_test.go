@@ -28,6 +28,7 @@ func controllerClone(t *testing.T) (clone, onMain, offMain string) {
 	commitFile(t, clone, "ansible/playbooks/local-only.yml")
 	offMain = strings.TrimSpace(git(t, clone, "rev-parse", "HEAD"))
 	writeVault(t, clone)
+
 	return clone, onMain, offMain
 }
 
@@ -46,13 +47,23 @@ func vaultPath(clone string) string {
 
 func writeVault(t *testing.T, clone string) {
 	t.Helper()
-	if err := os.WriteFile(vaultPasswordFile(clone), []byte(vaultUnlockText+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(
+		vaultPasswordFile(clone),
+		[]byte(vaultUnlockText+"\n"),
+		0o600,
+	); err != nil {
 		t.Fatalf("write vault password file: %v", err)
 	}
+
 	if err := os.MkdirAll(filepath.Dir(vaultPath(clone)), 0o700); err != nil {
 		t.Fatalf("create vault directory: %v", err)
 	}
-	if err := ansiblevault.EncryptFile(vaultPath(clone), "vault_deploy_token: "+deployToken+"\n", vaultUnlockText); err != nil {
+
+	if err := ansiblevault.EncryptFile(
+		vaultPath(clone),
+		"vault_deploy_token: "+deployToken+"\n",
+		vaultUnlockText,
+	); err != nil {
 		t.Fatalf("encrypt vault: %v", err)
 	}
 }
@@ -63,12 +74,28 @@ func commitFile(t *testing.T, repo, path string) {
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		t.Fatalf("mkdir %s: %v", path, err)
 	}
+
 	if err := os.WriteFile(full, []byte("- hosts: all\n"), 0o600); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
+
 	git(t, repo, "add", path)
-	git(t, repo, "-c", "user.name=test", "-c", "user.email=test@example.test", "-c", "commit.gpgsign=false",
-		"-c", "core.hooksPath=/dev/null", "commit", "--quiet", "-m", "add "+path)
+	git(
+		t,
+		repo,
+		"-c",
+		"user.name=test",
+		"-c",
+		"user.email=test@example.test",
+		"-c",
+		"commit.gpgsign=false",
+		"-c",
+		"core.hooksPath=/dev/null",
+		"commit",
+		"--quiet",
+		"-m",
+		"add "+path,
+	)
 }
 
 func git(t *testing.T, dir string, args ...string) string {
@@ -79,6 +106,7 @@ func git(t *testing.T, dir string, args ...string) string {
 	if err != nil {
 		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
+
 	return string(out)
 }
 
@@ -95,11 +123,13 @@ func serve(t *testing.T, clone, sshCommand, request string) (string, error) {
 		VaultPasswordFile: vaultPasswordFile(clone),
 	}
 	err := server.Serve(t.Context(), sshCommand, strings.NewReader(request))
+
 	return out.String(), err
 }
 
 func TestGateRefusesEverySSHCommandExceptRequest(t *testing.T) {
 	clone, _, _ := controllerClone(t)
+
 	for _, command := range []string{"", "bash", "request; id", "ls -la"} {
 		if _, err := serve(t, clone, command, `{"kind":"runs"}`); err == nil {
 			t.Fatalf("ssh command %q: err = nil, want a refusal", command)
@@ -109,6 +139,7 @@ func TestGateRefusesEverySSHCommandExceptRequest(t *testing.T) {
 
 func TestGateRefusesInvalidRequests(t *testing.T) {
 	clone, onMain, _ := controllerClone(t)
+
 	refused := map[string]string{
 		"unknown field":     `{"kind":"runs","shell":"id"}`,
 		"unknown kind":      `{"kind":"exec"}`,
@@ -144,6 +175,7 @@ func TestGateReportsAMissingRun(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "does not exist") {
 		t.Fatalf("err = %v, want the missing run error", err)
 	}
+
 	out, err := serve(t, clone, "request", `{"kind":"runs"}`)
 	if err != nil || strings.TrimSpace(out) != "[]" {
 		t.Fatalf("runs: out = %q, err = %v; want an empty list", out, err)

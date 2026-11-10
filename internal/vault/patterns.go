@@ -20,11 +20,13 @@ func Patterns(root, passwordFile string) ([]redact.Pattern, error) {
 		slog.Error("vault patterns load failed", "vault", vaultPath, "err", err)
 		return nil, fmt.Errorf("load vault values from %s: %w", vaultPath, err)
 	}
+
 	patterns := make([]redact.Pattern, 0, len(values))
 	for name, value := range values {
 		if value != "" {
 			patterns = append(patterns, redact.Pattern{Value: []byte(value), Label: name})
 		}
 	}
+
 	return patterns, nil
 }

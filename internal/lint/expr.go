@@ -22,12 +22,26 @@ const factPrefix = "ansible_"
 // factRoots are the fixed runtime and magic names whose presence or shape is
 // external. The caller adds per-file register, set_fact, and loop names.
 var factRoots = map[string]struct{}{
-	"ansible_facts": {}, "ansible_local": {}, "hostvars": {}, "groups": {},
-	"group_names": {}, "inventory_hostname": {}, "inventory_hostname_short": {},
-	"ansible_play_hosts": {}, "ansible_play_hosts_all": {}, "play_hosts": {},
-	"ansible_play_batch": {}, "ansible_check_mode": {}, "ansible_run_tags": {},
-	"ansible_skip_tags": {}, "ansible_version": {}, "ansible_date_time": {},
-	"item": {}, "ansible_loop": {}, "ansible_loop_var": {}, "omit": {},
+	"ansible_facts":            {},
+	"ansible_local":            {},
+	"hostvars":                 {},
+	"groups":                   {},
+	"group_names":              {},
+	"inventory_hostname":       {},
+	"inventory_hostname_short": {},
+	"ansible_play_hosts":       {},
+	"ansible_play_hosts_all":   {},
+	"play_hosts":               {},
+	"ansible_play_batch":       {},
+	"ansible_check_mode":       {},
+	"ansible_run_tags":         {},
+	"ansible_skip_tags":        {},
+	"ansible_version":          {},
+	"ansible_date_time":        {},
+	"item":                     {},
+	"ansible_loop":             {},
+	"ansible_loop_var":         {},
+	"omit":                     {},
 }
 
 var (
@@ -36,7 +50,12 @@ var (
 	presenceTests        = map[string]struct{}{"defined": {}, "undefined": {}, "none": {}}
 	membershipContainers = map[string]struct{}{"groups": {}, "hostvars": {}, "vars": {}}
 	comparisonOps        = map[string]struct{}{
-		"==": {}, "!=": {}, "<": {}, ">": {}, "<=": {}, ">=": {},
+		"==": {},
+		"!=": {},
+		"<":  {},
+		">":  {},
+		"<=": {},
+		">=": {},
 	}
 	lookupFunctions = map[string]struct{}{"lookup": {}, "query": {}, "q": {}}
 )
@@ -59,6 +78,7 @@ func parseTemplate(source string) (*nodes.Template, bool) {
 	if err != nil {
 		return nil, false
 	}
+
 	return tmpl, true
 }
 
@@ -69,7 +89,9 @@ func walk(node nodes.Node, visit func(nodes.Node)) {
 	if node == nil {
 		return
 	}
+
 	visit(node)
+
 	for _, child := range children(node) {
 		walk(child, visit)
 	}
@@ -90,6 +112,7 @@ func children(node nodes.Node) []nodes.Node {
 			out = append(out, exprs(filter.Args)...)
 			out = append(out, kwargs(filter.Kwargs)...)
 		}
+
 		return out
 	case *nodes.TestExpression:
 		out := compact(typed.Expression)
@@ -97,6 +120,7 @@ func children(node nodes.Node) []nodes.Node {
 			out = append(out, exprs(typed.Test.Args)...)
 			out = append(out, kwargs(typed.Test.Kwargs)...)
 		}
+
 		return out
 	case *nodes.BinaryExpression:
 		return compact(typed.Left, typed.Right)
@@ -107,6 +131,7 @@ func children(node nodes.Node) []nodes.Node {
 	case *nodes.Call:
 		out := compact(typed.Func)
 		out = append(out, exprs(typed.Args)...)
+
 		return append(out, kwargs(typed.Kwargs)...)
 	case *nodes.GetAttribute:
 		return compact(typed.Node)
@@ -130,6 +155,7 @@ func dictChildren(dict *nodes.Dict) []nodes.Node {
 	for _, pair := range dict.Pairs {
 		out = append(out, pair.Key, pair.Value)
 	}
+
 	return out
 }
 
@@ -140,6 +166,7 @@ func compact(candidates ...nodes.Node) []nodes.Node {
 			out = append(out, candidate)
 		}
 	}
+
 	return out
 }
 
@@ -150,6 +177,7 @@ func exprs(list []nodes.Expression) []nodes.Node {
 			out = append(out, expr)
 		}
 	}
+
 	return out
 }
 
@@ -160,6 +188,7 @@ func kwargs(values map[string]nodes.Expression) []nodes.Node {
 			out = append(out, expr)
 		}
 	}
+
 	return out
 }
 
@@ -175,6 +204,7 @@ func rootName(node nodes.Node) string {
 			if len(current.Parts) > 0 {
 				return current.Parts[0].S
 			}
+
 			return ""
 		case *nodes.GetAttribute:
 			node = current.Node
@@ -199,10 +229,15 @@ func Analyze(source string) ([]Construct, bool) {
 	if !ok {
 		return nil, false
 	}
+
 	var found []Construct
-	walk(tmpl, func(node nodes.Node) {
-		found = append(found, detect(node)...)
-	})
+	walk(
+		tmpl,
+		func(node nodes.Node) {
+			found = append(found, detect(node)...)
+		},
+	)
+
 	return found, true
 }
 
@@ -230,6 +265,7 @@ func detectDefault(expr *nodes.FilteredExpression) []Construct {
 			return []Construct{{Kind: "default", Root: rootName(expr.Expression)}}
 		}
 	}
+
 	return nil
 }
 
@@ -242,6 +278,7 @@ func detectTest(expr *nodes.TestExpression) []Construct {
 	if _, ok := presenceTests[name]; ok {
 		return []Construct{{Kind: "presence", Root: rootName(expr.Expression)}}
 	}
+
 	if name == "in" && len(expr.Test.Args) == 1 {
 		if container, ok := expr.Test.Args[0].(*nodes.Name); ok {
 			if _, isContainer := membershipContainers[container.Name.Val]; isContainer {
@@ -249,6 +286,7 @@ func detectTest(expr *nodes.TestExpression) []Construct {
 			}
 		}
 	}
+
 	return nil
 }
 
@@ -258,8 +296,10 @@ func detectCall(call *nodes.Call) []Construct {
 		if len(call.Args) >= 2 {
 			kind = "get-default"
 		}
+
 		return []Construct{{Kind: kind, Root: rootName(attr.Node)}}
 	}
+
 	if name, ok := call.Func.(*nodes.Name); ok {
 		if _, isLookup := lookupFunctions[name.Name.Val]; isLookup {
 			if _, hasDefault := call.Kwargs["default"]; hasDefault {
@@ -267,6 +307,7 @@ func detectCall(call *nodes.Call) []Construct {
 			}
 		}
 	}
+
 	return nil
 }
 
@@ -275,12 +316,15 @@ func detectBinary(expr *nodes.BinaryExpression) []Construct {
 	if _, ok := comparisonOps[op]; !ok {
 		return nil
 	}
+
 	if root, found := lengthRoot(expr.Left); found {
 		return []Construct{{Kind: "length", Root: root}}
 	}
+
 	if root, found := lengthRoot(expr.Right); found {
 		return []Construct{{Kind: "length", Root: root}}
 	}
+
 	return nil
 }
 
@@ -291,11 +335,13 @@ func lengthRoot(expr nodes.Expression) (string, bool) {
 	if !ok {
 		return "", false
 	}
+
 	for _, filter := range filtered.Filters {
 		if _, isLength := lengthFilters[filter.Name]; isLength {
 			return rootName(filtered.Expression), true
 		}
 	}
+
 	return "", false
 }
 
@@ -303,24 +349,31 @@ func detectTernary(out *nodes.Output) []Construct {
 	if out.Condition == nil {
 		return nil
 	}
+
 	root := rootName(out.Condition)
 	if root == "" {
 		return nil
 	}
+
 	if nameAppears(out.Expression, root) {
 		return []Construct{{Kind: "self-ternary", Root: root}}
 	}
+
 	return nil
 }
 
 // nameAppears reports whether a variable name is referenced anywhere under a node.
 func nameAppears(node nodes.Node, name string) bool {
 	found := false
-	walk(node, func(current nodes.Node) {
-		if named, ok := current.(*nodes.Name); ok && named.Name.Val == name {
-			found = true
-		}
-	})
+	walk(
+		node,
+		func(current nodes.Node) {
+			if named, ok := current.(*nodes.Name); ok && named.Name.Val == name {
+				found = true
+			}
+		},
+	)
+
 	return found
 }
 
@@ -331,6 +384,7 @@ func IsViolation(construct Construct, runtime map[string]struct{}) bool {
 	if construct.Kind == "lookup-default" {
 		return true
 	}
+
 	// An unresolvable operand is a complex expression, a registered result, or a
 	// gonja-vs-Jinja precedence split, not a plain input variable. A genuine
 	// input-variable read always resolves to a name, so sparing this cannot hide
@@ -338,11 +392,14 @@ func IsViolation(construct Construct, runtime map[string]struct{}) bool {
 	if construct.Root == "" {
 		return false
 	}
+
 	if _, ok := runtime[construct.Root]; ok {
 		return false
 	}
+
 	if _, ok := factRoots[construct.Root]; ok {
 		return false
 	}
+
 	return !strings.HasPrefix(construct.Root, factPrefix)
 }

@@ -8,5 +8,6 @@ func WithWorkspaceSelector(args []string, selector string) []string {
 	if selector != "" {
 		result = append(result, "-var=workspace="+selector)
 	}
+
 	return result
 }
