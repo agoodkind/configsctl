@@ -2,26 +2,18 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 
 	"goodkind.io/configsctl/hostlock"
+	"goodkind.io/configsctl/internal/guestrefs"
 	"goodkind.io/configsctl/internal/installedsource"
 	"goodkind.io/configsctl/internal/tofuargs"
 	"goodkind.io/configsctl/internal/tofulock"
 	"goodkind.io/configsctl/tofurun"
 )
-
-type nativeConfigurationPlan struct {
-	PlannedValues struct {
-		Outputs map[string]struct {
-			Value tofulock.Targets `json:"value"`
-		} `json:"outputs"`
-	} `json:"planned_values"`
-}
 
 func nativeLockTarget(
 	ctx context.Context,
@@ -68,6 +60,8 @@ func runNativeLint(ctx context.Context, tofu tofuSettings) error {
 		return fmt.Errorf("%s does not contain any native workspaces", tofu.WorkspacesDir)
 	}
 
+	tofu.guestReferences = guestrefs.New(tofu.ValidateGuestReferences)
+
 	for _, workspace := range workspaces {
 		operational, err := tofuHasOperationalConfiguration(
 			filepath.Join(tofu.WorkspacesDir, workspace),
@@ -87,6 +81,11 @@ func runNativeLint(ctx context.Context, tofu tofuSettings) error {
 		); err != nil {
 			return err
 		}
+	}
+
+	if err := tofu.guestReferences.Validate(); err != nil {
+		slog.Error("tofu.guest_references.invalid", "err", err)
+		return fmt.Errorf("validate native workspace guest references: %w", err)
 	}
 
 	return nil
@@ -288,17 +287,12 @@ func evaluateNativeConfigurationAt(
 		return targets, fmt.Errorf("read the native configuration projection: %w", err)
 	}
 
-	var document nativeConfigurationPlan
-	if err := json.Unmarshal(body, &document); err != nil {
-		return targets, fmt.Errorf("decode the native configuration projection: %w", err)
+	targets, err = tofu.guestReferences.Read(repository, root, selector, body)
+	if err != nil {
+		slog.Error("tofu.configuration.decode_failed", "workspace", selector, "err", err)
+		return targets, fmt.Errorf("read configuration for %s: %w", selector, err)
 	}
 
-	projection, found := document.PlannedValues.Outputs["lock_targets"]
-	if !found {
-		return targets, fmt.Errorf("native configuration for %s must export lock_targets", selector)
-	}
-
-	targets = projection.Value
 	if err := targets.Validate(); err != nil {
 		slog.Error("tofu.configuration.targets_invalid", "workspace", selector, "err", err)
 		return targets, fmt.Errorf("validate native lock targets for %s: %w", selector, err)
