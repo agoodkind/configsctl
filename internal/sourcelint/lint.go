@@ -52,6 +52,8 @@ func Run(ctx context.Context, root string) error {
 		return err
 	}
 
+	customErr := checkSourceRules(directory, root)
+
 	config := filepath.Join(directory, ".tflint.hcl")
 	if err := os.WriteFile(config, nil, 0o600); err != nil {
 		slog.Error("tofu.source_lint.config_failed", "err", err)
@@ -84,10 +86,13 @@ func Run(ctx context.Context, root string) error {
 	if runErr != nil {
 		slog.Error("tofu.source_lint.failed", "err", runErr)
 
-		return fmt.Errorf("TFLint source checks failed for %s: %w", root, runErr)
+		return errors.Join(
+			customErr,
+			fmt.Errorf("TFLint source checks failed for %s: %w", root, runErr),
+		)
 	}
 
-	return nil
+	return customErr
 }
 
 type sourceRange struct {
