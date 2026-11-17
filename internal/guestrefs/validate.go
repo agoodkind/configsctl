@@ -30,13 +30,14 @@ func (guest guestIdentity) validate(location string) error {
 }
 
 type workspace struct {
-	lines      locations
-	Source     string                       `json:"source"`
-	Declared   map[string]guestIdentity     `json:"declared"`
-	Services   map[string]guestIdentity     `json:"services"`
-	Locks      []string                     `json:"locks"`
-	KeyedLocks map[string]map[string]string `json:"keyed_locks"`
-	Targets    tofulock.Targets             `json:"-"`
+	lines       locations
+	Source      string                       `json:"source"`
+	Declared    map[string]guestIdentity     `json:"declared"`
+	Services    map[string]guestIdentity     `json:"services"`
+	Locks       []string                     `json:"locks"`
+	StaticLocks map[string]string            `json:"static_locks"`
+	KeyedLocks  map[string]map[string]string `json:"keyed_locks"`
+	Targets     tofulock.Targets             `json:"-"`
 }
 
 type guestDeclaration struct {
@@ -100,8 +101,14 @@ func (workspaces Registry) Validate() error {
 		}
 	}
 
+	nodeHosts := workspaces.nodeHosts()
+
 	for _, selector := range selectors {
 		config := workspaces[selector]
+		if err := config.validateStaticLocks(declarations, hostnames, nodeHosts); err != nil {
+			return err
+		}
+
 		if err := config.validateServices(declarations); err != nil {
 			return err
 		}
@@ -263,4 +270,67 @@ func (config workspace) isNodeHost(host string) bool {
 	}
 
 	return false
+}
+
+func (workspaces Registry) nodeHosts() map[string]bool {
+	hosts := make(map[string]bool)
+
+	for _, config := range workspaces {
+		for _, host := range config.Targets.NodeHosts {
+			hosts[host] = true
+		}
+	}
+
+	return hosts
+}
+
+func (config workspace) validateStaticLocks(
+	declarations map[string]guestDeclaration,
+	guestHosts map[string]string,
+	nodeHosts map[string]bool,
+) error {
+	for _, address := range slices.Sorted(maps.Keys(config.StaticLocks)) {
+		key := config.StaticLocks[address]
+		owner, found := declarations[key]
+		if !found {
+			return validationError(
+				fmt.Sprintf(
+					"%s static_guest_locks[%q] references undeclared guest %q",
+					config.location("static_guest_locks", address),
+					address,
+					key,
+				),
+			)
+		}
+
+		if actual := config.Targets.ModuleHosts[address]; actual != owner.identity.Hostname {
+			return validationError(
+				fmt.Sprintf(
+					"%s lock_targets.module_hosts[%q] resolves to %q, expected %q from %s",
+					config.location("lock_targets", "module_hosts", address),
+					address,
+					actual,
+					owner.identity.Hostname,
+					owner.location,
+				),
+			)
+		}
+	}
+
+	for _, address := range slices.Sorted(maps.Keys(config.Targets.ModuleHosts)) {
+		host := config.Targets.ModuleHosts[address]
+		_, guest := guestHosts[host]
+		if config.StaticLocks[address] == "" && (guest || !nodeHosts[host]) {
+			return validationError(
+				fmt.Sprintf(
+					"%s lock_targets.module_hosts[%q] requires a guest reference or a declared node host for %q",
+					config.location("lock_targets", "module_hosts", address),
+					address,
+					host,
+				),
+			)
+		}
+	}
+
+	return nil
 }

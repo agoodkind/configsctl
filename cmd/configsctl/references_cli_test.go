@@ -153,3 +153,58 @@ func TestNativeLintRequiresOwnershipForKeyedLocks(t *testing.T) {
 	)
 	requireSuccess(t, runConfigsctl(t, tree, "lint"))
 }
+
+func TestNativeLintValidatesStaticGuestLocks(t *testing.T) {
+	tree := nativeLintTree(t)
+	settings := nativeFixtureFile(t, "settings.yml") + "  validate_guest_references: true\n"
+	writeFixtureFile(t, filepath.Join(tree.root, settingsName), settings)
+	writeFixtureFile(
+		t,
+		filepath.Join(tree.root, "native", "references.tf"),
+		nativeFixtureFile(t, "guestrefs-root.tf"),
+	)
+	writeFixtureFile(
+		t,
+		filepath.Join(tree.workspaces, "retained", "main.tf"),
+		nativeFixtureFile(t, "operational-resource.tf"),
+	)
+	writeFixtureFile(
+		t,
+		filepath.Join(tree.root, "native", "retained", "main.tf"),
+		nativeFixtureFile(t, "guestrefs-node.tf"),
+	)
+	path := filepath.Join(tree.root, "native", "suburban", "tack", "main.tf")
+	source := nativeFixtureFile(t, "guestrefs-static.tf")
+	writeFixtureFile(t, path, source)
+	formatNativeLintTree(t, tree)
+	requireSuccess(t, runConfigsctl(t, tree, "lint"))
+
+	swapped := strings.NewReplacer(
+		`= "compose.example"`,
+		`= "search.example"`,
+		`= "search.example"`,
+		`= "compose.example"`,
+	).Replace(
+		source[strings.Index(source, "  lock_targets ="):],
+	)
+	writeFixtureFile(t, path, source[:strings.Index(source, "  lock_targets =")]+swapped)
+	result := runConfigsctl(t, tree, "lint")
+	if result.exitCode == 0 ||
+		!strings.Contains(result.stderr, "main.tf:13 lock_targets.module_hosts") {
+		t.Fatalf("lint failed to identify the swapped destination: %s", result.stderr)
+	}
+
+	stale := strings.Replace(source, "declared     = local.managed_guests", "declared     = {}", 1)
+	stale = strings.Replace(
+		stale,
+		"static_locks = local.static_guest_locks",
+		"static_locks = {}",
+		1,
+	)
+	writeFixtureFile(t, path, stale)
+	result = runConfigsctl(t, tree, "lint")
+	if result.exitCode == 0 ||
+		!strings.Contains(result.stderr, "requires a guest reference or a declared node host") {
+		t.Fatalf("lint accepted a static lock for a removed guest: %s", result.stderr)
+	}
+}
