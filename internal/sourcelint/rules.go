@@ -23,6 +23,7 @@ const (
 	sourceTypeName   = "type"
 	provisionerBlock = "provisioner"
 	moduleBlock      = "module"
+	variableBlock    = "variable"
 )
 
 type sourceFinding struct {
@@ -113,10 +114,30 @@ func (rules *sourceRules) repeatedLiterals() {
 	const minimumOccurrences = 2
 
 	for _, literals := range rules.literals {
-		for _, locations := range literals {
+		for key, locations := range literals {
 			if len(locations) < minimumOccurrences {
 				continue
 			}
+
+			sort.Slice(
+				locations,
+				func(i, j int) bool {
+					if locations[i].Filename != locations[j].Filename {
+						return locations[i].Filename < locations[j].Filename
+					}
+
+					return locations[i].Start.Byte < locations[j].Start.Byte
+				},
+			)
+			category, _, _ := strings.Cut(key, "\x00")
+			first := locations[0]
+			message := fmt.Sprintf(
+				"warning: repeated %s; first occurrence at %s:%d:%d; review a shared local",
+				category,
+				first.Filename,
+				first.Start.Line,
+				first.Start.Column,
+			)
 
 			for _, location := range locations {
 				rules.findings = append(
@@ -124,7 +145,7 @@ func (rules *sourceRules) repeatedLiterals() {
 					sourceFinding{
 						location: location,
 						rule:     "repeated_source_literal",
-						message:  "warning: repeated hostname, path, URL, or service identifier; review a shared local",
+						message:  message,
 						blocking: false,
 					},
 				)
@@ -167,16 +188,10 @@ func (rules *sourceRules) print() error {
 	return nil
 }
 
-var literalSyntaxAttributes = map[string]bool{
-	"description":   true,
-	"error_message": true,
-}
-
-func skipAttribute(name string) bool { return literalSyntaxAttributes[name] }
-
 func skipField(blockType, name string) bool {
-	return skipAttribute(name) || blockType == moduleBlock && name == "source" ||
-		blockType == "variable" &&
+	return (blockType == variableBlock || blockType == "output") && name == "description" ||
+		blockType == moduleBlock && name == "source" ||
+		blockType == variableBlock &&
 			name == sourceTypeName || blockType == "provider" && name == "version"
 }
 
@@ -194,7 +209,11 @@ func (rules *sourceRules) body(
 			continue
 		}
 
-		rules.expression(attribute.Expr, module, provisioner && name == "inline")
+		rules.expression(attribute.Expr, module, serviceField(name))
+		if provisioner && name == "inline" {
+			rules.inline(attribute.Expr, nil)
+		}
+
 		if provisioner && (name == "script" || name == "scripts") {
 			result = errors.Join(result, rules.readScripts(attribute.Expr, module))
 		}
@@ -210,23 +229,26 @@ func (rules *sourceRules) body(
 	return result
 }
 
-func (rules *sourceRules) expression(expression hclsyntax.Expression, module string, inline bool) {
+func (rules *sourceRules) expression(expression hclsyntax.Expression, module string, service bool) {
 	var keys []hcl.Range
+	var services []hcl.Range
 	diagnostics := hclsyntax.VisitAll(
 		expression,
 		func(node hclsyntax.Node) hcl.Diagnostics {
 			switch expression := node.(type) {
+			case *hclsyntax.ObjectConsExpr:
+				services = append(services, serviceRanges(expression)...)
 			case *hclsyntax.ObjectConsKeyExpr:
 				keys = append(keys, expression.Range())
 			case *hclsyntax.ForExpr:
 				rules.sortedKeys(expression)
 			case *hclsyntax.TemplateExpr:
 				if !insideRanges(expression.Range(), keys) {
-					rules.literal(expression, module)
-				}
-
-				if inline {
-					rules.shell(templateText(expression), expression.Range())
+					rules.literal(
+						expression,
+						module,
+						service || insideRanges(expression.Range(), services),
+					)
 				}
 			}
 
@@ -270,13 +292,18 @@ func (rules *sourceRules) sortedKeys(expression *hclsyntax.ForExpr) {
 	)
 }
 
-func (rules *sourceRules) literal(expression *hclsyntax.TemplateExpr, module string) {
+func (rules *sourceRules) literal(expression *hclsyntax.TemplateExpr, module string, service bool) {
 	if !expression.IsStringLiteral() {
 		return
 	}
 
 	value, diagnostics := expression.Value(nil)
-	if diagnostics.HasErrors() || !selectedLiteral(value.AsString()) {
+	if diagnostics.HasErrors() {
+		return
+	}
+
+	category := literalCategory(value.AsString(), service)
+	if category == "" {
 		return
 	}
 
@@ -284,7 +311,7 @@ func (rules *sourceRules) literal(expression *hclsyntax.TemplateExpr, module str
 		rules.literals[module] = make(map[string][]hcl.Range)
 	}
 
-	literal := value.AsString()
+	literal := category + "\x00" + value.AsString()
 	rules.literals[module][literal] = append(
 		rules.literals[module][literal],
 		rules.location(expression.Range()),
@@ -377,14 +404,60 @@ func (rules *sourceRules) readScript(path, module string) error {
 
 var hostLiteral = regexp.MustCompile(`^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+$`)
 
-func selectedLiteral(value string) bool {
+func literalCategory(value string, service bool) string {
 	if strings.ContainsAny(value, " \t\r\n") {
-		return false
+		return ""
 	}
 
-	return strings.HasPrefix(value, "/") && len(value) > 1 ||
-		strings.HasPrefix(value, "./") || strings.HasPrefix(value, "../") ||
-		strings.Contains(value, "://") || hostLiteral.MatchString(value)
+	if strings.Contains(value, "://") {
+		return "URL"
+	}
+
+	if strings.HasPrefix(value, "/") && len(value) > 1 || strings.HasPrefix(value, "./") ||
+		strings.HasPrefix(value, "../") {
+		return "path"
+	}
+
+	if strings.HasSuffix(value, ".service") || service && serviceIdentifier.MatchString(value) {
+		return "service identifier"
+	}
+
+	if hostLiteral.MatchString(value) {
+		return "hostname"
+	}
+
+	return ""
+}
+
+var (
+	serviceIdentifier = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.@-]*$`)
+	serviceFields     = map[string]bool{
+		"service":            true,
+		"service_name":       true,
+		"service_id":         true,
+		"service_identifier": true,
+		"unit":               true,
+		"unit_name":          true,
+	}
+)
+
+func serviceField(name string) bool { return serviceFields[name] }
+
+func serviceRanges(expression *hclsyntax.ObjectConsExpr) []hcl.Range {
+	var ranges []hcl.Range
+
+	for _, item := range expression.Items {
+		key, diagnostics := item.KeyExpr.Value(nil)
+		if diagnostics.HasErrors() || key.IsNull() || !key.IsKnown() || key.Type() != cty.String {
+			continue
+		}
+
+		if serviceField(key.AsString()) {
+			ranges = append(ranges, item.ValueExpr.Range())
+		}
+	}
+
+	return ranges
 }
 
 var (

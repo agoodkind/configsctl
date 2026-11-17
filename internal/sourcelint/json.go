@@ -21,7 +21,7 @@ func (rules *sourceRules) readJSON(contents []byte, filename string) error {
 		Attributes: nil,
 		Blocks: []hcl.BlockHeaderSchema{
 			{Type: "locals", LabelNames: nil},
-			{Type: "variable", LabelNames: []string{sourceLabelName}},
+			{Type: variableBlock, LabelNames: []string{sourceLabelName}},
 			{Type: "output", LabelNames: []string{sourceLabelName}},
 			{Type: "resource", LabelNames: []string{sourceTypeName, sourceLabelName}},
 			{Type: "data", LabelNames: []string{sourceTypeName, sourceLabelName}},
@@ -63,6 +63,10 @@ func (rules *sourceRules) jsonExpression(
 	provisioner bool,
 	name string,
 ) error {
+	if provisioner && name == "inline" {
+		rules.inline(expression, contents)
+	}
+
 	if provisioner && (name == "script" || name == "scripts") {
 		return rules.readScripts(expression, module)
 	}
@@ -75,10 +79,6 @@ func (rules *sourceRules) jsonExpression(
 			}
 
 			name := key.AsString()
-			if skipAttribute(name) {
-				continue
-			}
-
 			if err := rules.jsonExpression(
 				pair.Value,
 				contents,
@@ -103,17 +103,39 @@ func (rules *sourceRules) jsonExpression(
 		return nil
 	}
 
+	template, err := readJSONTemplate(expression, contents)
+	if err != nil {
+		return err
+	}
+
+	if template == nil {
+		return nil
+	}
+
+	rules.originalLocation = &template.location
+	rules.expression(template.expression, module, serviceField(name))
+	rules.originalLocation = nil
+
+	return nil
+}
+
+type parsedTemplate struct {
+	expression hclsyntax.Expression
+	location   hcl.Range
+}
+
+func readJSONTemplate(expression hcl.Expression, contents []byte) (*parsedTemplate, error) {
 	location := expression.Range()
 	raw := location.SliceBytes(contents)
 	if len(raw) == 0 || raw[0] != '"' {
-		return nil
+		return nil, nil
 	}
 
 	var text string
 	if err := json.Unmarshal(raw, &text); err != nil {
 		slog.Error("tofu.source_lint.json_string_failed", "err", err)
 
-		return fmt.Errorf("decode JSON source string: %w", err)
+		return nil, fmt.Errorf("decode JSON source string: %w", err)
 	}
 
 	template, diagnostics := hclsyntax.ParseTemplate(
@@ -122,12 +144,8 @@ func (rules *sourceRules) jsonExpression(
 		location.Start,
 	)
 	if diagnostics.HasErrors() {
-		return nil
+		return nil, nil
 	}
 
-	rules.originalLocation = &location
-	rules.expression(template, module, provisioner && name == "inline")
-	rules.originalLocation = nil
-
-	return nil
+	return &parsedTemplate{expression: template, location: location}, nil
 }
