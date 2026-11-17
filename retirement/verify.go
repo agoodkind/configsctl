@@ -216,12 +216,12 @@ func inspectBackend(
 
 	for i, name := range names {
 		capture := filepath.Join(dir, "capture-"+strconv.Itoa(i))
-		state, err := statemigration.ReadWorkspace(ctx, workspace, name, capture)
+		addresses, err := statemigration.ReadWorkspace(ctx, workspace, name, capture)
 		if err != nil {
 			return fmt.Errorf("workspace %q %w", name, errUnreadableState)
 		}
 
-		if err := checkRecords(name, state, missing); err != nil {
+		if err := checkRecords(name, addresses, missing); err != nil {
 			return err
 		}
 
@@ -335,8 +335,8 @@ func (block *sourceBlock) jsonBlock() ([]byte, error) {
 	return value, nil
 }
 
-func checkRecords(name string, state statemigration.StateInfo, missing []hcl.Traversal) error {
-	for record := range state.Records {
+func checkRecords(name string, addresses []string, missing []hcl.Traversal) error {
+	for _, record := range addresses {
 		traversal, diags := hclsyntax.ParseTraversalAbs([]byte(record), "state", hcl.InitialPos)
 		if diags.HasErrors() {
 			return errStateAddress

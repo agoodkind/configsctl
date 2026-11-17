@@ -119,8 +119,10 @@ func TestRetirement(t *testing.T) {
 		t.Fatal("the local state does not reference the unavailable provider")
 	}
 
+	deposeInstance(t, root, "older")
 	retirementRun(t, second, "tofu", "workspace", "new", "review")
 	retirementRun(t, second, "tofu", "apply", "-auto-approve", "-input=false")
+	deposeInstance(t, second, "old")
 	statePath := filepath.Join(second, "terraform.tfstate.d", "review", "terraform.tfstate")
 	encrypted, err := os.ReadFile(statePath)
 	if err != nil {

@@ -30,15 +30,19 @@ type Workspace struct {
 // Pull captures native state bytes directly into a new private file.
 // It never writes those bytes through stdout redaction or a command log.
 func Pull(ctx context.Context, workspace Workspace, destination string) (StateInfo, error) {
-	return pullWorkspace(ctx, workspace, "default", destination)
+	if err := captureWorkspace(ctx, workspace, "default", destination); err != nil {
+		return EmptyState(), err
+	}
+
+	return inspectCapture(ctx, destination)
 }
 
-func pullWorkspace(
+func captureWorkspace(
 	ctx context.Context,
 	workspace Workspace,
 	name string,
 	destination string,
-) (StateInfo, error) {
+) error {
 	slog.InfoContext(
 		ctx,
 		"migration.state_pull.started",
@@ -49,7 +53,7 @@ func pullWorkspace(
 	)
 	file, err := createPrivate(destination)
 	if err != nil {
-		return EmptyState(), err
+		return err
 	}
 
 	runErr := nativeWorkspace(ctx, workspace, name, file, "state", "pull")
@@ -72,11 +76,11 @@ func pullWorkspace(
 					migrationErrorType(err),
 				)
 
-				return EmptyState(), fmt.Errorf("remove empty private state capture: %w", err)
+				return fmt.Errorf("remove empty private state capture: %w", err)
 			}
 		}
 
-		return EmptyState(), runErr
+		return runErr
 	}
 
 	if syncErr != nil {
@@ -89,7 +93,7 @@ func pullWorkspace(
 			migrationErrorType(syncErr),
 		)
 
-		return EmptyState(), fmt.Errorf("sync private native state capture: %w", syncErr)
+		return fmt.Errorf("sync private native state capture: %w", syncErr)
 	}
 
 	if statErr != nil {
@@ -102,7 +106,7 @@ func pullWorkspace(
 			migrationErrorType(statErr),
 		)
 
-		return EmptyState(), fmt.Errorf("inspect private native state capture: %w", statErr)
+		return fmt.Errorf("inspect private native state capture: %w", statErr)
 	}
 
 	if closeErr != nil {
@@ -115,10 +119,10 @@ func pullWorkspace(
 			migrationErrorType(closeErr),
 		)
 
-		return EmptyState(), fmt.Errorf("close private native state capture: %w", closeErr)
+		return fmt.Errorf("close private native state capture: %w", closeErr)
 	}
 
-	return inspectCapture(ctx, destination)
+	return nil
 }
 
 func inspectCapture(ctx context.Context, destination string) (StateInfo, error) {

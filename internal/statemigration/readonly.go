@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"slices"
 	"strings"
 )
@@ -76,17 +77,21 @@ func ReadWorkspace(
 	workspace Workspace,
 	name string,
 	destination string,
-) (StateInfo, error) {
+) ([]string, error) {
 	var selected bytes.Buffer
 	if err := nativeWorkspace(ctx, workspace, name, &selected, "workspace", "show"); err != nil {
-		return EmptyState(), err
+		return nil, err
 	}
 
 	if strings.TrimSpace(selected.String()) != name {
-		return EmptyState(), errWorkspaceSelection
+		return nil, errWorkspaceSelection
 	}
 
-	return pullWorkspace(ctx, workspace, name, destination)
+	if err := captureWorkspace(ctx, workspace, name, destination); err != nil {
+		return nil, err
+	}
+
+	return readAddresses(destination)
 }
 
 var (
@@ -94,3 +99,37 @@ var (
 	errDefaultWorkspace   = errors.New("OpenTofu did not list the default workspace")
 	errWorkspaceSelection = errors.New("OpenTofu selected a different workspace")
 )
+
+func readAddresses(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, errStateAddressRead
+	}
+
+	state, err := decodeState(data)
+	if err != nil {
+		return nil, err
+	}
+
+	var addresses []string
+
+	for _, resource := range state.Resources {
+		address, err := baseAddress(resource)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, instance := range resource.Instances {
+			indexed, err := indexedAddress(address, instance["index_key"])
+			if err != nil {
+				return nil, err
+			}
+
+			addresses = append(addresses, indexed)
+		}
+	}
+
+	return addresses, nil
+}
+
+var errStateAddressRead = errors.New("cannot read the private state capture")
