@@ -151,7 +151,7 @@ func printDiagnostics(output []byte, directory, root string) error {
 	return nil
 }
 
-var diagnosticPath = regexp.MustCompile(`[^\s;]*configsctl-source-lint-[^/]+/[^\s:]+`)
+var diagnosticPath = regexp.MustCompile(`[^\s;:]+\.(?:tf|tofu)(?:\.json)?`)
 
 func printParserError(message, directory, root string) error {
 	paragraphs := strings.Split(message, "\n\n")
@@ -178,8 +178,27 @@ func printParserError(message, directory, root string) error {
 }
 
 func originalFilename(path, directory, root string) (string, error) {
-	_, relative, found := strings.Cut(filepath.ToSlash(path), filepath.Base(directory)+"/")
-	if !found {
+	copyRoot, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		slog.Error("tofu.source_lint.copy_path_failed", "err", err)
+
+		return "", fmt.Errorf("resolve source lint copy directory: %w", err)
+	}
+
+	copyPath := path
+	if !filepath.IsAbs(copyPath) {
+		copyPath = filepath.Join(directory, copyPath)
+	}
+
+	copyPath, err = filepath.EvalSymlinks(copyPath)
+	if err != nil {
+		slog.Error("tofu.source_lint.diagnostic_path_failed", "err", err)
+
+		return "", fmt.Errorf("resolve copied diagnostic source: %w", err)
+	}
+
+	relative, err := filepath.Rel(copyRoot, copyPath)
+	if err != nil || !filepath.IsLocal(relative) || relative == "." {
 		slog.Error(
 			"tofu.source_lint.location_failed",
 			"err",

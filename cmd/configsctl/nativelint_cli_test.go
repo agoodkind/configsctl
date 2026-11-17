@@ -187,6 +187,33 @@ func TestNativeLintJSONDiagnostics(t *testing.T) {
 	}
 }
 
+func TestNativeLintCanonicalTemporaryDirectory(t *testing.T) {
+	tree := nativeLintTree(t)
+	path := filepath.Join(tree.workspaces, "modules", "regression", "main.tofu")
+	writeFixtureFile(t, path, "locals { unused = 1 }\n")
+	formatNativeLintTree(t, tree)
+	if err := os.MkdirAll(filepath.Join(tree.root, "tmp"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	temporary, err := filepath.EvalSymlinks(filepath.Join(tree.root, "tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := runConfigsctlWithEnv(
+		t,
+		tree,
+		os.Getenv("PATH"),
+		[]string{"TMPDIR=" + temporary},
+		"lint",
+	)
+	if result.exitCode == 0 || !strings.Contains(result.stderr, "modules/regression/main.tofu:") ||
+		!strings.Contains(result.stderr, "terraform_unused_declarations") {
+		t.Fatalf("lint did not resolve the copied source path: %s", result.stderr)
+	}
+}
+
 func TestFmtFormatsRecursivelyWithoutVault(t *testing.T) {
 	tree := newConfigsTree(t)
 	path := filepath.Join(tree.workspaces, "nested", "main.tf")
