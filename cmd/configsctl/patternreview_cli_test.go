@@ -84,6 +84,23 @@ func TestNativeLintLocalExec(t *testing.T) {
 `,
 		},
 		{
+			"heredoc.tf",
+			`resource "terraform_data" "files" {
+ provisioner "local-exec" {
+  command = <<-SHELL
+    echo prepare
+    for file in a b; do
+      cp $file /tmp/private-install-target/
+    done
+  SHELL
+ }
+ provisioner "local-exec" {
+  command = "for file in a b; do test -r $file; done"
+ }
+}
+`,
+		},
+		{
 			"main.tf.json",
 			`{"resource":{"terraform_data":{"files":{"provisioner":[
  {"local-exec":{"command":"for file in a b; do cp $file /tmp/private-install-target/; done"}},

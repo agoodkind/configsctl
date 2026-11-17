@@ -32,8 +32,10 @@ func (rules *sourceRules) shellExpressions(
 
 	for _, item := range items {
 		text := "DYNAMIC"
+		itemLocation := item.Range()
 		if template, ok := item.(*hclsyntax.TemplateExpr); ok {
 			text = templateText(template)
+			itemLocation = templateContentRange(template)
 		} else if contents != nil {
 			template, err := readJSONTemplate(item, contents)
 			if err == nil && template != nil {
@@ -45,7 +47,7 @@ func (rules *sourceRules) shellExpressions(
 
 		segments = append(
 			segments,
-			shellSegment{text: text, location: item.Range(), offset: command.Len()},
+			shellSegment{text: text, location: itemLocation, offset: command.Len()},
 		)
 		command.WriteString(text)
 		command.WriteByte('\n')
@@ -82,4 +84,15 @@ func (rules *sourceRules) shellExpressions(
 			break
 		}
 	}
+}
+
+func templateContentRange(template *hclsyntax.TemplateExpr) hcl.Range {
+	location := template.Range()
+	if len(template.Parts) == 0 {
+		return location
+	}
+
+	location.Start = template.Parts[0].Range().Start
+
+	return location
 }
