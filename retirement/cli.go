@@ -16,7 +16,9 @@ var errUsage = errors.New("usage: configsctl ci retirement --base <sha> --head <
 //
 // Example:
 //
-//	configsctl ci retirement --base <sha> --head <sha>
+//	base=881ea0946db0f2a9990b35836fed00a00a5f355d
+//	head=97d4b0f5c84f74157814b3d7b88b4d92cb001ac1
+//	configsctl ci retirement --base "$base" --head "$head"
 func Command(args []string) error {
 	if len(args) != 4 || args[0] != "--base" || args[2] != "--head" || args[3] == "" {
 		return errUsage
