@@ -93,6 +93,31 @@ func run(args []string) error {
 	}
 
 	command := args[0]
+	if command == tofuargs.Format {
+		if len(args) != 1 {
+			return tofuargs.ErrFormatUsage
+		}
+
+		loaded, err := loadNativeSettings(settingsFile)
+		if err != nil {
+			return err
+		}
+
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		arguments := []string{tofuargs.Format, "-recursive"}
+		environment := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME")}
+
+		return executeTofu(
+			ctx,
+			cmdEnv{},
+			loaded.Tofu.WorkspacesDir,
+			arguments,
+			arguments,
+			environment,
+		)
+	}
+
 	if command == "host-lock" {
 		return runHostLockServer(args[1:])
 	}

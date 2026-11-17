@@ -3,11 +3,52 @@
 package main_test
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestFmtFormatsRecursivelyWithoutVault(t *testing.T) {
+	tree := newConfigsTree(t)
+	path := filepath.Join(tree.workspaces, "nested", "main.tf")
+	writeFixtureFile(t, path, "variable \"example\" {\n type=string\n}\n")
+	writeFixtureFile(
+		t,
+		filepath.Join(tree.root, "ansible/inventory/group_vars/all/vault.yml"),
+		"invalid",
+	)
+	requireSuccess(t, runConfigsctl(t, tree, "fmt"))
+	first, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(first) != "variable \"example\" {\n  type = string\n}\n" {
+		t.Fatalf("unexpected formatting: %s", first)
+	}
+
+	requireSuccess(t, runConfigsctl(t, tree, "fmt"))
+	second, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(first) != string(second) {
+		t.Fatal("the second fmt changed the file")
+	}
+
+	invalid := runConfigsctl(t, tree, "fmt", "extra")
+	if invalid.exitCode == 0 || !strings.Contains(invalid.stderr, "usage: configsctl fmt") {
+		t.Fatalf("fmt accepted an extra argument: %s", invalid.stderr)
+	}
+
+	missing := runConfigsctlWithPath(t, tree, t.TempDir(), "fmt")
+	if missing.exitCode == 0 || !strings.Contains(missing.stderr, "tofu") {
+		t.Fatalf("fmt did not report missing OpenTofu: %s", missing.stderr)
+	}
+}
 
 func nativeLintTree(t *testing.T) configsTree {
 	t.Helper()
