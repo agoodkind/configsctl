@@ -85,7 +85,7 @@ func readSnapshot(
 		return nil, errCommitType
 	}
 
-	data, err := git(ctx, checkout, "ls-tree", "-rz", "--full-tree", rev)
+	data, err := git(ctx, checkout, "ls-tree", "-r", "-z", "--full-tree", rev)
 	if err != nil {
 		return nil, err
 	}

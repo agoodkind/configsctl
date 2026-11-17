@@ -21,10 +21,15 @@ import (
 // Verify checks retired addresses in each affected base backend.
 //
 // Both revisions must be full Git commit IDs from the configuration checkout.
+// Verify reads the base backend when the head removes a retirement instruction.
 //
 // Example:
 //
-//	err := retirement.Verify(ctx, checkout, base, head)
+//	base := "881ea0946db0f2a9990b35836fed00a00a5f355d"
+//	head := "97d4b0f5c84f74157814b3d7b88b4d92cb001ac1"
+//	if err := retirement.Verify(ctx, ".", base, head); err != nil {
+//		return fmt.Errorf("cannot verify the configuration change: %w", err)
+//	}
 func Verify(ctx context.Context, checkout, base, head string) error {
 	checkout, err := filepath.Abs(checkout)
 	if err != nil {
@@ -218,7 +223,7 @@ func inspectBackend(
 		capture := filepath.Join(dir, "capture-"+strconv.Itoa(i))
 		addresses, err := statemigration.ReadWorkspace(ctx, workspace, name, capture)
 		if err != nil {
-			return fmt.Errorf("workspace %q %w", name, errUnreadableState)
+			return fmt.Errorf("workspace %q %w: %w", name, errUnreadableState, err)
 		}
 
 		if err := checkRecords(name, addresses, missing); err != nil {

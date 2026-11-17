@@ -217,7 +217,9 @@ func TestRetirement(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		check("requires an existing readable state")
+		check(
+			`workspace \"review\" requires an existing readable state: native OpenTofu state failed`,
+		)
 		if err := os.Chmod(statePath, 0o600); err != nil {
 			t.Fatal(err)
 		}

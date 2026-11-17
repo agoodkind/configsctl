@@ -116,13 +116,13 @@ func readAddresses(path string) ([]string, error) {
 	for _, resource := range state.Resources {
 		address, err := baseAddress(resource)
 		if err != nil {
-			return nil, err
+			return nil, errInvalidResourceAddress
 		}
 
 		for _, instance := range resource.Instances {
 			indexed, err := indexedAddress(address, instance["index_key"])
 			if err != nil {
-				return nil, err
+				return nil, errInvalidResourceAddress
 			}
 
 			addresses = append(addresses, indexed)
@@ -132,4 +132,7 @@ func readAddresses(path string) ([]string, error) {
 	return addresses, nil
 }
 
-var errStateAddressRead = errors.New("cannot read the private state capture")
+var (
+	errStateAddressRead       = errors.New("cannot read the private state capture")
+	errInvalidResourceAddress = errors.New("private state contains an invalid resource address")
+)
