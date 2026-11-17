@@ -230,7 +230,7 @@ func TestFmtFormatsRecursivelyWithoutVault(t *testing.T) {
 	}
 
 	if string(first) != "variable \"example\" {\n  type = string\n}\n" {
-		t.Fatalf("unexpected formatting: %s", first)
+		t.Fatalf("fmt produced unexpected formatting: %s", first)
 	}
 
 	requireSuccess(t, runConfigsctl(t, tree, "fmt"))
