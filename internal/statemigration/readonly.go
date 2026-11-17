@@ -57,6 +57,10 @@ func ReadWorkspaces(
 		return nil, errDefaultWorkspace
 	}
 
+	if err := verifyWorkspaceList(ctx, workspace, names); err != nil {
+		return nil, err
+	}
+
 	return names, nil
 }
 
