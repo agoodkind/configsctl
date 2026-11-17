@@ -214,6 +214,10 @@ func (rules *sourceRules) body(
 			rules.inline(attribute.Expr, nil)
 		}
 
+		if provisioner && name == "command" {
+			rules.shellExpressions([]hcl.Expression{attribute.Expr}, attribute.Expr.Range(), nil)
+		}
+
 		if provisioner && (name == "script" || name == "scripts") {
 			result = errors.Join(result, rules.readScripts(attribute.Expr, module))
 		}

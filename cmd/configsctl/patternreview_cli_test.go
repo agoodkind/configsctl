@@ -66,6 +66,63 @@ func TestNativeLintSplitInline(t *testing.T) {
 	}
 }
 
+func TestNativeLintLocalExec(t *testing.T) {
+	for _, fixture := range []struct {
+		name   string
+		source string
+	}{
+		{
+			"main.tf",
+			`resource "terraform_data" "files" {
+ provisioner "local-exec" {
+  command = "for file in a b; do cp $file /tmp/private-install-target/; done"
+ }
+ provisioner "local-exec" {
+  command = "for file in a b; do test -r $file; done"
+ }
+}
+`,
+		},
+		{
+			"main.tf.json",
+			`{"resource":{"terraform_data":{"files":{"provisioner":[
+ {"local-exec":{"command":"for file in a b; do cp $file /tmp/private-install-target/; done"}},
+ {"local-exec":{"command":"for file in a b; do test -r $file; done"}}
+]}}}}`,
+		},
+	} {
+		t.Run(
+			fixture.name,
+			func(t *testing.T) {
+				tree := nativeLintTree(t)
+				path := filepath.Join(tree.workspaces, "modules", "local", fixture.name)
+				writeFixtureFile(t, path, fixture.source)
+				formatNativeLintTree(t, tree)
+				contents, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				line := 1 + strings.Count(strings.Split(string(contents), "for file")[0], "\n")
+				result := runConfigsctl(t, tree, "lint")
+				requireSuccess(t, result)
+				if strings.Count(result.stderr, "(file_install_loop)") != 1 ||
+					!strings.Contains(result.stderr, fmt.Sprintf("%s:%d:", fixture.name, line)) ||
+					!strings.Contains(
+						result.stderr,
+						"warning: review a declared file collection",
+					) ||
+					strings.Contains(result.stderr, "private-install-target") {
+					t.Fatalf(
+						"lint did not report the local installation advisory privately: %s",
+						result.stderr,
+					)
+				}
+			},
+		)
+	}
+}
+
 func TestNativeLintExpressionFieldNames(t *testing.T) {
 	for _, fixture := range []struct {
 		name   string

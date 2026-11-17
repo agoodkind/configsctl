@@ -19,7 +19,15 @@ func (rules *sourceRules) inline(expression hcl.Expression, contents []byte) {
 		return
 	}
 
-	var segments []shellSegment
+	rules.shellExpressions(items, expression.Range(), contents)
+}
+
+func (rules *sourceRules) shellExpressions(
+	items []hcl.Expression,
+	location hcl.Range,
+	contents []byte,
+) {
+	segments := make([]shellSegment, 0, len(items))
 	var command strings.Builder
 
 	for _, item := range items {
@@ -47,7 +55,7 @@ func (rules *sourceRules) inline(expression hcl.Expression, contents []byte) {
 	rules.shell(
 		command.String(),
 		hcl.Range{
-			Filename: expression.Range().Filename,
+			Filename: location.Filename,
 			Start:    hcl.InitialPos,
 			End:      hcl.InitialPos,
 		},

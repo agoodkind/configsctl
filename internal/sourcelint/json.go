@@ -67,6 +67,10 @@ func (rules *sourceRules) jsonExpression(
 		rules.inline(expression, contents)
 	}
 
+	if provisioner && name == "command" {
+		rules.shellExpressions([]hcl.Expression{expression}, expression.Range(), contents)
+	}
+
 	if provisioner && (name == "script" || name == "scripts") {
 		return rules.readScripts(expression, module)
 	}
