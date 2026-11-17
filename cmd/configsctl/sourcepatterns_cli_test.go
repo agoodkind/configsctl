@@ -51,12 +51,12 @@ resource "terraform_data" "files" {
 
 	if strings.Count(result.stderr, "(repeated_source_literal)") != 2 ||
 		strings.Contains(result.stderr, "/etc/example.conf") {
-		t.Fatalf("unexpected literal diagnostics: %s", result.stderr)
+		t.Fatalf("lint produced unexpected literal diagnostics: %s", result.stderr)
 	}
 
 	if !strings.Contains(result.stderr, "main.tofu:") ||
 		!strings.Contains(result.stderr, "install.sh:2:") {
-		t.Fatalf("missing source locations: %s", result.stderr)
+		t.Fatalf("lint omitted the expected source locations: %s", result.stderr)
 	}
 }
 
@@ -98,7 +98,7 @@ resource "terraform_data" "checks" {
 		strings.Contains(result.stderr, "redundant_sorted_keys") ||
 		strings.Contains(result.stderr, "file_install_loop") ||
 		strings.Contains(result.stderr, "https://example.test/api") {
-		t.Fatalf("unexpected source warnings: %s", result.stderr)
+		t.Fatalf("lint produced unexpected source warnings: %s", result.stderr)
 	}
 }
 
