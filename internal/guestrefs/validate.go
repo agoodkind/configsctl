@@ -170,7 +170,15 @@ func (config workspace) validateLocks(
 				instance,
 			)
 			if !found {
-				return validationError(fmt.Sprintf("%s references undeclared guest %q", loc, key))
+				return validationError(
+					fmt.Sprintf(
+						"%s keyed_guest_locks[%q][%q] references undeclared guest %q",
+						config.location("keyed_guest_locks", module, instance),
+						module,
+						instance,
+						key,
+					),
+				)
 			}
 
 			if actual := config.Targets.ModuleKeyHosts[module][instance]; actual != owner.identity.Hostname {

@@ -67,6 +67,14 @@ func TestNativeLintValidatesGuestReferencesAcrossWorkspaces(t *testing.T) {
 			"{ guest_alpha = local.guest, other = local.guest }",
 			"conflicts with",
 		},
+		{
+			"missing keyed owner",
+			consumer,
+			refs,
+			`guest_alpha = "guest_alpha"`,
+			`guest_alpha = "retired"`,
+			"native/suburban/tack/references.tf:6 keyed_guest_locks",
+		},
 		{"wrong node", consumer, refs, `node = "site"`, `node = "other"`, "other/101"},
 		{"wrong VMID", consumer, refs, "vmid = 101", "vmid = 102", "site/102"},
 		{

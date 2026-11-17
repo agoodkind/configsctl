@@ -119,9 +119,10 @@ func (config workspace) location(section string, keys ...string) string {
 
 	// A custom projection can construct guest_references directly in an output.
 	aliases := map[string]string{
-		"managed_guests":  "declared",
-		"service_mapping": "services",
-		"guest_locks":     "locks",
+		"managed_guests":    "declared",
+		"service_mapping":   "services",
+		"guest_locks":       "locks",
+		"keyed_guest_locks": "keyed_locks",
 	}
 	if alias, found := aliases[section]; found {
 		path = append([]string{"guest_references", alias}, keys...)
