@@ -4,13 +4,9 @@
 package tofuargs
 
 import (
-	"errors"
 	"strconv"
 	"strings"
 )
-
-// ErrFormatUsage identifies invalid arguments to configsctl fmt.
-var ErrFormatUsage = errors.New("usage: configsctl fmt")
 
 // Command is the subcommand of an OpenTofu invocation.
 type Command string
@@ -24,9 +20,6 @@ const (
 	Apply   Command = "apply"
 	Destroy Command = "destroy"
 )
-
-// Format is the OpenTofu formatting command.
-const Format = "fmt"
 
 // Boolean flags from tofu apply -help and tofu plan -help may precede a saved
 // plan without consuming its path.
