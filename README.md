@@ -10,7 +10,7 @@ Run configsctl from the root of a configuration checkout or installed artifact. 
 go run goodkind.io/configsctl/cmd/configsctl@latest tofu <workspace> plan
 ```
 
-Run `configsctl fmt` to format native configuration recursively without reading the vault. Run `configsctl lint` to check native configuration formatting. Roots with resource, data, or module blocks also require nonsecret ownership metadata. The formatter still checks retained backend-only roots, and every mutation still requires ownership metadata. Explicit file arguments retain the generic template linter. `version` prints the build commit, checkout state, and binary hash.
+Run `configsctl fmt` to format native configuration recursively without reading the vault. Run `configsctl lint` to check formatting and active OpenTofu source under `tofu.workspaces_dir`, including shared modules. TFLint checks unused declarations, variable types, naming conventions, and required provider declarations. configsctl uses private source copies and applies OpenTofu source precedence before invoking TFLint. Roots with resource, data, or module blocks also require nonsecret ownership metadata. The formatter still checks retained backend-only roots, and every mutation still requires ownership metadata. Explicit file arguments retain the generic template linter. `version` prints the build commit, checkout state, and binary hash.
 
 ## Select an OpenTofu workspace
 
@@ -486,6 +486,7 @@ Go callers can use `goodkind.io/configsctl/tofurun` and call `Run(ctx, request, 
   `/opt/homebrew/bin/python3` or `/usr/local/bin/python3` can provide it when
   the shell's `python3` cannot.
 - OpenTofu for native validation and infrastructure commands.
+- TFLint v0.66.0 in `PATH` for native `lint`. CI installs the pinned release and verifies its archive SHA-256 digest.
 - Git and access to `origin` for OpenTofu commands that write deployment state from Git source.
 - The existing local `pvesh` host-artifact API for OpenTofu commands that use installed source.
 - The vault password at `~/.config/ansible/vault.pass` for every command that reads the vault.

@@ -29,7 +29,7 @@ jobs:
       id-token: write
       attestations: write
     secrets: inherit
-    # The lint oracle tests run the embedded jinja2 script and fail without it.
+    # CLI lint tests require Jinja2, OpenTofu, and TFLint.
     with:
       apt_packages: python3-jinja2
       pre_make_commands: go run ./.github/install-opentofu

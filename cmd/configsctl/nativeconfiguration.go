@@ -10,6 +10,7 @@ import (
 
 	"goodkind.io/configsctl/hostlock"
 	"goodkind.io/configsctl/internal/installedsource"
+	"goodkind.io/configsctl/internal/sourcelint"
 	"goodkind.io/configsctl/internal/tofuargs"
 	"goodkind.io/configsctl/internal/tofulock"
 	"goodkind.io/configsctl/tofurun"
@@ -57,6 +58,11 @@ func runNativeLint(ctx context.Context, tofu tofuSettings) error {
 		environment,
 	); err != nil {
 		return err
+	}
+
+	if err := sourcelint.Run(ctx, tofu.WorkspacesDir); err != nil {
+		slog.Error("tofu.native_lint.source_failed", "err", err)
+		return fmt.Errorf("lint native source: %w", err)
 	}
 
 	workspaces, err := tofuChildWorkspaces(tofu.WorkspacesDir)
