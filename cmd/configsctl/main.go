@@ -16,7 +16,7 @@ import (
 	"sync"
 	"syscall"
 
-	"goodkind.io/configsctl/internal/hclsources"
+	"goodkind.io/configsctl/internal/cli"
 	"goodkind.io/configsctl/internal/lint"
 	"goodkind.io/configsctl/internal/redact"
 	"goodkind.io/configsctl/internal/tofuargs"
@@ -30,26 +30,10 @@ import (
 const defaultVaultFile = vault.File
 
 func main() {
-	args := os.Args[1:]
-	var err error
-	switch {
-	case len(args) == 0 || args[0] != "lint-hcl-sources":
-		err = run(args)
-	case len(args) != 2:
-		err = errors.New("usage: configsctl lint-hcl-sources <request.json>")
-	default:
-		request, readErr := os.ReadFile(args[1])
-		if readErr != nil {
-			err = fmt.Errorf("read HCL source request: %w", readErr)
-		} else {
-			err = hclsources.CheckRequest(request)
-		}
-	}
-
+	exitErr, err := cli.Run[*exitCodeError](os.Args, run)
 	if err != nil {
 		slog.Error("configsctl failed", "err", err)
-		var exitErr *exitCodeError
-		if errors.As(err, &exitErr) {
+		if exitErr != nil {
 			os.Exit(exitErr.code)
 		}
 

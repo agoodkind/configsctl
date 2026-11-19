@@ -494,6 +494,18 @@ The command rejects configurations with unknown or duplicate keys, missing requi
 
 Go callers can use `goodkind.io/configsctl/tofurun` and call `Run(ctx, request, scope)` with a `tofurun.Request`. `Run` returns a `tofurun.Result` and an error. A saved-plan `apply` requires a `*hostlock.Scope` from `(*hostlock.Set).Scope`; the scope must cover every host in `Request.RequiredHosts`. `Scope.Check` verifies the scope and its required hosts.
 
+## Verify retired OpenTofu addresses
+
+Run the verifier from a trusted configuration checkout that contains both Git commits. Supply their full commit IDs.
+
+```sh
+configsctl ci retirement --base <sha> --head <sha>
+```
+
+When a proposed commit removes a `removed.from` address, the verifier checks the default and named workspaces for each base backend that used that address. It includes indexed instances and resources inside removed modules. The check fails if OpenTofu cannot list the workspaces, read or decrypt a state, or prove that every retired address is absent.
+
+The verifier initializes a private directory with the backend and encryption configuration from the base commit. It supports local and S3 backends. For R2, supply bucket-scoped, read-only credentials in `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. Temporary credentials also require `AWS_SESSION_TOKEN`. Supply the state passphrase in `TF_VAR_vault_tofu_state_passphrase`. A change that retains all retirement instructions on the same backends does not require state credentials.
+
 ## Prerequisites
 
 - Go at the version in `go.mod`.

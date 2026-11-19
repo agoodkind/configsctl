@@ -1,0 +1,1 @@
+{"terraform":{"backend":{"local":{"path":"unused.tfstate","workspace_dir":"unrelated-workspaces"}}}}
