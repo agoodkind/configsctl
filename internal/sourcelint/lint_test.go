@@ -37,12 +37,20 @@ func TestRunMalformedActiveSource(t *testing.T) {
 		filename string
 		inactive string
 		contents string
+		position string
 	}{
-		{"main.tofu", "main.tf", "locals {\n  secret = \"private-fixture-value\n}\n"},
+		{"main.tofu", "main.tf", "locals {\n  secret = \"private-fixture-value\n}\n", "2:34"},
 		{
 			"main.tofu.json",
 			"main.tf.json",
 			"{\n  \"locals\": {\"secret\": \"private-fixture-value\",}\n}\n",
+			"2:47",
+		},
+		{
+			"resource.tofu.json",
+			"resource.tf.json",
+			"{\n  \"resource\": \"private-fixture-value\"\n}\n",
+			"2:15",
 		},
 	} {
 		t.Run(
@@ -65,8 +73,8 @@ func TestRunMalformedActiveSource(t *testing.T) {
 				}
 
 				message := err.Error()
-				if !strings.Contains(message, active+":2:") ||
-					!strings.Contains(message, ": invalid OpenTofu source") ||
+				expected := active + ":" + fixture.position + ": invalid OpenTofu source"
+				if !strings.Contains(message, expected) ||
 					!strings.Contains(message, "TFLint source checks failed") ||
 					strings.Contains(message, "private-fixture-value") {
 					t.Fatalf("source lint returned an unexpected error: %v", err)

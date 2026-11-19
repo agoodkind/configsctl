@@ -32,7 +32,7 @@ func (rules *sourceRules) readJSON(contents []byte, filename string) error {
 	}
 	body, _, diagnostics := file.Body.PartialContent(schema)
 	if diagnostics.HasErrors() {
-		return nil
+		return sourceParseError(filename, diagnostics)
 	}
 
 	for _, block := range body.Blocks {
