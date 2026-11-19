@@ -17,6 +17,7 @@ import (
 	"syscall"
 
 	"goodkind.io/configsctl/internal/cli"
+	"goodkind.io/configsctl/internal/entry"
 	"goodkind.io/configsctl/internal/lint"
 	"goodkind.io/configsctl/internal/redact"
 	"goodkind.io/configsctl/internal/tofuargs"
@@ -77,6 +78,25 @@ func run(args []string) error {
 	}
 
 	command := args[0]
+	if command == "fmt" {
+		err := entry.Format(
+			args[1:],
+			func() (string, error) {
+				loaded, err := loadNativeSettings(settingsFile)
+				return loaded.Tofu.WorkspacesDir, err
+			},
+			func(ctx context.Context, directory string, arguments, environment []string) error {
+				return executeTofu(ctx, cmdEnv{}, directory, arguments, arguments, environment)
+			},
+		)
+		if err != nil {
+			slog.Error("OpenTofu formatting failed", "err", err)
+			return fmt.Errorf("format OpenTofu sources: %w", err)
+		}
+
+		return nil
+	}
+
 	if command == "host-lock" {
 		return runHostLockServer(args[1:])
 	}

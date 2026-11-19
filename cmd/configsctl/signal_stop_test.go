@@ -214,6 +214,11 @@ func TestNativeConfigurationStopsItsProcessGroupOnSIGTERM(t *testing.T) {
 			func(t *testing.T) {
 				tree := newConfigsTree(t)
 				installNativeConfiguration(t, tree)
+				writeFixtureFile(
+					t,
+					filepath.Join(tree.workspaces, "shared/output.tf"),
+					"output \"shared\" { value = var.vault_shared }\n",
+				)
 				root := filepath.Join(tree.workspaces, "suburban", "tack")
 				writeFixtureFile(
 					t,

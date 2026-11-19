@@ -10,7 +10,9 @@ Run configsctl from the root of a configuration checkout or installed artifact. 
 go run goodkind.io/configsctl/cmd/configsctl@latest tofu <workspace> plan
 ```
 
-Run `configsctl lint` to check native configuration formatting. Roots with resource, data, or module blocks also require nonsecret ownership metadata. The formatter still checks retained backend-only roots, and every mutation still requires ownership metadata. Explicit file arguments retain the generic template linter. `version` prints the build commit, checkout state, and binary hash.
+Run `configsctl fmt` to format native configuration recursively without reading the vault. Run `configsctl lint` to check formatting and active OpenTofu source under `tofu.workspaces_dir`, including shared modules. TFLint checks unused declarations, variable types, naming conventions, and required provider declarations. configsctl uses private source copies and applies OpenTofu source precedence before invoking TFLint. Roots with resource, data, or module blocks also require nonsecret ownership metadata. The formatter still checks retained backend-only roots, and every mutation still requires ownership metadata. Explicit file arguments retain the generic template linter. `version` prints the build commit, checkout state, and binary hash.
+
+Native `lint` also rejects `for` expressions that iterate over `sort(keys(...))`; `keys` already returns lexical order. It warns about repeated hostname, path, URL, and service identifier literals within each module. Each warning includes the category and the first source location for its duplicate group without printing the value. Undotted service identifiers participate only in explicit service fields. It skips labels, object keys, comments, and fields that require literal syntax. It also warns about file installation loops in inline provisioners and statically resolved local `script` and `scripts` files. It scans inline array members as one script and reports the source location of the loop header. These shell warnings identify candidates for review; replacing a loop requires proof that the declared files preserve its behavior. Polling loops and file readability checks do not trigger this warning. Warnings alone do not fail `lint`, and TFLint failures do not hide these custom findings.
 
 ## Select an OpenTofu workspace
 
@@ -513,6 +515,7 @@ The verifier initializes a private directory with the backend and encryption con
   `/opt/homebrew/bin/python3` or `/usr/local/bin/python3` can provide it when
   the shell's `python3` cannot.
 - OpenTofu for native validation and infrastructure commands.
+- TFLint v0.66.0 in `PATH` for native `lint`. CI installs the pinned release and verifies its archive SHA-256 digest.
 - Git and access to `origin` for OpenTofu commands that write deployment state from Git source.
 - The existing local `pvesh` host-artifact API for OpenTofu commands that use installed source.
 - The vault password at `~/.config/ansible/vault.pass` for every command that reads the vault.
