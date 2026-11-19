@@ -114,15 +114,19 @@ func (rules *sourceRules) readSource(contents []byte, filename string) error {
 }
 
 func sourceParseError(filename string, diagnostics hcl.Diagnostics) error {
-	location := filename
-
 	for _, diagnostic := range diagnostics {
 		if diagnostic.Severity == hcl.DiagError && diagnostic.Subject != nil {
-			position := diagnostic.Subject.Start
-			location = fmt.Sprintf("%s:%d:%d", filename, position.Line, position.Column)
-
-			break
+			return sourceParseErrorAt(filename, diagnostic.Subject.Start)
 		}
+	}
+
+	return sourceParseErrorAt(filename, hcl.Pos{})
+}
+
+func sourceParseErrorAt(filename string, position hcl.Pos) error {
+	location := filename
+	if position.Line > 0 {
+		location = fmt.Sprintf("%s:%d:%d", filename, position.Line, position.Column)
 	}
 
 	slog.Error("tofu.source_lint.parse_failed", "location", location, "err", errInvalidSource)

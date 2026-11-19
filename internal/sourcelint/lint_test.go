@@ -9,6 +9,29 @@ import (
 	"goodkind.io/configsctl/internal/sourcelint"
 )
 
+func TestRunMalformedJSONInterpolation(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "main.tofu.json")
+	const source = `{"output": {"value": {
+  "value": "private-fixture-value\n${1 + }"
+}}}
+`
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := sourcelint.Run(t.Context(), root)
+	if err == nil {
+		t.Fatal("source lint accepted malformed JSON interpolation")
+	}
+
+	message := err.Error()
+	if !strings.Contains(message, path+":2:12: invalid OpenTofu source") ||
+		strings.Contains(message, "private-fixture-value") {
+		t.Fatalf("source lint returned an unexpected error: %v", err)
+	}
+}
+
 func TestRunMalformedActiveSource(t *testing.T) {
 	for _, fixture := range []struct {
 		filename string

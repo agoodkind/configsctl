@@ -27,6 +27,7 @@ func (rules *sourceRules) readJSON(contents []byte, filename string) error {
 			{Type: "data", LabelNames: []string{sourceTypeName, sourceLabelName}},
 			{Type: moduleBlock, LabelNames: []string{sourceLabelName}},
 			{Type: "provider", LabelNames: []string{sourceLabelName}},
+			{Type: "check", LabelNames: []string{sourceLabelName}},
 		},
 	}
 	body, _, diagnostics := file.Body.PartialContent(schema)
@@ -148,7 +149,7 @@ func readJSONTemplate(expression hcl.Expression, contents []byte) (*parsedTempla
 		location.Start,
 	)
 	if diagnostics.HasErrors() {
-		return nil, nil
+		return nil, sourceParseErrorAt(location.Filename, location.Start)
 	}
 
 	return &parsedTemplate{expression: template, location: location}, nil

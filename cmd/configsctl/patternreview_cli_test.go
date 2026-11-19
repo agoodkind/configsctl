@@ -195,6 +195,67 @@ func TestNativeLintShellLoopBodies(t *testing.T) {
 	}
 }
 
+func TestNativeLintCheckAssertionParity(t *testing.T) {
+	for _, fixture := range []struct {
+		filename string
+		source   string
+	}{
+		{
+			"check.tf",
+			`variable "items" {
+  type = map(string)
+}
+check "items" {
+  assert {
+    condition     = length([for key in sort(keys(var.items)) : key]) > 0
+    error_message = "Supply an item."
+  }
+}
+`,
+		},
+		{
+			"check.tf.json",
+			`{
+  "variable": {"items": {"type": "map(string)"}},
+  "check": {"items": {"assert": [{
+    "condition": "${length([for key in sort(keys(var.items)) : key]) > 0}",
+    "error_message": "Supply an item."
+  }]}}
+}
+`,
+		},
+	} {
+		t.Run(
+			fixture.filename,
+			func(t *testing.T) {
+				tree := nativeLintTree(t)
+				path := filepath.Join(tree.workspaces, "modules", "assertion", fixture.filename)
+				writeFixtureFile(t, path, fixture.source)
+				formatNativeLintTree(t, tree)
+
+				line := 1 + strings.Count(strings.Split(fixture.source, "sort(keys")[0], "\n")
+				expected := fmt.Sprintf("%s:%d:", fixture.filename, line)
+				result := runConfigsctl(t, tree, "lint")
+				if result.exitCode == 0 ||
+					strings.Count(result.stderr, "(redundant_sorted_keys)") != 1 ||
+					!strings.Contains(result.stderr, expected) {
+					t.Fatalf("lint missed the check assertion at %s: %s", expected, result.stderr)
+				}
+
+				corrected := strings.Replace(
+					fixture.source,
+					"sort(keys(var.items))",
+					"keys(var.items)",
+					1,
+				)
+				writeFixtureFile(t, path, corrected)
+				formatNativeLintTree(t, tree)
+				requireSuccess(t, runConfigsctl(t, tree, "lint"))
+			},
+		)
+	}
+}
+
 func TestNativeLintExpressionFieldNames(t *testing.T) {
 	for _, fixture := range []struct {
 		name   string
