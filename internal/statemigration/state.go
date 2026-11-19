@@ -60,15 +60,9 @@ func Inspect(path string) (StateInfo, error) {
 		return EmptyState(), fmt.Errorf("read private state export: %w", err)
 	}
 
-	var state stateDocument
-	if err := json.Unmarshal(data, &state); err != nil {
-		return StateInfo{}, errors.New("the private state export is not valid JSON")
-	}
-
-	if state.Version != 4 || state.Lineage == "" {
-		return StateInfo{}, errors.New(
-			"the private state export must use state format 4 and include a lineage",
-		)
+	state, err := decodeState(data)
+	if err != nil {
+		return StateInfo{}, err
 	}
 
 	info := EmptyState()
@@ -152,7 +146,7 @@ func contentDigest(data []byte) (string, error) {
 	return digest(canonical), nil
 }
 
-func instanceAddress(resource stateResource, instance map[string]json.RawMessage) (string, error) {
+func baseAddress(resource stateResource) (string, error) {
 	address := resource.Type + "." + resource.Name
 	if resource.Mode == "data" {
 		address = "data." + address
@@ -164,6 +158,15 @@ func instanceAddress(resource stateResource, instance map[string]json.RawMessage
 		address = resource.Module + "." + address
 	}
 
+	return address, nil
+}
+
+func instanceAddress(resource stateResource, instance map[string]json.RawMessage) (string, error) {
+	address, err := baseAddress(resource)
+	if err != nil {
+		return "", err
+	}
+
 	if deposed, exists := instance["deposed"]; exists && string(deposed) != `""` {
 		return "", fmt.Errorf(
 			"resource %s has a deposed instance; resolve its interrupted replacement before migration",
@@ -171,7 +174,11 @@ func instanceAddress(resource stateResource, instance map[string]json.RawMessage
 		)
 	}
 
-	if key, exists := instance["index_key"]; exists && string(key) != "null" {
+	return indexedAddress(address, instance["index_key"])
+}
+
+func indexedAddress(address string, key json.RawMessage) (string, error) {
+	if len(key) != 0 && string(key) != "null" {
 		index, err := instanceIndex(key)
 		if err != nil {
 			return "", fmt.Errorf("resource %s has an invalid instance key", address)
@@ -256,4 +263,19 @@ func (s StateInfo) Addresses() []string {
 	slices.Sort(addresses)
 
 	return addresses
+}
+
+func decodeState(data []byte) (stateDocument, error) {
+	var state stateDocument
+	if err := json.Unmarshal(data, &state); err != nil {
+		return stateDocument{}, errors.New("the private state export is not valid JSON")
+	}
+
+	if state.Version != 4 || state.Lineage == "" {
+		return stateDocument{}, errors.New(
+			"the private state export must use state format 4 and include a lineage",
+		)
+	}
+
+	return state, nil
 }

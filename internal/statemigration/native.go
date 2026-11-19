@@ -30,6 +30,19 @@ type Workspace struct {
 // Pull captures native state bytes directly into a new private file.
 // It never writes those bytes through stdout redaction or a command log.
 func Pull(ctx context.Context, workspace Workspace, destination string) (StateInfo, error) {
+	if err := captureWorkspace(ctx, workspace, "default", destination); err != nil {
+		return EmptyState(), err
+	}
+
+	return inspectCapture(ctx, destination)
+}
+
+func captureWorkspace(
+	ctx context.Context,
+	workspace Workspace,
+	name string,
+	destination string,
+) error {
 	slog.InfoContext(
 		ctx,
 		"migration.state_pull.started",
@@ -40,10 +53,10 @@ func Pull(ctx context.Context, workspace Workspace, destination string) (StateIn
 	)
 	file, err := createPrivate(destination)
 	if err != nil {
-		return EmptyState(), err
+		return err
 	}
 
-	runErr := native(ctx, workspace, file, "state", "pull")
+	runErr := nativeWorkspace(ctx, workspace, name, file, "state", "pull")
 	info, statErr := file.Stat()
 	syncErr := file.Sync()
 	closeErr := file.Close()
@@ -63,11 +76,11 @@ func Pull(ctx context.Context, workspace Workspace, destination string) (StateIn
 					migrationErrorType(err),
 				)
 
-				return EmptyState(), fmt.Errorf("remove empty private state capture: %w", err)
+				return fmt.Errorf("remove empty private state capture: %w", err)
 			}
 		}
 
-		return EmptyState(), runErr
+		return runErr
 	}
 
 	if syncErr != nil {
@@ -80,7 +93,7 @@ func Pull(ctx context.Context, workspace Workspace, destination string) (StateIn
 			migrationErrorType(syncErr),
 		)
 
-		return EmptyState(), fmt.Errorf("sync private native state capture: %w", syncErr)
+		return fmt.Errorf("sync private native state capture: %w", syncErr)
 	}
 
 	if statErr != nil {
@@ -93,7 +106,7 @@ func Pull(ctx context.Context, workspace Workspace, destination string) (StateIn
 			migrationErrorType(statErr),
 		)
 
-		return EmptyState(), fmt.Errorf("inspect private native state capture: %w", statErr)
+		return fmt.Errorf("inspect private native state capture: %w", statErr)
 	}
 
 	if closeErr != nil {
@@ -106,9 +119,13 @@ func Pull(ctx context.Context, workspace Workspace, destination string) (StateIn
 			migrationErrorType(closeErr),
 		)
 
-		return EmptyState(), fmt.Errorf("close private native state capture: %w", closeErr)
+		return fmt.Errorf("close private native state capture: %w", closeErr)
 	}
 
+	return nil
+}
+
+func inspectCapture(ctx context.Context, destination string) (StateInfo, error) {
 	state, inspectErr := Inspect(destination)
 	if inspectErr != nil && nativeAbsentState(destination) {
 		if err := os.Remove(destination); err != nil {
@@ -356,31 +373,17 @@ func protectSnapshotFiles(directory string) error {
 }
 
 func native(ctx context.Context, workspace Workspace, output io.Writer, args ...string) error {
-	slog.InfoContext(ctx, "migration.native.started", "workspace", workspace.Directory)
-	cmd := exec.CommandContext(ctx, "tofu", args...)
+	return nativeWorkspace(ctx, workspace, "default", output, args...)
+}
 
-	cmd.Dir = workspace.Directory
-	for _, entry := range workspace.Environment {
-		key, _, _ := strings.Cut(entry, "=")
-		if strings.HasPrefix(key, "TF_CLI_ARGS") || strings.HasPrefix(key, "TF_LOG") ||
-			strings.HasPrefix(
-				key,
-				"TOFU_LOG",
-			) || key == "TF_TEMP_LOG_PATH" || key == "TOFU_CPU_PROFILE" ||
-			key == "TF_DATA_DIR" || key == "TF_WORKSPACE" {
-			continue
-		}
-
-		cmd.Env = append(cmd.Env, entry)
-	}
-
-	cmd.Env = append(
-		cmd.Env,
-		"TF_WORKSPACE=default",
-		"TF_IN_AUTOMATION=true",
-		"TF_INPUT=0",
-		"TF_LOG=OFF",
-	)
+func nativeWorkspace(
+	ctx context.Context,
+	workspace Workspace,
+	name string,
+	output io.Writer,
+	args ...string,
+) error {
+	cmd := nativeProcess(ctx, workspace, name, args...)
 	cmd.Stdout = output
 	// Provider errors can include state attributes. Keep them out of visible logs.
 	var stderr bytes.Buffer
@@ -409,4 +412,37 @@ func native(ctx context.Context, workspace Workspace, output io.Writer, args ...
 	}
 
 	return nil
+}
+
+func nativeProcess(
+	ctx context.Context,
+	workspace Workspace,
+	name string,
+	args ...string,
+) *exec.Cmd {
+	slog.InfoContext(ctx, "migration.native.started", "workspace", workspace.Directory)
+	cmd := exec.CommandContext(ctx, "tofu", args...)
+
+	cmd.Dir = workspace.Directory
+	for _, entry := range workspace.Environment {
+		key, _, _ := strings.Cut(entry, "=")
+		if strings.HasPrefix(key, "TF_CLI_ARGS") || strings.HasPrefix(key, "TF_LOG") ||
+			strings.HasPrefix(
+				key,
+				"TOFU_LOG",
+			) || key == "TF_TEMP_LOG_PATH" || key == "TOFU_CPU_PROFILE" ||
+			key == "TF_DATA_DIR" || key == "TF_WORKSPACE" {
+			continue
+		}
+
+		cmd.Env = append(cmd.Env, entry)
+	}
+
+	if name != "" {
+		cmd.Env = append(cmd.Env, "TF_WORKSPACE="+name)
+	}
+
+	cmd.Env = append(cmd.Env, "TF_IN_AUTOMATION=true", "TF_INPUT=0", "TF_LOG=OFF")
+
+	return cmd
 }
