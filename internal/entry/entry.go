@@ -11,7 +11,7 @@ import (
 
 var errFormatUsage = errors.New("usage: configsctl fmt")
 
-// Format rejects command arguments before loading native settings.
+// Format runs OpenTofu formatting recursively from the configured directory.
 //
 // loadDirectory reads the native settings. execute runs OpenTofu with the
 // supplied environment and arguments.
