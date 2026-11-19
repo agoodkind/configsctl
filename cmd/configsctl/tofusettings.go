@@ -11,6 +11,7 @@ import (
 	"slices"
 
 	"go.yaml.in/yaml/v3"
+	"goodkind.io/configsctl/internal/guestrefs"
 	"goodkind.io/configsctl/internal/installedsource"
 	"goodkind.io/configsctl/internal/tofulock"
 )
@@ -32,9 +33,11 @@ type deploySettings struct {
 }
 
 type tofuSettings struct {
-	InstalledSource   *installedsource.Settings `yaml:"installed_source"`
-	source            *installedTofuSource
-	ConfigurationRoot string `yaml:"configuration_root"`
+	guestReferences         guestrefs.Registry
+	InstalledSource         *installedsource.Settings `yaml:"installed_source"`
+	source                  *installedTofuSource
+	ValidateGuestReferences bool   `yaml:"validate_guest_references"`
+	ConfigurationRoot       string `yaml:"configuration_root"`
 	// WorkspacesDir is a path relative to the repository root.
 	WorkspacesDir string `yaml:"workspaces_dir"`
 	// ProviderMirror resolves relative to the settings file directory.
