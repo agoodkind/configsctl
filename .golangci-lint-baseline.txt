@@ -136,7 +136,7 @@ cmd/configsctl/migrationworkspace.go:64:43: do not define dynamic errors, use wr
 cmd/configsctl/native_fixture_test.go:261:3: return with no blank line before (nlreturn)	# golangci-lint:first_added=2026-11-10T09:10:17Z last_seen=2026-11-10T10:22:11Z
 cmd/configsctl/nativeconfiguration.go:366:3: return with no blank line before (nlreturn)	# golangci-lint:first_added=2026-11-10T09:10:17Z last_seen=2026-11-10T10:22:11Z
 cmd/configsctl/nativeconfiguration.go:128:27: do not define dynamic errors, use wrapped static errors instead: "fmt.Errorf(\"%s\", tofuUsage)" (err113)	# golangci-lint:first_added=2026-11-10T09:10:17Z last_seen=2026-11-10T10:22:11Z
-cmd/configsctl/nativeconfiguration.go:170:6: Function 'evaluateNativeConfigurationAt' is too long (147 > 100) (funlen)	# golangci-lint:first_added=2026-11-10T09:12:27Z last_seen=2026-11-10T10:22:11Z
+cmd/configsctl/nativeconfiguration.go:169:6: Function 'evaluateNativeConfigurationAt' is too long (142 > 100) (funlen)	# golangci-lint:first_added=2026-11-10T09:12:27Z last_seen=2026-11-10T10:22:11Z
 cmd/configsctl/nativeconfiguration.go:178:19: do not define dynamic errors, use wrapped static errors instead: "fmt.Errorf(\"tofu.configuration_root is required for native configuration\")" (err113)	# golangci-lint:first_added=2026-11-10T09:10:17Z last_seen=2026-11-10T10:22:11Z
 cmd/configsctl/nativeconfiguration.go:46:10: error-format: fmt.Errorf can be replaced with errors.New (perfsprint)	# golangci-lint:first_added=2026-11-10T09:10:35Z last_seen=2026-11-10T10:22:11Z
 cmd/configsctl/nativeconfiguration.go:236:30: string `-input=false` has 4 occurrences, make it a constant (goconst)	# golangci-lint:first_added=2026-11-10T09:10:17Z last_seen=2026-11-10T10:22:11Z
