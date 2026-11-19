@@ -47,7 +47,7 @@ func installsFiles(body []*syntax.Stmt) bool {
 					return node.Hdoc == nil
 				case *syntax.CallExpr:
 					if len(node.Args) > 1 {
-						name := node.Args[0].Lit()
+						name := literalCommandName(node.Args[0])
 						if path.IsAbs(name) {
 							name = path.Base(name)
 						}
@@ -65,6 +65,44 @@ func installsFiles(body []*syntax.Stmt) bool {
 	}
 
 	return false
+}
+
+func literalCommandName(word *syntax.Word) string {
+	var name strings.Builder
+
+	for _, part := range word.Parts {
+		switch part := part.(type) {
+		case *syntax.Lit:
+			if strings.ContainsAny(part.Value, "\\*?[{~") {
+				return ""
+			}
+
+			name.WriteString(part.Value)
+		case *syntax.SglQuoted:
+			if part.Dollar {
+				return ""
+			}
+
+			name.WriteString(part.Value)
+		case *syntax.DblQuoted:
+			if part.Dollar {
+				return ""
+			}
+
+			for _, quoted := range part.Parts {
+				literal, ok := quoted.(*syntax.Lit)
+				if !ok || strings.Contains(literal.Value, "\\") {
+					return ""
+				}
+
+				name.WriteString(literal.Value)
+			}
+		default:
+			return ""
+		}
+	}
+
+	return name.String()
 }
 
 func (rules *sourceRules) fileInstallLoop(location hcl.Range, position syntax.Pos) {

@@ -150,16 +150,22 @@ func TestNativeLintShellLoopBodies(t *testing.T) {
         for inner in c d; do
           test -r "$inner"
         done
-        /usr/bin/install "$outer" /tmp/
+        '/usr/bin/install' "$outer" /tmp/
       done
       for quoted in a b; do
         echo "done; cp fake /tmp/"
-        cp "$quoted" /tmp/
+        "cp" "$quoted" /tmp/
+      done
+      for mixed in a b; do
+        m'v' "$mixed" /tmp/
       done
       for polling in a b; do
         echo "status; install fake /tmp/"
         # mv fake /tmp/
         test -r "$polling"
+      done
+      for dynamic in a b; do
+        "$directory/cp" "$dynamic" /tmp/
       done
       mv outside /tmp/
     SHELL
@@ -176,11 +182,11 @@ func TestNativeLintShellLoopBodies(t *testing.T) {
 
 	result := runConfigsctl(t, tree, "lint")
 	requireSuccess(t, result)
-	if strings.Count(result.stderr, "(file_install_loop)") != 2 {
+	if strings.Count(result.stderr, "(file_install_loop)") != 3 {
 		t.Fatalf("lint reported unexpected installation advisories: %s", result.stderr)
 	}
 
-	for _, loop := range []string{"for outer", "for quoted"} {
+	for _, loop := range []string{"for outer", "for quoted", "for mixed"} {
 		line := 1 + strings.Count(strings.Split(string(contents), loop)[0], "\n")
 		expected := fmt.Sprintf("%s:%d:", filename, line)
 		if !strings.Contains(result.stderr, expected) {
