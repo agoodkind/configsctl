@@ -11,9 +11,9 @@ var errFileUsage = errors.New("usage: configsctl lint-hcl-sources <request.json>
 //
 // The caller supplies the request path as the only argument.
 //
-// Example:
+// Run the check from the command line with an existing request file:
 //
-//	err := hclsources.FileCommand([]string{"request.json"})
+//	configsctl lint-hcl-sources request.json
 func FileCommand(args []string) error {
 	if len(args) != 1 {
 		return errFileUsage

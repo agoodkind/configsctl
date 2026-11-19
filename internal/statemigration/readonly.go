@@ -13,9 +13,9 @@ import (
 //
 // The directory must contain only the trusted backend configuration.
 //
-// Example:
+// Pass nil for backendArgs when the backend configuration is complete:
 //
-//	names, err := ReadWorkspaces(ctx, workspace, backendArgs)
+//	names, err := ReadWorkspaces(ctx, workspace, nil)
 func ReadWorkspaces(
 	ctx context.Context,
 	workspace Workspace,

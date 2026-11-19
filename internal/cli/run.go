@@ -11,10 +11,18 @@ import (
 // Run dispatches the command from the process argument list.
 //
 // The configuration commands use the existing operator command handler.
+// Pass the full argument list, including the program name. Run returns
+// the matching error of type T alongside the original command error.
 //
-// Example:
+// Use the typed error to preserve a command's exit code:
 //
-//	status, err := cli.Run[*statusError](os.Args, operator)
+//	exitErr, err := cli.Run[*exitCodeError](os.Args, run)
+//	if exitErr != nil {
+//		os.Exit(exitErr.code)
+//	}
+//	if err != nil {
+//		os.Exit(1)
+//	}
 func Run[T error](argv []string, operator func([]string) error) (T, error) {
 	err := dispatch(argv[1:], operator)
 	status, _ := errors.AsType[T](err)
