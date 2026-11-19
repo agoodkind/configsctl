@@ -113,6 +113,21 @@ Guest-local changes use the enrolled guest's existing SSH lock. A known node and
 
 configsctl expands `TF_CLI_ARGS` and command-specific arguments once, using OpenTofu's argument order. Explicit arguments take precedence over environment arguments.
 
+## Validate guest references
+
+Set `tofu.validate_guest_references: true` to check managed guests across workspaces during `configsctl lint`. Every operational workspace must export `guest_references` from its provider-free configuration. A retained backend without operational resources or modules does not need a projection.
+
+| Field | Value |
+|---|---|
+| `source` | Configuration file that supplies the workspace metadata. |
+| `declared` | Service keys mapped to the guests configured by this workspace. Each identity contains `node`, a positive integer `vmid`, and `hostname`. |
+| `services` | Guest identities from the service mapping, indexed by service key. |
+| `locks` | Service keys that require entries in `lock_targets.guest_hosts`. |
+| `static_locks` | Resource or module addresses mapped to the expected guest service keys in `lock_targets.module_hosts`. Omit this field when the workspace uses only node hosts for these addresses. |
+| `keyed_locks` | Module addresses mapped to instance keys and their expected guest service keys. |
+
+Use empty collections for the fields that do not apply to a workspace. Derive declarations from the configuration that manages the guest. Derive references from the service mapping and the guest sets used by lock consumers. Lint compares service keys, node and VMID pairs, hostnames, and guest lock mappings across all operational workspaces. Each address in `module_hosts` without a guest reference must identify a node host declared by an operational workspace. A keyed lock without a guest reference must identify a host in the workspace’s `node_hosts` mapping. For generated keys, lint reports the configuration line that computes the mapping.
+
 ## Declare lock endpoints
 
 Set `tofu.configuration_root` to the provider-free OpenTofu root that accepts a constant `workspace` variable and exports `lock_targets`. The selector matches the selected workspace below `tofu.workspaces_dir`.
