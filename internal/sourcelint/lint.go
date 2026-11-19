@@ -79,7 +79,7 @@ func Run(ctx context.Context, root string) error {
 	output, runErr := command.Output()
 	if len(output) > 0 {
 		if err := printDiagnostics(output, directory, root); err != nil {
-			return err
+			return errors.Join(customErr, err)
 		}
 	}
 

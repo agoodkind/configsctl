@@ -16,7 +16,10 @@ import (
 	"github.com/zclconf/go-cty/cty"
 )
 
-var errSortedKeys = errors.New("remove redundant sort around keys in for expressions")
+var (
+	errSortedKeys    = errors.New("remove redundant sort around keys in for expressions")
+	errInvalidSource = errors.New("invalid OpenTofu source")
+)
 
 const (
 	sourceLabelName  = "name"
@@ -99,7 +102,7 @@ func (rules *sourceRules) readSource(contents []byte, filename string) error {
 
 	file, diagnostics := hclsyntax.ParseConfig(contents, filename, hcl.InitialPos)
 	if diagnostics.HasErrors() {
-		return nil
+		return sourceParseError(filename, diagnostics)
 	}
 
 	body, ok := file.Body.(*hclsyntax.Body)
@@ -108,6 +111,23 @@ func (rules *sourceRules) readSource(contents []byte, filename string) error {
 	}
 
 	return rules.body(body, filepath.Dir(filename), "", false)
+}
+
+func sourceParseError(filename string, diagnostics hcl.Diagnostics) error {
+	location := filename
+
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Severity == hcl.DiagError && diagnostic.Subject != nil {
+			position := diagnostic.Subject.Start
+			location = fmt.Sprintf("%s:%d:%d", filename, position.Line, position.Column)
+
+			break
+		}
+	}
+
+	slog.Error("tofu.source_lint.parse_failed", "location", location, "err", errInvalidSource)
+
+	return fmt.Errorf("%s: %w", location, errInvalidSource)
 }
 
 func (rules *sourceRules) repeatedLiterals() {
@@ -462,44 +482,4 @@ func serviceRanges(expression *hclsyntax.ObjectConsExpr) []hcl.Range {
 	}
 
 	return ranges
-}
-
-var (
-	shellFor = regexp.MustCompile(
-		`(?m)(?:^|[;\n])\s*for\s+[A-Za-z_][A-Za-z0-9_]*\s+in\s+[^;\n]+[;\n]\s*do\b`,
-	)
-	fileInstall = regexp.MustCompile(`(?:^|[;\n])\s*(?:/[^\s;]+/)?(?:install|cp|mv)\s+`)
-)
-
-func (rules *sourceRules) shell(command string, location hcl.Range) {
-	for _, match := range shellFor.FindAllStringIndex(command, -1) {
-		end := strings.Index(command[match[1]:], "done")
-		if end < 0 {
-			continue
-		}
-
-		body := command[match[1] : match[1]+end]
-		if !fileInstall.MatchString(body) {
-			continue
-		}
-
-		start := location.Start
-		offset := match[0] + strings.Index(command[match[0]:match[1]], "for")
-		start.Line += strings.Count(command[:offset], "\n")
-		start.Byte += offset
-		rules.findings = append(
-			rules.findings,
-			sourceFinding{
-				location: rules.location(hcl.Range{
-					Filename: location.Filename,
-					Start:    start,
-					End:      start,
-				}),
-				rule: "file_install_loop",
-				message: "warning: review a declared file collection instead of a shell installation loop; " +
-					"prove equivalent behavior before replacing it",
-				blocking: false,
-			},
-		)
-	}
 }

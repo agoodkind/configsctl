@@ -140,6 +140,55 @@ func TestNativeLintLocalExec(t *testing.T) {
 	}
 }
 
+func TestNativeLintShellLoopBodies(t *testing.T) {
+	tree := nativeLintTree(t)
+	const filename = "loops.tofu"
+	const source = `resource "terraform_data" "files" {
+  provisioner "local-exec" {
+    command = <<-SHELL
+      for outer in a b; do
+        for inner in c d; do
+          test -r "$inner"
+        done
+        /usr/bin/install "$outer" /tmp/
+      done
+      for quoted in a b; do
+        echo "done; cp fake /tmp/"
+        cp "$quoted" /tmp/
+      done
+      for polling in a b; do
+        echo "status; install fake /tmp/"
+        # mv fake /tmp/
+        test -r "$polling"
+      done
+      mv outside /tmp/
+    SHELL
+  }
+}
+`
+	path := filepath.Join(tree.workspaces, "modules", "loops", filename)
+	writeFixtureFile(t, path, source)
+	formatNativeLintTree(t, tree)
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := runConfigsctl(t, tree, "lint")
+	requireSuccess(t, result)
+	if strings.Count(result.stderr, "(file_install_loop)") != 2 {
+		t.Fatalf("lint reported unexpected installation advisories: %s", result.stderr)
+	}
+
+	for _, loop := range []string{"for outer", "for quoted"} {
+		line := 1 + strings.Count(strings.Split(string(contents), loop)[0], "\n")
+		expected := fmt.Sprintf("%s:%d:", filename, line)
+		if !strings.Contains(result.stderr, expected) {
+			t.Fatalf("lint missed installation advisory at %s: %s", expected, result.stderr)
+		}
+	}
+}
+
 func TestNativeLintExpressionFieldNames(t *testing.T) {
 	for _, fixture := range []struct {
 		name   string

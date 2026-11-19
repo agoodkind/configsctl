@@ -14,7 +14,7 @@ import (
 func (rules *sourceRules) readJSON(contents []byte, filename string) error {
 	file, diagnostics := hcljson.Parse(contents, filename)
 	if diagnostics.HasErrors() {
-		return nil
+		return sourceParseError(filename, diagnostics)
 	}
 
 	schema := &hcl.BodySchema{
