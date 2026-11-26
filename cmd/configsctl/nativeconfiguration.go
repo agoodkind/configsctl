@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"goodkind.io/configsctl/internal/vault"
+
 	"goodkind.io/configsctl/hostlock"
 	"goodkind.io/configsctl/internal/guestrefs"
 	"goodkind.io/configsctl/internal/installedsource"
@@ -97,13 +99,18 @@ func runNativeLint(ctx context.Context, tofu tofuSettings) error {
 	return nil
 }
 
-func loadTofuWorkspace(ctx context.Context, args []string) (settings, string, []string, error) {
+func loadTofuWorkspace(
+	ctx context.Context,
+	args []string,
+	vaultPath vault.RuntimePath,
+) (settings, string, []string, error) {
 	loaded, err := loadNativeSettings(sourceExecutionPath(ctx, settingsFile))
 	if err != nil {
 		return loaded, "", nil, err
 	}
 
 	loaded.Tofu.source = installedSourceFrom(ctx)
+	loaded.Tofu.vaultPath = vaultPath
 	if loaded.Tofu.ProviderMirror != nil {
 		mirror, err := resolveProviderMirror(settingsFile, *loaded.Tofu.ProviderMirror)
 		if err != nil {

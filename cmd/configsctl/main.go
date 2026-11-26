@@ -30,17 +30,6 @@ import (
 // the working directory the binary runs from.
 const defaultVaultFile = vault.File
 
-const tofuCommand = "tofu"
-
-var (
-	errExternalVaultCheckout = errors.New(
-		"CONFIGSCTL_VAULT_FILE is only supported with a Git checkout",
-	)
-	errExternalVaultInputs = errors.New(
-		"CONFIGSCTL_VAULT_FILE requires a readable vault and vault password file",
-	)
-)
-
 func main() {
 	exitErr, err := cli.Run[*exitCodeError](os.Args, run)
 	if err != nil {
@@ -58,7 +47,7 @@ func main() {
 // the stdout and stderr redactors installed for the process.
 type cmdEnv struct {
 	secrets   []redact.Pattern
-	vaultPath string
+	vaultPath vault.RuntimePath
 }
 
 // handlers dispatches a subcommand name to its implementation.
@@ -69,7 +58,7 @@ var handlers = map[string]func(cmdEnv, []string) error{
 	"set-secrets":    runSetSecrets,
 	"rename-secret":  runRenameSecret,
 	"delete-secrets": runDeleteSecrets,
-	tofuCommand:      runTofu,
+	"tofu":           runTofu,
 	"migrate-state":  runStateMigration,
 	"version":        runVersion,
 	"gate":           runGate,
@@ -126,13 +115,9 @@ func run(args []string) error {
 		return fmt.Errorf("unknown command: %q", command)
 	}
 
-	vaultPath := defaultVaultFile
-	if command == tofuCommand {
-		var err error
-		vaultPath, err = vault.RuntimeFile()
-		if err != nil {
-			return fmt.Errorf("select OpenTofu vault: %w", err)
-		}
+	vaultPath, err := vault.RuntimeFile(command)
+	if err != nil {
+		return fmt.Errorf("select OpenTofu vault: %w", err)
 	}
 
 	patterns, loadErr := loadSecretPatterns(vaultPath)
@@ -350,7 +335,7 @@ func runTofu(env cmdEnv, args []string) error {
 	}
 	defer cleanupSource()
 	if env.vaultPath != "" && env.vaultPath != defaultVaultFile && installedSourceFrom(ctx) != nil {
-		return errExternalVaultCheckout
+		return vault.ErrRuntimeCheckout
 	}
 
 	return runTofuWithSource(ctx, env, args)
@@ -362,12 +347,11 @@ func runTofuWithSource(ctx context.Context, env cmdEnv, args []string) error {
 		return err
 	}
 
-	loaded, workspaceDir, tofuArgs, err := loadTofuWorkspace(ctx, args)
+	loaded, workspaceDir, tofuArgs, err := loadTofuWorkspace(ctx, args, env.vaultPath)
 	if err != nil {
 		return err
 	}
 
-	loaded.Tofu.vaultPath = env.vaultPath
 	safeArgs, childEnv, err := prepareTofuInvocation(
 		loaded.Tofu,
 		workspaceDir,
@@ -473,7 +457,7 @@ func runTofuWithSource(ctx context.Context, env cmdEnv, args []string) error {
 	if usesCredential {
 		rotatorPassword, err := vault.Secret(
 			credential.Dell.RotatorPasswordKey,
-			loaded.Tofu.vaultFile(),
+			loaded.Tofu.vaultPath.File(),
 			passwordFile,
 		)
 		if err != nil {
@@ -714,17 +698,17 @@ func vaultInputs(vaultPath string) (passwordFile string, available bool) {
 // loadSecretPatterns reads the vault and builds redaction patterns. An absent
 // vault or password file yields no patterns and no error. A too-short secret
 // returns *shortSecretError.
-func loadSecretPatterns(vaultPath string) ([]redact.Pattern, error) {
-	passwordFile, available := vaultInputs(vaultPath)
+func loadSecretPatterns(vaultPath vault.RuntimePath) ([]redact.Pattern, error) {
+	passwordFile, available := vaultInputs(vaultPath.File())
 	if !available {
 		if vaultPath != defaultVaultFile {
-			return nil, errExternalVaultInputs
+			return nil, vault.ErrRuntimeInputs
 		}
 
 		return nil, nil
 	}
 
-	patterns, err := vault.FilePatterns(vaultPath, passwordFile)
+	patterns, err := vault.FilePatterns(vaultPath.File(), passwordFile)
 	if err != nil {
 		slog.Error("vault values load failed", "err", err)
 		return nil, fmt.Errorf("load vault values: %w", err)

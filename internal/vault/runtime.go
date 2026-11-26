@@ -11,21 +11,49 @@ import (
 const tofuVaultVariable = "CONFIGSCTL_VAULT_FILE"
 
 var (
+	// ErrRuntimeCheckout identifies a vault selection outside Git checkout mode.
+	ErrRuntimeCheckout = errors.New("CONFIGSCTL_VAULT_FILE is only supported with a Git checkout")
+	// ErrRuntimeInputs identifies a missing vault or vault password.
+	ErrRuntimeInputs = errors.New(
+		"CONFIGSCTL_VAULT_FILE requires a readable vault and vault password file",
+	)
 	errRuntimeAbsolutePath   = errors.New("CONFIGSCTL_VAULT_FILE must be a clean absolute path")
 	errRuntimeSymlinkPath    = errors.New("CONFIGSCTL_VAULT_FILE must not use symbolic links")
 	errRuntimeInsideCheckout = errors.New("CONFIGSCTL_VAULT_FILE must be outside the checkout")
 	errRuntimeUnsafeMode     = errors.New("CONFIGSCTL_VAULT_FILE must be a mode-0600 regular file")
 )
 
+// RuntimePath identifies the vault file for an OpenTofu invocation.
+type RuntimePath string
+
+// File returns the selected vault path or the path in the Configs checkout.
+//
+// An empty RuntimePath uses the default for callers that construct settings
+// directly.
+//
+//	(RuntimePath("")).File()
+func (path RuntimePath) File() string {
+	if path == "" {
+		return File
+	}
+
+	return string(path)
+}
+
 // RuntimeFile selects the vault for a Git-backed OpenTofu run.
 //
-// The default is the vault in the Configs checkout. An explicit selection
+// Only the tofu command can select an external vault. Other commands use
+// the vault in the Configs checkout. An explicit tofu selection
 // must identify a private regular file outside that checkout.
 //
 // A job can select an encrypted vault before it runs configsctl:
 //
 //	CONFIGSCTL_VAULT_FILE=/run/creds/vault.yml
-func RuntimeFile() (string, error) {
+func RuntimeFile(command string) (RuntimePath, error) {
+	if command != "tofu" {
+		return File, nil
+	}
+
 	path, configured := os.LookupEnv(tofuVaultVariable)
 	if !configured {
 		return File, nil
@@ -76,5 +104,5 @@ func RuntimeFile() (string, error) {
 		return "", errRuntimeUnsafeMode
 	}
 
-	return path, nil
+	return RuntimePath(path), nil
 }
