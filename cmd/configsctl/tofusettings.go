@@ -14,6 +14,7 @@ import (
 	"goodkind.io/configsctl/internal/guestrefs"
 	"goodkind.io/configsctl/internal/installedsource"
 	"goodkind.io/configsctl/internal/tofulock"
+	"goodkind.io/configsctl/internal/tofusecrets"
 )
 
 const settingsFile = "configsctl.yml"
@@ -36,6 +37,7 @@ type tofuSettings struct {
 	guestReferences         guestrefs.Registry
 	InstalledSource         *installedsource.Settings `yaml:"installed_source"`
 	source                  *installedTofuSource
+	runtimeSecrets          *tofusecrets.Environment
 	ValidateGuestReferences bool   `yaml:"validate_guest_references"`
 	ConfigurationRoot       string `yaml:"configuration_root"`
 	// WorkspacesDir is a path relative to the repository root.

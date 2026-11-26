@@ -22,6 +22,7 @@ import (
 	"goodkind.io/configsctl/internal/redact"
 	"goodkind.io/configsctl/internal/tofuargs"
 	"goodkind.io/configsctl/internal/tofurun"
+	"goodkind.io/configsctl/internal/tofusecrets"
 	"goodkind.io/configsctl/internal/vault"
 	"goodkind.io/configsctl/internal/version"
 )
@@ -46,7 +47,8 @@ func main() {
 // secret patterns to build a redactor over its own log file, which sits outside
 // the stdout and stderr redactors installed for the process.
 type cmdEnv struct {
-	secrets []redact.Pattern
+	secrets        []redact.Pattern
+	runtimeSecrets *tofusecrets.Environment
 }
 
 // handlers dispatches a subcommand name to its implementation.
@@ -114,7 +116,19 @@ func run(args []string) error {
 		return fmt.Errorf("unknown command: %q", command)
 	}
 
-	patterns, loadErr := loadSecretPatterns()
+	runtimeSecrets, err := tofusecrets.ReadEnvironment(command)
+	if err != nil {
+		return fmt.Errorf("select OpenTofu secret inputs: %w", err)
+	}
+
+	var patterns []redact.Pattern
+	var loadErr error
+	if runtimeSecrets != nil {
+		patterns = runtimeSecrets.Patterns()
+	} else {
+		patterns, loadErr = loadSecretPatterns()
+	}
+
 	if loadErr != nil {
 		var short *shortSecretError
 		isShort := errors.As(loadErr, &short)
@@ -141,7 +155,7 @@ func run(args []string) error {
 	}
 	defer restore()
 
-	return handler(cmdEnv{secrets: patterns}, args[1:])
+	return handler(cmdEnv{secrets: patterns, runtimeSecrets: runtimeSecrets}, args[1:])
 }
 
 func runLint(_ cmdEnv, paths []string) error {
@@ -338,7 +352,7 @@ func runTofuWithSource(ctx context.Context, env cmdEnv, args []string) error {
 		return err
 	}
 
-	loaded, workspaceDir, tofuArgs, err := loadTofuWorkspace(ctx, args)
+	loaded, workspaceDir, tofuArgs, err := loadTofuWorkspace(ctx, args, env.runtimeSecrets)
 	if err != nil {
 		return err
 	}
@@ -446,7 +460,7 @@ func runTofuWithSource(ctx context.Context, env cmdEnv, args []string) error {
 	}
 
 	if usesCredential {
-		rotatorPassword, err := vault.Secret(
+		rotatorPassword, err := loaded.Tofu.runtimeSecrets.ReadCredential(
 			credential.Dell.RotatorPasswordKey,
 			defaultVaultFile,
 			passwordFile,

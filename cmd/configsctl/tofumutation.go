@@ -12,7 +12,7 @@ import (
 
 	"goodkind.io/configsctl/internal/redact"
 	"goodkind.io/configsctl/internal/tofuargs"
-	"goodkind.io/configsctl/internal/vault"
+	"goodkind.io/configsctl/internal/tofusecrets"
 )
 
 const (
@@ -68,8 +68,9 @@ func prepareMutationCredential(
 	workspace string,
 	environment []string,
 	passwordFile string,
+	runtimeSecrets *tofusecrets.Environment,
 ) ([]string, []redact.Pattern, error) {
-	password, err := vault.Secret(
+	password, err := runtimeSecrets.ReadCredential(
 		credential.Dell.RotatorPasswordKey,
 		defaultVaultFile,
 		passwordFile,

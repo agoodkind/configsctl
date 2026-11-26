@@ -433,13 +433,12 @@ func prepareExplicitCredential(
 		return ctx, nil, func() {}, nil
 	}
 
-	decision := tofulock.Decision{
+	hosts, err := targets.LockHosts(tofulock.Decision{
 		AllHosts:   false,
 		Reason:     "",
 		Hosts:      slices.Sorted(maps.Keys(targets.LockEndpoints)),
 		GuestLocks: nil,
-	}
-	hosts, err := targets.LockHosts(decision)
+	})
 	if err != nil {
 		slog.Error(
 			"tofu.credential.lock_targets_failed",
@@ -484,6 +483,7 @@ func prepareExplicitCredential(
 		request.workspaceDir,
 		request.env,
 		passwordFile,
+		settings.runtimeSecrets,
 	)
 	if err != nil {
 		release()

@@ -181,6 +181,82 @@ func TestTofuSourceAllowsExactMergedSavedPlan(t *testing.T) {
 	requireOutputLength(t, tree, "alpha", "alpha_length", vaultAlphaValue)
 }
 
+func TestTofuEnvironmentSecretsApplyTheExactSavedPlan(t *testing.T) {
+	requireTofu(t)
+	tree := newConfigsTree(t)
+	password := filepath.Join(tree.home, ".config", "ansible", "vault.pass")
+	if err := os.Remove(password); err != nil {
+		t.Fatal(err)
+	}
+
+	tracked := filepath.Join(tree.workspaces, "alpha", "main.tf")
+	hcl := alphaWorkspace + "\noutput \"redaction_fixture\" { value = var.vault_alpha }\n"
+	writeFixtureFile(t, tracked, hcl)
+	publishConfigsTree(t, tree)
+
+	const inputName = "TF_VAR_vault_alpha"
+	const fixtureValue = "synthetic-onepassword-workspace-input"
+	optIn := []string{"CONFIGSCTL_TOFU_SECRET_ENVIRONMENT=" + inputName}
+	environment := append(slices.Clone(optIn), inputName+"="+fixtureValue)
+	path := os.Getenv("PATH")
+	init := tofuArgs("alpha", "init", "-input=false")
+	requireSuccess(t, runConfigsctlWithEnv(t, tree, path, environment, init...), init...)
+
+	plan := filepath.Join(t.TempDir(), "enrolled.tfplan")
+	arguments := tofuArgs("alpha", "plan", "-input=false", "-out="+plan)
+	missing := runConfigsctlWithEnv(t, tree, path, optIn, arguments...)
+	if missing.exitCode == 0 ||
+		!strings.Contains(
+			missing.stderr,
+			"set the required OpenTofu secret environment variable "+inputName,
+		) {
+		t.Fatalf(
+			"missing the declared input returned exit %d and stderr %q",
+			missing.exitCode,
+			missing.stderr,
+		)
+	}
+
+	requireNoFile(t, plan)
+
+	planned := runConfigsctlWithEnv(t, tree, path, environment, arguments...)
+	requireSuccess(t, planned, arguments...)
+	logs, err := filepath.Glob(filepath.Join(tree.root, "tmp", "configs-runs", "tofu-plan-*.log"))
+	if err != nil || len(logs) != 1 {
+		t.Fatalf("expected one plan log, got %v, error %v", logs, err)
+	}
+
+	content, err := os.ReadFile(logs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reported := planned.stdout + planned.stderr + string(content)
+	if strings.Contains(reported, fixtureValue) ||
+		!strings.Contains(reported, "<redacted:"+inputName+">") {
+		t.Fatal("expected a masked environment value in the OpenTofu plan output")
+	}
+
+	apply := tofuArgs("alpha", "apply", "-input=false", plan)
+	writeFixtureFile(t, tracked, hcl+"\n")
+	dirty := runConfigsctlWithEnv(t, tree, path, environment, apply...)
+	requireSourceRefusal(t, tree, dirty, "commit or remove configuration changes")
+	sourceGit(t, tree, "checkout", "--", "workspaces/alpha/main.tf")
+
+	applied := runConfigsctlWithEnv(t, tree, path, environment, apply...)
+	requireSuccess(t, applied, apply...)
+	if strings.Contains(applied.stdout+applied.stderr, fixtureValue) {
+		t.Fatal("saved-plan apply printed an unmasked environment value")
+	}
+
+	output := tofuArgs("alpha", "output", "-raw", "alpha_length")
+	result := runConfigsctlWithEnv(t, tree, path, environment, output...)
+	requireSuccess(t, result, output...)
+	if result.stdout != fmt.Sprint(len(fixtureValue)) {
+		t.Fatalf("applied output length = %q, want %d", result.stdout, len(fixtureValue))
+	}
+}
+
 func TestTofuSourceRejectsChangedPlanBytes(t *testing.T) {
 	tree := initializedSourceTree(t)
 	plan := filepath.Join(t.TempDir(), "changed.tfplan")
