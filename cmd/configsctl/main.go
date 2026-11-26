@@ -22,6 +22,7 @@ import (
 	"goodkind.io/configsctl/internal/redact"
 	"goodkind.io/configsctl/internal/tofuargs"
 	"goodkind.io/configsctl/internal/tofurun"
+	"goodkind.io/configsctl/internal/tofusecrets"
 	"goodkind.io/configsctl/internal/vault"
 	"goodkind.io/configsctl/internal/version"
 )
@@ -46,8 +47,8 @@ func main() {
 // secret patterns to build a redactor over its own log file, which sits outside
 // the stdout and stderr redactors installed for the process.
 type cmdEnv struct {
-	secrets   []redact.Pattern
-	vaultPath vault.RuntimePath
+	secrets        []redact.Pattern
+	runtimeSecrets *tofusecrets.Environment
 }
 
 // handlers dispatches a subcommand name to its implementation.
@@ -115,12 +116,19 @@ func run(args []string) error {
 		return fmt.Errorf("unknown command: %q", command)
 	}
 
-	vaultPath, err := vault.RuntimeFile(command)
+	runtimeSecrets, err := tofusecrets.ReadEnvironment(command)
 	if err != nil {
-		return fmt.Errorf("select OpenTofu vault: %w", err)
+		return fmt.Errorf("select OpenTofu secret inputs: %w", err)
 	}
 
-	patterns, loadErr := loadSecretPatterns(vaultPath)
+	var patterns []redact.Pattern
+	var loadErr error
+	if runtimeSecrets != nil {
+		patterns = runtimeSecrets.Patterns()
+	} else {
+		patterns, loadErr = loadSecretPatterns()
+	}
+
 	if loadErr != nil {
 		var short *shortSecretError
 		isShort := errors.As(loadErr, &short)
@@ -147,7 +155,7 @@ func run(args []string) error {
 	}
 	defer restore()
 
-	return handler(cmdEnv{secrets: patterns, vaultPath: vaultPath}, args[1:])
+	return handler(cmdEnv{secrets: patterns, runtimeSecrets: runtimeSecrets}, args[1:])
 }
 
 func runLint(_ cmdEnv, paths []string) error {
@@ -334,9 +342,6 @@ func runTofu(env cmdEnv, args []string) error {
 		return err
 	}
 	defer cleanupSource()
-	if env.vaultPath != "" && env.vaultPath != defaultVaultFile && installedSourceFrom(ctx) != nil {
-		return vault.ErrRuntimeCheckout
-	}
 
 	return runTofuWithSource(ctx, env, args)
 }
@@ -347,7 +352,7 @@ func runTofuWithSource(ctx context.Context, env cmdEnv, args []string) error {
 		return err
 	}
 
-	loaded, workspaceDir, tofuArgs, err := loadTofuWorkspace(ctx, args, env.vaultPath)
+	loaded, workspaceDir, tofuArgs, err := loadTofuWorkspace(ctx, args, env.runtimeSecrets)
 	if err != nil {
 		return err
 	}
@@ -455,9 +460,9 @@ func runTofuWithSource(ctx context.Context, env cmdEnv, args []string) error {
 	}
 
 	if usesCredential {
-		rotatorPassword, err := vault.Secret(
+		rotatorPassword, err := loaded.Tofu.runtimeSecrets.ReadCredential(
 			credential.Dell.RotatorPasswordKey,
-			loaded.Tofu.vaultPath.File(),
+			defaultVaultFile,
 			passwordFile,
 		)
 		if err != nil {
@@ -678,13 +683,13 @@ func (e *shortSecretError) Error() string {
 // vaultInputs returns the password-file path and whether it and the vault are
 // both present. When the home dir cannot be resolved or either file is absent,
 // available is false and the caller runs without redaction patterns.
-func vaultInputs(vaultPath string) (passwordFile string, available bool) {
+func vaultInputs() (passwordFile string, available bool) {
 	passwordFile, err := vaultPassPath()
 	if err != nil {
 		return "", false
 	}
 
-	if _, statErr := os.Stat(vaultPath); statErr != nil {
+	if _, statErr := os.Stat(defaultVaultFile); statErr != nil {
 		return "", false
 	}
 
@@ -698,17 +703,13 @@ func vaultInputs(vaultPath string) (passwordFile string, available bool) {
 // loadSecretPatterns reads the vault and builds redaction patterns. An absent
 // vault or password file yields no patterns and no error. A too-short secret
 // returns *shortSecretError.
-func loadSecretPatterns(vaultPath vault.RuntimePath) ([]redact.Pattern, error) {
-	passwordFile, available := vaultInputs(vaultPath.File())
+func loadSecretPatterns() ([]redact.Pattern, error) {
+	passwordFile, available := vaultInputs()
 	if !available {
-		if vaultPath != defaultVaultFile {
-			return nil, vault.ErrRuntimeInputs
-		}
-
 		return nil, nil
 	}
 
-	patterns, err := vault.FilePatterns(vaultPath.File(), passwordFile)
+	patterns, err := vault.Patterns(".", passwordFile)
 	if err != nil {
 		slog.Error("vault values load failed", "err", err)
 		return nil, fmt.Errorf("load vault values: %w", err)

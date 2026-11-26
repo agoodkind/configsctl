@@ -482,8 +482,8 @@ func prepareExplicitCredential(
 		credential,
 		request.workspaceDir,
 		request.env,
-		settings.vaultPath.File(),
 		passwordFile,
+		settings.runtimeSecrets,
 	)
 	if err != nil {
 		release()
@@ -638,7 +638,7 @@ func newExplicitRunner(
 	assignments, err := tofuSecretEnv(
 		settings,
 		request.workspaceDir,
-		settings.vaultPath.File(),
+		defaultVaultFile,
 		passwordFile,
 	)
 	if err != nil {

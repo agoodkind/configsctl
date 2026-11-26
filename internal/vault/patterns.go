@@ -14,11 +14,7 @@ const File = "ansible/inventory/group_vars/all/vault.yml"
 // Patterns decrypts the vault under root with passwordFile and returns one
 // redaction pattern for each non-empty value, labeled with its key.
 func Patterns(root, passwordFile string) ([]redact.Pattern, error) {
-	return FilePatterns(filepath.Join(root, File), passwordFile)
-}
-
-// FilePatterns returns redaction patterns for the selected vault file.
-func FilePatterns(vaultPath, passwordFile string) ([]redact.Pattern, error) {
+	vaultPath := filepath.Join(root, File)
 	values, err := Values(vaultPath, passwordFile)
 	if err != nil {
 		slog.Error("vault patterns load failed", "vault", vaultPath, "err", err)

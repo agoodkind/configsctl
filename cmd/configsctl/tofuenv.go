@@ -4,12 +4,10 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
-	"strings"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclparse"
 	"goodkind.io/configsctl/internal/tofufiles"
-	"goodkind.io/configsctl/internal/vault"
 )
 
 var tofuVariableSchema = &hcl.BodySchema{
@@ -140,45 +138,16 @@ func tofuSecretEnv(
 		return nil, err
 	}
 
-	values, err := vault.Values(vaultFile, passwordFile)
+	assignments, err := tofu.runtimeSecrets.ReadAssignments(
+		names,
+		tofu.EnvKeyPrefix,
+		vaultFile,
+		passwordFile,
+	)
 	if err != nil {
-		slog.Error("vault read for tofu variables failed", "err", err)
-		return nil, fmt.Errorf("read vault for tofu variables: %w", err)
-	}
+		slog.Error("read OpenTofu secret inputs", "err", err)
 
-	var assignments []string
-
-	exportedAsVariable := make(map[string]bool, len(names))
-	for _, name := range names {
-		value, ok := values[name]
-		if !ok {
-			continue
-		}
-
-		assignments = append(assignments, tofuVariablePrefix+name+"="+value)
-		exportedAsVariable[name] = true
-	}
-
-	var envKeys []string
-
-	for key := range values {
-		// The loop above already exported this vault key as TF_VAR_<key>.
-		if exportedAsVariable[key] {
-			continue
-		}
-
-		if name, ok := strings.CutPrefix(key, tofu.EnvKeyPrefix); ok && name != "" {
-			envKeys = append(envKeys, key)
-		}
-	}
-
-	sort.Strings(envKeys)
-
-	for _, key := range envKeys {
-		assignments = append(
-			assignments,
-			strings.TrimPrefix(key, tofu.EnvKeyPrefix)+"="+values[key],
-		)
+		return nil, fmt.Errorf("read OpenTofu secret inputs: %w", err)
 	}
 
 	if tofu.ProviderMirror != nil {

@@ -269,6 +269,8 @@ Environment variables:
 | `TF_VAR_<name>` | configsctl passes a vault value when the vault key matches a variable that the workspace declares. configsctl redacts the value. |
 | `<NAME>` | configsctl passes a vault value when the vault key uses `<env_key_prefix><NAME>`. configsctl redacts the value. |
 
+To supply workspace secrets from the process environment, set `CONFIGSCTL_TOFU_SECRET_ENVIRONMENT` to a comma-separated list of their variable names and set each listed value. For example, list `AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,TF_VAR_vault_tofu_state_passphrase` when the runner provides those inputs. List every value that needs redaction. Each listed value must contain at least 16 bytes. Set the same list for init, plan, and apply. Configsctl redacts these values and uses the existing source, saved plan, and lock checks without opening the vault or password file.
+
 When the configuration does not set `tofu.provider_mirror`, the explicit lock path does not pass `TF_CLI_CONFIG_FILE` or any native CLI configuration variable from the process environment.
 
 The explicit lock path uses the saved workspace selection in the OpenTofu root, or `default` when the root does not store a workspace selection. The explicit lock path does not pass `TF_WORKSPACE` to OpenTofu. When the configsctl process sets `TF_WORKSPACE` to a value that differs from the selected workspace, configsctl refuses the apply before OpenTofu starts. configsctl logs the refusal and returns an error that states both values. The apply proceeds when the process does not set `TF_WORKSPACE` or sets it to the selected workspace.
