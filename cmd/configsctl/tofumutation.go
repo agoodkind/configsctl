@@ -67,13 +67,10 @@ func prepareMutationCredential(
 	credential tofuCredentialSettings,
 	workspace string,
 	environment []string,
+	vaultPath string,
 	passwordFile string,
 ) ([]string, []redact.Pattern, error) {
-	password, err := vault.Secret(
-		credential.Dell.RotatorPasswordKey,
-		defaultVaultFile,
-		passwordFile,
-	)
+	password, err := vault.Secret(credential.Dell.RotatorPasswordKey, vaultPath, passwordFile)
 	if err != nil {
 		slog.Error("tofu.credential.vault_failed", "err", err)
 		return nil, nil, fmt.Errorf("read rotator credential: %w", err)

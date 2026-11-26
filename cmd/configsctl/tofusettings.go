@@ -36,6 +36,7 @@ type tofuSettings struct {
 	guestReferences         guestrefs.Registry
 	InstalledSource         *installedsource.Settings `yaml:"installed_source"`
 	source                  *installedTofuSource
+	vaultPath               string
 	ValidateGuestReferences bool   `yaml:"validate_guest_references"`
 	ConfigurationRoot       string `yaml:"configuration_root"`
 	// WorkspacesDir is a path relative to the repository root.
@@ -51,6 +52,14 @@ type tofuSettings struct {
 	GuestModule  string                            `yaml:"guest_module"`
 	GuestModules map[string]string                 `yaml:"guest_modules"`
 	Credentials  map[string]tofuCredentialSettings `yaml:"credentials"`
+}
+
+func (t tofuSettings) vaultFile() string {
+	if t.vaultPath == "" {
+		return defaultVaultFile
+	}
+
+	return t.vaultPath
 }
 
 func (t tofuSettings) guestWorkspaceDir() string {

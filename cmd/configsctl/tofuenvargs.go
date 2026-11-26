@@ -37,7 +37,7 @@ func tofuInvocation(
 	passwordFile string,
 	args []string,
 ) ([]string, []string, error) {
-	secrets, err := tofuSecretEnv(settings, workspace, defaultVaultFile, passwordFile)
+	secrets, err := tofuSecretEnv(settings, workspace, settings.vaultFile(), passwordFile)
 	if err != nil {
 		return nil, nil, err
 	}

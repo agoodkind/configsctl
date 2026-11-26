@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	ansiblevault "github.com/sosedoff/ansible-vault-go"
 )
 
 const sourceFixtureIgnore = ".terraform/\n.terraform.lock.hcl\n*.tfstate*\n*.tfplan\n*.plan\ntmp/\n"
@@ -324,4 +326,52 @@ func TestTofuSourceRejectsConfigurationChangedDuringPlanning(t *testing.T) {
 
 	apply := runConfigsctl(t, tree, tofuArgs("alpha", "apply", "-input=false", plan)...)
 	requireSourceRefusal(t, tree, apply, "source record is unavailable")
+}
+
+func TestTofuExternalVaultPreservesSavedPlanSourceChecks(t *testing.T) {
+	tree := initializedSourceTree(t)
+	private, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const replacement = "scoped-vault-fixture-with-a-distinct-length"
+	vaultPath := filepath.Join(private, "vault.yml")
+	if err := ansiblevault.EncryptFile(
+		vaultPath,
+		"vault_alpha: "+replacement+"\n",
+		vaultUnlockText,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Chmod(vaultPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	environment := []string{"CONFIGSCTL_VAULT_FILE=" + vaultPath}
+	plan := filepath.Join(private, "scoped.tfplan")
+	arguments := tofuArgs("alpha", "plan", "-input=false", "-out="+plan)
+	requireSuccess(
+		t,
+		runConfigsctlWithEnv(t, tree, os.Getenv("PATH"), environment, arguments...),
+		arguments...,
+	)
+
+	apply := tofuArgs("alpha", "apply", "-input=false", plan)
+	writeFixtureFile(
+		t,
+		filepath.Join(tree.workspaces, "alpha", "main.tf"),
+		"output \"dirty\" { value = true }\n",
+	)
+	result := runConfigsctlWithEnv(t, tree, os.Getenv("PATH"), environment, apply...)
+	requireSourceRefusal(t, tree, result, "commit or remove configuration changes")
+
+	sourceGit(t, tree, "restore", "workspaces/alpha/main.tf")
+	requireSuccess(
+		t,
+		runConfigsctlWithEnv(t, tree, os.Getenv("PATH"), environment, apply...),
+		apply...,
+	)
+	requireOutputLength(t, tree, "alpha", "alpha_length", replacement)
 }
